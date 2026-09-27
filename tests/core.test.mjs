@@ -103,6 +103,22 @@ test('recoverTask preserves search progress and resumes only missing legacy deta
   assert.deepEqual([job.phase,job.searchStatus,job.status,task.status],['detail','short','paused','paused']);
   assert.equal(job.detailDone,1);
 });
+test('legacy product with only a category remains pending for detail recovery', () => {
+  const task=createTask(['相机']);const job=task.jobs[0];
+  addCandidate(job,{...item('1',2988),category:'数码相机'});
+  job.status='short';task.status='done';
+  core.recoverTask(task);
+  assert.equal(selected(job)[0].detailStatus,'pending');
+  assert.deepEqual([job.phase,job.status,task.status],['detail','paused','paused']);
+});
+test('legacy product with only a distinct gallery image remains pending', () => {
+  const task=createTask(['相机']);const job=task.jobs[0];
+  addCandidate(job,{...item('1',2988),galleryImages:['https://img.pddpic.com/another.jpg']});
+  job.status='short';task.status='done';
+  core.recoverTask(task);
+  assert.equal(selected(job)[0].detailStatus,'pending');
+  assert.deepEqual([job.phase,job.status,task.status],['detail','paused','paused']);
+});
 test('image fingerprint matches slightly changed pixels but separates different art and colors', () => {
   const pixels=new Uint8ClampedArray(32*32*4);
   for(let y=0;y<32;y++) for(let x=0;x<32;x++){let k=(y*32+x)*4;pixels[k]=x*7;pixels[k+1]=y*7;pixels[k+2]=(x*y)%255;pixels[k+3]=255;}

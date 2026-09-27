@@ -75,9 +75,8 @@ export function selected(job) { return job.groups.slice(0, OUTPUT_LIMIT).map(gro
 const hasValues = value => Array.isArray(value) && value.length > 0;
 export function hasDetailData(item) {
   if (!item || typeof item !== 'object') return false;
-  if (['descriptionText', 'category', 'videoUrl'].some(key => String(item[key] || '').trim())) return true;
+  if (['descriptionText', 'videoUrl'].some(key => String(item[key] || '').trim())) return true;
   if (['detailImages', 'attributes', 'certificateImages', 'sizeChartImages', 'specNames'].some(key => hasValues(item[key]))) return true;
-  if (hasValues(item.galleryImages) && item.galleryImages.some(image => image !== item.image)) return true;
   return hasValues(item.skus) && item.skus.some(sku =>
     sku && (sku.id || hasValues(sku.specs) || (sku.image && sku.image !== item.image) || sku.stock));
 }

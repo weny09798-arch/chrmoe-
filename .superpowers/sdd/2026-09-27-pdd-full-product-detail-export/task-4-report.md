@@ -27,3 +27,9 @@
 - 逐项核对了 20 组立即停止、不足 20 组仍补详情、普通错误、阻断、暂停/停止清理和只补未完成项；聚焦与完整测试覆盖上述路径。
 - 旧任务中只有搜索卡片标题、主图、价格而没有详情特征的商品会转为 pending 并等待用户继续；这是本任务指定的迁移行为。
 - `package-lock.json` 是工作区已有改动，不属于本提交。
+
+## Fix round 1：仅类目或相册图不能证明详情完成
+
+- RED：先添加两个旧任务恢复回归用例，分别让旧商品只带 `category` 和只带与搜索主图不同的 `galleryImages`。执行 `node --test tests/core.test.mjs`，12/14 通过，两例均因实际 `detailStatus:'done'`、预期 `pending` 失败。
+- 修复：从 `hasDetailData()` 的完成特征中移除 `category` 和 `galleryImages`。保留详情文字、详情图、属性、视频、证书、尺寸图、规格名及 SKU 的 ID/规格/有效图片/库存特征。仅有上述两类信息的旧商品继续等待详情补全，Runner 成功结果会标为 partial。
+- GREEN：`node --test tests/runner.test.mjs tests/core.test.mjs` 为 33/33 通过；`npm test` 为 92/92 通过；`npm run check` 通过扩展资源与 JavaScript 模块校验。
