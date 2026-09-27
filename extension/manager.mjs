@@ -45,12 +45,18 @@ function renderTask() {
   $('stat-keywords').replaceChildren(String(task ? jobs.length : keywords.length), element('small', '个'));
   $('stat-done').replaceChildren(String(done), element('small', '个'));
   $('stat-links').replaceChildren(String(totalLinks), element('small', '条'));
-  $('task-title').textContent = active ? `正在处理 · ${active.keyword}` : (task ? '本次采集' : '准备开始');
+  $('task-title').textContent = active ? (active.phase === 'detail' ? `正在补全详情 · ${active.keyword}` : `正在处理 · ${active.keyword}`) : (task ? '本次采集' : '准备开始');
   $('task-badge').textContent = task ? (task.status === 'done' && jobs.some(j => j.status === 'short') ? '已结束 · 部分不足20条' : STATUS[task.status] || task.status) : '未开始';
   $('task-badge').className = `badge ${task?.status || ''}`;
   $('progress-label').textContent = task ? `已处理 ${done} / ${jobs.length} 个商品名称` : '添加商品名称后自动搜索';
   $('progress-percent').textContent = `${percent}%`; $('progress').value = percent;
-  $('current-detail').textContent = active ? `已扫描 ${active.scanned} / 200 条 · ${active.groups.length} 组主图 · 保留 ${selected(active).length} / 20 条${active.note ? ` · ${active.note}` : ''}` : (task?.status === 'error' ? '部分任务失败，已保留采集结果；请查看每行说明。' : '每个名称收集到 20 条即切换；最多扫描 200 条。');
+  const activeItems = active ? selected(active) : [];
+  const detailErrors = activeItems.filter(item => item.detailStatus === 'error').length;
+  $('current-detail').textContent = active
+    ? active.phase === 'detail'
+      ? `正在补全详情 ${active.detailDone || 0} / ${activeItems.length} · 失败 ${detailErrors} 个`
+      : `已扫描 ${active.scanned} / 200 条 · ${active.groups.length} 组主图 · 保留 ${activeItems.length} / 20 条${active.note ? ` · ${active.note}` : ''}`
+    : (task?.status === 'error' ? '部分任务失败，已保留采集结果；请查看每行说明。' : '每个名称收集到 20 条即切换；最多扫描 200 条。');
   $('add-button').disabled = lockedOut || clearing;
   $('clear-all').disabled = lockedOut || clearing || (!keywords.length && !task);
   $('pause').disabled = !busy || Boolean(runner?.intent); $('pause').hidden = Boolean(resumable);
@@ -76,7 +82,12 @@ function renderTask() {
       });
       action.append(retry);
     }
-    row.append(element('td', job.keyword), status, element('td', String(job.scanned)), element('td', `${selected(job).length}/20`), element('td', job.note || (job.skipped ? `已跳过 ${job.skipped} 条` : '—'), 'note'), action);
+    const items = selected(job);
+    const detailErrors = items.filter(item => item.detailStatus === 'error').length;
+    const detailFinished = items.filter(item => ['done', 'partial'].includes(item.detailStatus)).length;
+    const detailSummary = detailFinished || detailErrors ? `详情完成 ${detailFinished} 个 · 失败 ${detailErrors} 个` : '';
+    const explanation = job.note || (job.skipped ? `已跳过 ${job.skipped} 条` : (['done', 'short', 'error', 'stopped'].includes(job.status) ? detailSummary || '—' : '—'));
+    row.append(element('td', job.keyword), status, element('td', String(job.scanned)), element('td', `${items.length}/20`), element('td', explanation, 'note'), action);
     return row;
   }));
   $('links-panel').hidden = !totalLinks; $('links-count').textContent = `${totalLinks} 条`;

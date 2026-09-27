@@ -141,3 +141,48 @@ test('denied permission releases resume guard and keeps saved task resumable', a
   assert.equal(fixture.document.getElementById('add-button').disabled, false);
   assert.equal(fixture.tabCreates, 0);
 });
+test('detail collection shows its own progress and failures while keeping results exportable', async () => {
+  const fixture = await managerFixture();
+  const task = fixture.saved.task;
+  task.status = 'running';
+  const job = task.jobs[0];
+  job.status = 'running'; job.phase = 'detail'; job.detailDone = 7; job.scanned = 200;
+  job.groups = Array.from({ length: 20 }, (_, index) => ({ best: {
+    id: `item-${index}`, title: `相机商品${index}`, url: `https://mobile.pinduoduo.com/goods.html?goods_id=${index}`,
+    cents: 2999, detailStatus: index < 5 ? 'done' : index < 7 ? 'error' : 'pending'
+  } }));
+  await import(`../extension/manager.mjs?case=${Math.random()}`);
+  await tick();
+  assert.equal(fixture.document.getElementById('task-title').textContent, '正在补全详情 · 相机');
+  assert.match(fixture.document.getElementById('current-detail').textContent, /正在补全详情 7 \/ 20 · 失败 2 个/);
+  assert.equal(fixture.document.getElementById('export').disabled, false);
+  assert.equal(fixture.document.getElementById('pause').hidden, true);
+  assert.equal(fixture.document.getElementById('resume').hidden, false);
+  assert.equal(fixture.document.getElementById('stop').disabled, false);
+});
+
+test('search progress wording remains unchanged', async () => {
+  const fixture = await managerFixture();
+  const job = fixture.saved.task.jobs[0];
+  job.status = 'running'; job.phase = 'search'; job.scanned = 43;
+  job.groups = [{ best: { id: 'one', title: '相机', cents: 100, url: 'https://example.com' } }];
+  await import(`../extension/manager.mjs?case=${Math.random()}`);
+  await tick();
+  assert.equal(fixture.document.getElementById('current-detail').textContent, '已扫描 43 / 200 条 · 1 组主图 · 保留 1 / 20 条');
+});
+test('finished detail jobs explain completed and failed detail counts unless a job note exists', async () => {
+  const fixture = await managerFixture();
+  const job = fixture.saved.task.jobs[0];
+  fixture.saved.task.status = 'done'; job.status = 'done'; job.phase = 'done'; job.detailDone = 2;
+  job.groups = [
+    { best: { id: 'done', title: '相机完成', cents: 100, detailStatus: 'done' } },
+    { best: { id: 'error', title: '相机失败', cents: 100, detailStatus: 'error' } }
+  ];
+  await import(`../extension/manager.mjs?case=${Math.random()}`);
+  await tick();
+  assert.match(fixture.document.getElementById('result-rows').textContent, /详情完成 1 个 · 失败 1 个/);
+  fixture.saved.task.jobs[0].note = '原有说明优先';
+  await import(`../extension/manager.mjs?case=${Math.random()}`);
+  await tick();
+  assert.match(fixture.document.getElementById('result-rows').textContent, /原有说明优先/);
+});
