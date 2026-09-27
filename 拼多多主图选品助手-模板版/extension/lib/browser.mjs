@@ -1,4 +1,5 @@
 import { fingerprint } from './fingerprint.mjs';
+import { normalizeDetail } from './detail.mjs';
 
 export const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 export function productId(raw) {
@@ -19,8 +20,42 @@ function isSearch(url, keyword) {
 function blocked(message, permissionOrigin = '') { return Object.assign(new Error(message), { blocked: true, permissionOrigin }); }
 
 export function browserPorts({ save, update }) {
-  let tabId, task;
+  let tabId, task, detailTabId;
   const imageCache = new Map();
+  async function closeDetail() {
+    const id = detailTabId;
+    detailTabId = undefined;
+    if (id !== undefined) await chrome.tabs.remove(id).catch(() => {});
+  }
+  async function enrich(item) {
+    const id = typeof item?.id === 'string' ? item.id : Number.isSafeInteger(item?.id) ? String(item.id) : '';
+    if (!/^\d+$/.test(id)) throw new Error('无效商品 ID');
+    const detailUrl = `https://mobile.pinduoduo.com/goods.html?goods_id=${id}`;
+    try {
+      const tab = await chrome.tabs.create({ url: detailUrl, active: false });
+      detailTabId = tab.id;
+      let ready = false;
+      for (let i = 0; i < 40; i++) {
+        if ((await chrome.tabs.get(detailTabId)).status === 'complete') { ready = true; break; }
+        await wait(300);
+      }
+      if (!ready) throw new Error('商品详情加载超时');
+      await chrome.scripting.executeScript({ target: { tabId: detailTabId }, files: ['detail-content.js'] });
+      for (let i = 0; i < 40; i++) {
+        const snapshot = await chrome.tabs.sendMessage(detailTabId, { type: 'PDD_DETAIL_SNAPSHOT' });
+        if (!snapshot) throw new Error('商品详情页未响应');
+        if (snapshot.goodsId !== id) throw new Error('商品详情 ID 不匹配');
+        if (snapshot.blocked) throw blocked(snapshot.reason || '商品详情页已阻断');
+        if (snapshot.error) throw new Error(snapshot.error);
+        const detail = snapshot.detail;
+        if (detail && (detail.title || ['galleryImages', 'detailImages', 'certificateImages', 'sizeChartImages', 'attributes', 'skus'].some(key => detail[key]?.length))) {
+          return normalizeDetail(detail, item);
+        }
+        if (i < 39) await wait(300);
+      }
+      throw new Error('商品详情加载超时');
+    } finally { await closeDetail(); }
+  }
   async function ready() {
     for (let i = 0; i < 40; i++) {
       const tab = await chrome.tabs.get(tabId);
@@ -118,7 +153,7 @@ export function browserPorts({ save, update }) {
       } else if (!isSearch(tab.url, job.keyword)) await chrome.tabs.update(tabId, { url: searchUrl(job.keyword) });
       await save(task); await wait(900); await ready();
     },
-    read, hash, resolve, wait, save, update,
+    read, hash, resolve, enrich, close: closeDetail, wait, save, update,
     async scroll() { await message({ type: 'PDD_SCROLL' }); }
   };
 }

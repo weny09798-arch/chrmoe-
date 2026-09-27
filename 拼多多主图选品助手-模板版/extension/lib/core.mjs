@@ -45,7 +45,7 @@ export function validProductTitle(title, keyword) {
 }
 
 function createJob(keyword) {
-  return { keyword, status: 'pending', scanned: 0, skipped: 0, seen: [], groups: [], note: '', scrolls: 0 };
+  return { keyword, status: 'pending', phase: 'search', searchStatus: '', detailDone: 0, scanned: 0, skipped: 0, seen: [], groups: [], note: '', scrolls: 0 };
 }
 
 export function createTask(keywords) {
@@ -72,6 +72,18 @@ export function retryJob(task, index) {
 
 export function selected(job) { return job.groups.slice(0, OUTPUT_LIMIT).map(group => group.best); }
 
+const hasValues = value => Array.isArray(value) && value.length > 0;
+export function hasDetailData(item) {
+  if (!item || typeof item !== 'object') return false;
+  if (['descriptionText', 'videoUrl'].some(key => String(item[key] || '').trim())) return true;
+  if (['detailImages', 'attributes', 'certificateImages', 'sizeChartImages', 'specNames'].some(key => hasValues(item[key]))) return true;
+  return hasValues(item.skus) && item.skus.some(sku =>
+    sku && (sku.id || hasValues(sku.specs) || (sku.image && sku.image !== item.image) || sku.stock));
+}
+
+const detailFinished = item => ['done', 'partial', 'error'].includes(item.detailStatus);
+export function countDetails(job) { return selected(job).filter(detailFinished).length; }
+
 export function addCandidate(job, candidate) {
   if (!candidate.id || !candidate.fingerprint || !Number.isSafeInteger(candidate.cents) || candidate.cents <= 0) return false;
   // Keep the original group representative stable: replacing it with each winner can cause similarity drift.
@@ -89,6 +101,26 @@ export function addCandidate(job, candidate) {
 export function recoverTask(task) {
   if (!task || task.version !== 1 || !Array.isArray(task.jobs)) return null;
   if (['running', 'pending', 'blocked'].includes(task.status)) task.status = 'paused';
-  for (const job of task.jobs) if (['running', 'blocked'].includes(job.status)) job.status = 'paused';
+  for (const job of task.jobs) {
+    if (['running', 'blocked'].includes(job.status)) job.status = 'paused';
+    for (const group of job.groups || []) {
+      const item = group.best;
+      if (!item) continue;
+      if (!['pending', 'running', 'done', 'partial', 'error'].includes(item.detailStatus)) {
+        item.detailStatus = hasDetailData(item) ? 'done' : 'pending';
+      }
+    }
+    job.detailDone = countDetails(job);
+    const pending = selected(job).some(item => !detailFinished(item));
+    if (['done', 'short'].includes(job.status) && pending) {
+      job.searchStatus = job.searchStatus || job.status;
+      job.phase = 'detail';
+      job.status = 'paused';
+      task.status = 'paused';
+    } else {
+      job.phase ||= ['done', 'short'].includes(job.status) ? 'done' : 'search';
+      job.searchStatus ||= '';
+    }
+  }
   return task;
 }

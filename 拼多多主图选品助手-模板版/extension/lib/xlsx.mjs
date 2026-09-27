@@ -2,6 +2,7 @@
 const encoder = new TextEncoder();
 import { TEMPLATE_HEADERS, TEMPLATE_INSTRUCTIONS } from './template.mjs';
 import { validProductTitle } from './core.mjs';
+import { fallbackSku } from './detail.mjs';
 import { matchTemplateXls } from './xls-biff.mjs';
 const LINK_HEADERS = new Set(['商品链接', '主图地址', '货源链接', '产品主图']);
 
@@ -147,6 +148,37 @@ export function workbookXlsBytes(sheets, sheetjs = globalThis.XLSX) {
   return sheets.length === 1 && sheets[0].template ? matchTemplateXls(bytes, sheetjs) : bytes;
 }
 
+const cellText = value => value == null ? '' : String(value).trim();
+const joinedValues = values => Array.isArray(values) ? values.map(cellText).filter(Boolean).join('，') : '';
+
+export function productRows(item, fallbackNumber = 0) {
+  const id = cellText(item.id);
+  const number = `PDD${id || (fallbackNumber ? String(fallbackNumber).padStart(6, '0') : '')}`;
+  const gallery = joinedValues(item.galleryImages) || cellText(item.image);
+  const attributes = Array.isArray(item.attributes)
+    ? item.attributes.map(attribute => {
+      const name = cellText(attribute?.name);
+      const value = cellText(attribute?.value);
+      return name && value ? `${name}:${value}` : '';
+    }).filter(Boolean).join('；')
+    : '';
+  const common = [
+    cellText(item.title), 'CNY', gallery, cellText(item.url), '拼多多', id,
+    cellText(item.descriptionText), joinedValues(item.detailImages), cellText(item.category),
+    attributes, cellText(item.videoUrl), joinedValues(item.certificateImages), joinedValues(item.sizeChartImages)
+  ];
+  const skus = Array.isArray(item.skus) && item.skus.length ? item.skus : [fallbackSku(item)];
+  return skus.map((sku, index) => {
+    const cents = Number.isSafeInteger(sku?.cents) && sku.cents > 0 ? sku.cents : item.cents;
+    return [
+      number, ...(index === 0 ? common : Array(13).fill('')),
+      cellText(sku?.specs?.[0]), cellText(sku?.specs?.[1]), cellText(sku?.id),
+      (cents / 100).toFixed(2), cellText(sku?.image), cellText(sku?.stock),
+      cellText(sku?.weightKg), cellText(sku?.sizeCm)
+    ];
+  });
+}
+
 export function taskSheets(task) {
   const rows = [[TEMPLATE_INSTRUCTIONS], [], [], [], [], [], [], [], [...TEMPLATE_HEADERS]];
   let productNumber = 0;
@@ -154,10 +186,7 @@ export function taskSheets(task) {
     const chosen = (job.groups || []).map(group => group.best).filter(item => item && validProductTitle(item.title, job.keyword)).slice(0, 20);
     for (const item of chosen) {
       productNumber++;
-      rows.push([
-        `PDD${String(item.id ?? '').trim() || String(productNumber).padStart(6, '0')}`, item.title ?? '', 'CNY', item.image ?? '',
-        item.url ?? '', '拼多多', item.id ?? '', '', '', '', '', '', '', '', '', '', '', (item.cents / 100).toFixed(2), '', '', '', ''
-      ]);
+      rows.push(...productRows(item, productNumber));
     }
   }
   const widths = Array(22).fill(8.3);

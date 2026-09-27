@@ -1,11 +1,14 @@
-import { addCandidate, parsePrice, selected, validProductTitle, SCAN_LIMIT } from './core.mjs';
+import { addCandidate, countDetails, hasDetailData, parsePrice, selected, validProductTitle, SCAN_LIMIT } from './core.mjs';
 
 const finished = status => ['done', 'short', 'error', 'stopped'].includes(status);
 export class Runner {
   constructor(task, ports) { this.task = task; this.ports = ports; this.intent = ''; this.running = false; }
   pause() { this.intent = 'paused'; }
   stop() { this.intent = 'stopped'; }
-  async checkpoint() { await this.ports.save(this.task); this.ports.update(this.task); }
+  async checkpoint() {
+    for (const job of this.task.jobs) job.detailDone = countDetails(job);
+    await this.ports.save(this.task); this.ports.update(this.task);
+  }
   async run() {
     if (this.running) return;
     this.running = true; this.intent = ''; this.task.status = 'running';
@@ -15,9 +18,9 @@ export class Runner {
         if (finished(job.status)) continue;
         if (this.intent) break;
         try {
-          job.status = 'running'; job.note = ''; await this.checkpoint();
-          await this.ports.open(job, this.task);
-          await this.collect(job);
+          job.status = 'running'; if (job.phase !== 'detail') job.note = ''; await this.checkpoint();
+          if (job.phase === 'detail') await this.enrich(job);
+          else { await this.ports.open(job, this.task); await this.collect(job); }
         } catch (error) {
           if (error.blocked) {
             this.task.status = 'blocked'; job.status = 'blocked'; job.note = error.message;
@@ -34,7 +37,7 @@ export class Runner {
         }
       } else if (this.task.status !== 'blocked') this.task.status = this.task.jobs.some(j => j.status === 'error') ? 'error' : 'done';
       await this.checkpoint();
-    } finally { this.running = false; this.ports.update(this.task); }
+    } finally { await this.ports.close?.(); this.running = false; this.ports.update(this.task); }
   }
   async collect(job) {
     let stalled = 0, noCardProgress = 0, previousSnapshot = '';
@@ -91,9 +94,42 @@ export class Runner {
       await this.ports.wait(1300);
     }
     if (this.intent) return;
-    job.status = selected(job).length >= 20 ? 'done' : 'short';
+    job.searchStatus = selected(job).length >= 20 ? 'done' : 'short';
+    job.phase = 'detail';
+    job.status = 'running';
     job.note = `${selected(job).length >= 20 ? '已收集20条，转到下一名称' : job.scanned >= SCAN_LIMIT ? '已扫描至200条上限' : '页面提示搜索结束'}；保留 ${selected(job).length}/20 组`;
     if (job.skipped) job.note += `；跳过 ${job.skipped} 条，最近原因：${job.lastSkip}`;
+    await this.checkpoint();
+    await this.enrich(job);
+  }
+  async enrich(job) {
+    for (const item of selected(job)) {
+      if (this.intent) return;
+      if (['done', 'partial', 'error'].includes(item.detailStatus)) continue;
+      item.detailStatus = 'running'; item.detailNote = '';
+      await this.checkpoint();
+      try {
+        const detail = await this.ports.enrich(item);
+        Object.assign(item, detail);
+        item.detailStatus = hasDetailData(item) ? 'done' : 'partial';
+        item.detailNote = item.detailStatus === 'partial' ? '仅采集到基础商品信息' : '';
+      } catch (error) {
+        if (error.blocked) {
+          item.detailStatus = 'pending'; item.detailNote = '';
+          await this.checkpoint();
+          throw error;
+        }
+        item.detailStatus = 'error';
+        item.detailNote = String(error.message || '详情采集失败').slice(0, 500);
+      }
+      await this.checkpoint();
+    }
+    if (this.intent) return;
+    const items = selected(job);
+    const failures = items.filter(item => item.detailStatus === 'error').length;
+    job.phase = 'done';
+    job.status = job.searchStatus || (items.length >= 20 ? 'done' : 'short');
+    job.note = `${job.note || `保留 ${items.length}/20 组`}；详情完成 ${items.length - failures}，失败 ${failures}`;
     await this.checkpoint();
   }
 }
