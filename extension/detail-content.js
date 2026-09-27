@@ -5,8 +5,6 @@
   const value = item => item == null ? '' : String(item).trim();
   const words = element => value(element?.innerText || element?.textContent);
   const unique = items => [...new Set(items.filter(Boolean))];
-  const goodsId = new URL(location.href).searchParams.get('goods_id') || '';
-
   function httpsUrl(input) {
     const raw = value(input);
     if (!raw) return '';
@@ -31,7 +29,7 @@
   }
 
   function blockedReason() {
-    if (/\/(?:login|login_phone|login_password)\b/.test(location.pathname)) return '请在采集页登录拼多多';
+    if (/\/(?:login|login_phone|login_password)\b/.test(new URL(location.href).pathname)) return '请在采集页登录拼多多';
     const phrases = [...document.querySelectorAll('div,p,span,h1,h2,h3,button')]
       .filter(element => !element.children.length && visible(element))
       .map(words).filter(phrase => phrase.length < 150);
@@ -39,28 +37,16 @@
       || (phrases.some(phrase => /手机号登录|请先登录|登录后查看|登录拼多多|^登录$/.test(phrase)) ? '请在采集页登录拼多多' : '');
   }
 
-  function productCandidates() {
+  function productCandidates(goodsId) {
     const candidates = [];
-    const visited = new Set();
-    function scan(node, depth = 0) {
-      if (!node || typeof node !== 'object' || depth > 30 || visited.has(node)) return;
-      visited.add(node);
-      if (Array.isArray(node)) {
-        for (const item of node) scan(item, depth + 1);
-        return;
-      }
-      const id = node.goodsId ?? node.goods_id;
-      if (id != null) {
-        if (value(id) !== goodsId) return;
-        candidates.push(node);
-      }
-      for (const [key, child] of Object.entries(node)) {
-        if (/recommend|suggest|related|hotGoods/i.test(key)) continue;
-        if (child && typeof child === 'object') scan(child, depth + 1);
-      }
-    }
     for (const script of document.querySelectorAll('script[type="application/json"]')) {
-      try { scan(JSON.parse(script.textContent)); } catch { /* Non-JSON page data is ignored. */ }
+      try {
+        const parsed = JSON.parse(script.textContent);
+        const goods = parsed?.goods;
+        if (goodsId && goods && !Array.isArray(goods) && typeof goods === 'object' && value(goods.goodsId) === goodsId) {
+          candidates.push(goods);
+        }
+      } catch { /* Non-JSON page data is ignored. */ }
     }
     return candidates;
   }
@@ -75,13 +61,15 @@
     return undefined;
   }
 
-  function productRoot() {
+  function productRoot(goodsId) {
     const explicit = [...document.querySelectorAll('[data-goods-id]')]
-      .find(element => element.getAttribute('data-goods-id') === goodsId && visible(element));
-    return explicit || document.querySelector('main,[data-product-detail]') || document.body;
+      .find(element => element.getAttribute('data-goods-id') === goodsId && visible(element) && isCurrent(element, document.body, goodsId));
+    const general = [...document.querySelectorAll('main,[data-product-detail]')]
+      .find(element => visible(element) && isCurrent(element, document.body, goodsId));
+    return explicit || general || document.body;
   }
 
-  function isCurrent(element, root) {
+  function isCurrent(element, root, goodsId) {
     for (let node = element; node && node !== root.parentElement; node = node.parentElement) {
       const id = node.getAttribute?.('data-goods-id');
       if (id && id !== goodsId) return false;
@@ -108,10 +96,10 @@
     return 'galleryImages';
   }
 
-  function domImages(root) {
+  function domImages(root, goodsId) {
     const images = { galleryImages: [], detailImages: [], certificateImages: [], sizeChartImages: [] };
     for (const image of root.querySelectorAll('img')) {
-      if (!visible(image) || !isCurrent(image, root)) continue;
+      if (!visible(image) || !isCurrent(image, root, goodsId)) continue;
       const url = httpsUrl(image.currentSrc || image.getAttribute('src') || image.getAttribute('data-src') || image.getAttribute('data-original'));
       const role = imageRole(image, root);
       if (url && role !== 'sku') images[role].push(url);
@@ -120,11 +108,11 @@
     return images;
   }
 
-  function domAttributes(root) {
+  function domAttributes(root, goodsId) {
     const attributes = [];
     for (const term of root.querySelectorAll('dt')) {
       const description = term.nextElementSibling;
-      if (description?.tagName === 'DD' && visible(term) && visible(description) && isCurrent(term, root)) {
+      if (description?.tagName === 'DD' && visible(term) && visible(description) && isCurrent(term, root, goodsId)) {
         attributes.push({ name: words(term), value: words(description) });
       }
     }
@@ -138,31 +126,28 @@
 
   function detailSnapshot() {
     const url = location.href;
+    const goodsId = new URL(url).searchParams.get('goods_id') || '';
     const reason = blockedReason();
     if (reason) return { url, goodsId, blocked: true, reason, detail: null };
 
-    const candidates = productCandidates();
-    const root = productRoot();
-    const images = domImages(root);
+    const candidates = productCandidates(goodsId);
+    const root = productRoot(goodsId);
+    const images = domImages(root, goodsId);
     const titleElement = [...root.querySelectorAll('h1,[data-goods-name]')]
-      .find(element => visible(element) && isCurrent(element, root));
-    const descriptionElement = [...root.querySelectorAll('[data-role="description"],[class*="description"]')]
-      .find(element => visible(element) && isCurrent(element, root));
-    const video = [...root.querySelectorAll('video[src],video source[src]')]
-      .find(element => visible(element) && isCurrent(element, root));
+      .find(element => visible(element) && isCurrent(element, root, goodsId));
     const jsonSkus = first(candidates, ['skus', 'skuList']);
     const attributes = jsonAttributes(first(candidates, ['properties', 'attributes']));
-    for (const item of domAttributes(root)) {
+    for (const item of domAttributes(root, goodsId)) {
       if (!attributes.some(existing => existing.name === item.name && existing.value === item.value)) attributes.push(item);
     }
     const detail = {
       title: value(first(candidates, ['goodsName', 'title'])) || words(titleElement),
       galleryImages: unique([...urls(first(candidates, ['gallery', 'galleryImages'])), ...images.galleryImages]),
-      descriptionText: value(first(candidates, ['descriptionText', 'description'])) || words(descriptionElement),
+      descriptionText: value(first(candidates, ['descriptionText', 'description'])),
       detailImages: unique([...urls(first(candidates, ['detailGallery', 'detailImages'])), ...images.detailImages]),
       category: value(first(candidates, ['category'])),
       attributes,
-      videoUrl: httpsUrl(first(candidates, ['videoUrl'])) || httpsUrl(video?.getAttribute('src')),
+      videoUrl: httpsUrl(first(candidates, ['videoUrl'])),
       certificateImages: unique([...urls(first(candidates, ['certificateImages'])), ...images.certificateImages]),
       sizeChartImages: unique([...urls(first(candidates, ['sizeChartImages'])), ...images.sizeChartImages]),
       specNames: (Array.isArray(first(candidates, ['specNames'])) ? first(candidates, ['specNames']) : []).map(value).filter(Boolean),
