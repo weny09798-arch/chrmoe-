@@ -1,0 +1,1 @@
+{"name":"pdd-link-collector","private":true,"type":"module","scripts":{"test":"node --test tests/*.test.mjs","check":"node scripts/check.mjs"},"devDependencies":{"linkedom":"^0.18.13"},"dependencies":{"xlsx":"https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"}}

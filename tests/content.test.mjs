@@ -1,0 +1,54 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { readFile } from 'node:fs/promises';
+import { parseHTML } from 'linkedom';
+
+async function snapshot(html, keyword='相机') {
+  const {window,document}=parseHTML(`<html><body>${html}</body></html>`);
+  window.Element.prototype.getBoundingClientRect=()=>({width:250,height:350,top:10,bottom:360});
+  let handler;
+  const context=vm.createContext({window, document, URL, location:{href:`https://mobile.pinduoduo.com/search_result.html?search_key=${encodeURIComponent(keyword)}`,pathname:'/search_result.html'},getComputedStyle:()=>({display:'block',visibility:'visible',overflowY:'visible'}),chrome:{runtime:{onMessage:{addListener:fn=>handler=fn}}}, console, setTimeout, clearTimeout});
+  vm.runInContext(await readFile(new URL('../extension/content.js',import.meta.url),'utf8'),context);
+  return new Promise(resolve=>handler({type:'PDD_SNAPSHOT'}, {},resolve));
+}
+test('reads two similar-image cards independently and joins split price digits',async()=>{
+  const data=await snapshot(`<a href="goods.html?goods_id=123"><img src="https://img.pddpic.com/a.jpg"><h3>高清数码相机</h3><div>立减20元</div><div>券后<span>¥</span><span>29</span><small>.88</small></div><span>已拼7万</span></a><a href="/goods.html?goods_id=456"><img src="https://img.pddpic.com/b.jpg"><h3>同款相机</h3><div>券后¥32</div></a>`);
+  assert.equal(data.cards.length,2); assert.equal(data.cards[0].id,'123'); assert.match(data.cards[0].priceText,/¥29\.88/);assert.equal(data.cards[1].id,'456');
+});
+test('ignores hidden cards and unrelated small icons',async()=>{
+  const data=await snapshot('<a href="goods.html?goods_id=123" hidden><img src="https://img.pddpic.com/a.jpg"><div>¥32</div></a><img width="20" height="20" src="https://img.pddpic.com/icon.png">');
+  assert.equal(data.cards.length,0);
+});
+test('visible validation dialog blocks extraction even with cards behind it',async()=>{
+  const data=await snapshot('<div role="dialog">请完成安全验证 拖动滑块</div><a href="goods.html?goods_id=123"><img src="https://img.pddpic.com/a.jpg"><div>¥32</div></a>');
+  assert.equal(data.blocked,true);
+});
+test('div cards without URLs are retained for safe detail-link resolution',async()=>{
+  const data=await snapshot('<div role="button"><img src="https://img.pddpic.com/a.jpg"><div>数码相机</div><div>券后¥32</div></div>');
+  assert.equal(data.cards.length,1);assert.equal(data.cards[0].id,'');assert.equal(data.cards[0].title,'数码相机');
+});
+test('uses the merchandise name after guarantee, reviews and delivery badges',async()=>{
+  const data=await snapshot('<a href="goods.html?goods_id=123"><img src="https://img.pddpic.com/a.jpg"><span>已缴纳保证金</span><span>好评超98%同款</span><span>1万+人好评</span><span>广东地区不配送</span><div>高清数码相机双摄自拍</div><span>¥29.88</span></a>');
+  assert.equal(data.cards[0].title,'高清数码相机双摄自拍');
+});
+test('does not export a heading badge as the product name',async()=>{
+  const data=await snapshot('<a href="goods.html?goods_id=123"><img src="https://img.pddpic.com/a.jpg"><h3><span>已缴纳保证金</span>高清数码相机</h3><div>¥29.88</div></a>');
+  assert.equal(data.cards[0].title,'高清数码相机');
+});
+test('keeps the name when a discount badge is directly joined to title text',async()=>{
+  const data=await snapshot('<a href="goods.html?goods_id=123"><img src="https://img.pddpic.com/a.jpg"><h3>立减20元高清数码相机</h3><div>¥29.88</div></a>');
+  assert.equal(data.cards[0].title,'高清数码相机');
+});
+test('leaves the title empty when a card only contains promotional badges',async()=>{
+  const data=await snapshot('<a href="goods.html?goods_id=123"><img src="https://img.pddpic.com/a.jpg"><span>已缴纳保证金</span><span>好评超98%同款</span><span>1万+人好评</span><span>广东地区不配送</span><span>¥29.88</span></a>');
+  assert.equal(data.cards[0].title,'');
+});
+test('chooses the searched product name after return and sales labels',async()=>{
+  const data=await snapshot('<a href="goods.html?goods_id=123"><img src="https://img.pddpic.com/a.jpg"><span>未发货秒退</span><span>本店已拼500万+</span><span>本店已拼17.8万+</span><span>本店已拼92.7万+</span><span>本店已拼2.8万</span><div>苹果手机壳透明防摔</div><span>¥29.88</span></a>','苹果手机壳');
+  assert.equal(data.cards[0].title,'苹果手机壳透明防摔');
+});
+test('does not accept a title with no meaningful character shared with the search',async()=>{
+  const data=await snapshot('<a href="goods.html?goods_id=123"><img src="https://img.pddpic.com/a.jpg"><h3>蓝牙音箱</h3><span>¥29.88</span></a>','苹果手机壳');
+  assert.equal(data.cards[0].title,'');
+});
