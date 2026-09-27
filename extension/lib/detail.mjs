@@ -60,7 +60,7 @@ function normalizedSku(sku) {
   const id = text(sku.id) || text(sku.skuId);
   return {
     id,
-    specs: cleanStrings(sku.specs, 2),
+    specs: Array.isArray(sku.specs) ? sku.specs.map(text).filter(Boolean).slice(0, 2) : [],
     cents,
     image: httpsUrl(sku.image),
     stock: text(sku.stock),
@@ -100,7 +100,7 @@ export function normalizeDetail(raw = {}, fallback = {}) {
     for (const item of raw.skus) {
       const sku = normalizedSku(item);
       if (!sku) continue;
-      const key = sku.id || `${sku.specs.join('\u001f')}${sku.cents}${sku.image}`;
+      const key = sku.id || JSON.stringify([sku.specs, sku.cents, sku.image]);
       if (skuKeys.has(key)) continue;
       skuKeys.add(key);
       skus.push(sku);

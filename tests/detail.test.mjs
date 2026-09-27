@@ -56,6 +56,11 @@ test('cleans attributes and limits unique spec names and SKU specs to two', () =
   assert.deepEqual(detail.skus[0].specs, ['黑色', '42']);
 });
 
+test('preserves duplicate SKU spec values in their original dimension positions', () => {
+  const detail = normalizeDetail({ skus: [{ id: 'same-values', specs: ['通用', '通用'] , cents: 100 }] });
+  assert.deepEqual(detail.skus[0].specs, ['通用', '通用']);
+});
+
 test('keeps only valid positive integer prices and deduplicates SKUs by documented keys', () => {
   const detail = normalizeDetail({ skus: [
     { id: 'a', skuId: 'ignored', specs: ['黑色'], cents: 2990, image: 'https://img/a.jpg' },
@@ -71,6 +76,14 @@ test('keeps only valid positive integer prices and deduplicates SKUs by document
     { id: 'b', specs: ['蓝色'], cents: 1234, image: '', stock: '3', weightKg: '', sizeCm: '' },
     { id: '', specs: ['黑色'], cents: 100, image: 'https://img/x.jpg', stock: '', weightKg: '', sizeCm: '' }
   ]);
+});
+
+test('uses unambiguous fields when deduplicating SKUs without IDs', () => {
+  const detail = normalizeDetail({ skus: [
+    { specs: ['1'], cents: 23 },
+    { specs: ['12'], cents: 3 }
+  ] });
+  assert.deepEqual(detail.skus.map(sku => [sku.specs, sku.cents]), [[['1'], 23], [['12'], 3]]);
 });
 
 test('uses exactly one fallback SKU if raw SKUs have no valid prices', () => {
