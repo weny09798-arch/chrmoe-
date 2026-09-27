@@ -126,15 +126,17 @@ test('ordinary detail error records item and proceeds to the next',async()=>{
   assert.match(task.jobs[0].note,/失败 1/);
 });
 test('blocked detail stays pending and resume skips completed items without reopening search',async()=>{
-  const task=createTask(['相机']);let first;
+  const task=createTask(['相机']);let first;const closeCalls=[];
   const hashes=async image=>({bits:'0'.repeat(16),color:[Number(image.match(/\/(\d+)\.jpg/)[1])*100,0,0],spread:50});
   first=new Runner(task,ports([{cards:[card('1',32),card('2',33)],end:true}],{hash:hashes,
-    enrich:async item=>{if(item.id==='2')throw Object.assign(new Error('验证码'),{blocked:true,permissionOrigin:'https://mobile.pinduoduo.com'});return {descriptionText:'已完成'};}
+    enrich:async (item,currentTask)=>{assert.equal(currentTask,task);if(item.id==='2')throw Object.assign(new Error('验证码'),{blocked:true,permissionOrigin:'https://mobile.pinduoduo.com'});return {descriptionText:'已完成'};},
+    close:async options=>closeCalls.push(options)
   }));
   await first.run();
   assert.equal(task.status,'blocked');assert.equal(task.jobs[0].phase,'detail');
   assert.deepEqual(selected(task.jobs[0]).map(x=>x.detailStatus),['done','pending']);
   assert.equal(task.jobs[0].detailDone,1);
+  assert.deepEqual(closeCalls,[{preserveBlocked:true}]);
   const enriched=[];let opened=0,reads=0;
   await new Runner(task,ports([],{open:async()=>opened++,read:async()=>{reads++;throw new Error('unexpected read');},
     enrich:async item=>{enriched.push(item.id);return {attributes:[{name:'颜色',value:'蓝'}]};}})).run();
@@ -144,7 +146,9 @@ test('blocked detail stays pending and resume skips completed items without reop
 test('pausing or stopping during detail always closes the detail tab',async()=>{
   for(const action of ['pause','stop']){
     const task=createTask(['相机']);let runner,closes=0;
-    runner=new Runner(task,ports([{cards:[card('1',32)],end:true}],{enrich:async()=>{runner[action]();return {descriptionText:'详情'};},close:async()=>{closes++;}}));
+    let closeOptions;
+    runner=new Runner(task,ports([{cards:[card('1',32)],end:true}],{enrich:async()=>{runner[action]();return {descriptionText:'详情'};},close:async options=>{closes++;closeOptions=options;}}));
     await runner.run();assert.equal(task.status,action==='pause'?'paused':'stopped');assert.equal(closes,1);
+    assert.deepEqual(closeOptions,{preserveBlocked:false});
   }
 });

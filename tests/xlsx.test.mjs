@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as xlsx from '../extension/lib/xlsx.mjs';
+import { normalizeDetail } from '../extension/lib/detail.mjs';
 
 const { workbookBytes, taskSheets, productRows } = xlsx;
 
@@ -125,6 +126,11 @@ test('uses a specification-free fallback SKU and the search image when details h
   assert.equal(row.length, 22);
   assert.equal(row[3], 'https://img.example/search.jpg');
   assert.deepEqual(row.slice(14), ['', '', '', '35.00', 'https://img.example/search.jpg', '', '', '']);
+});
+test('exports the explicit product detail price when a product has no valid SKU', () => {
+  const item = { id: '20', title: '相机', cents: 1000, image: 'https://img.example/search.jpg' };
+  Object.assign(item, normalizeDetail({ price: '20.00', skus: [] }, item));
+  assert.equal(productRows(item)[0][17], '20.00');
 });
 test('template export omits stale promotional titles while retaining a searched product', () => {
   const old={id:'1',title:'未发货秒退',cents:1000,url:'https://mobile.pinduoduo.com/goods.html?goods_id=1',image:'https://img.example/1.jpg'};

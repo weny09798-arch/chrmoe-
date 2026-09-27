@@ -29,6 +29,11 @@ function positiveCents(value) {
   return Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
+function explicitCents(value) {
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) value = Number(value.trim());
+  return positiveCents(value);
+}
+
 function priceCents(value) {
   const price = text(value);
   if (!/^\d+(?:\.\d+)?$/.test(price)) return 0;
@@ -55,7 +60,7 @@ function cleanStrings(values, limit = Infinity) {
 
 function normalizedSku(sku) {
   if (!sku || typeof sku !== 'object') return null;
-  const cents = positiveCents(sku.cents) || priceCents(sku.price);
+  const cents = explicitCents(sku.cents) || priceCents(sku.price);
   if (!cents) return null;
   const id = text(sku.id) || text(sku.skuId);
   return {
@@ -94,6 +99,7 @@ export function normalizeDetail(raw = {}, fallback = {}) {
     }
   }
 
+  const detailCents = explicitCents(raw.cents) || priceCents(raw.price);
   const skus = [];
   const skuKeys = new Set();
   if (Array.isArray(raw.skus)) {
@@ -106,7 +112,7 @@ export function normalizeDetail(raw = {}, fallback = {}) {
       skus.push(sku);
     }
   }
-  if (!skus.length) skus.push(fallbackSku(fallback));
+  if (!skus.length) skus.push(fallbackSku({ ...fallback, cents: detailCents || fallback.cents }));
 
   const rawTitle = text(raw.title);
   const status = text(raw.detailStatus);
@@ -122,6 +128,7 @@ export function normalizeDetail(raw = {}, fallback = {}) {
     sizeChartImages: urlList(raw.sizeChartImages),
     specNames: cleanStrings(raw.specNames, 2),
     skus,
+    detailCents,
     detailStatus: statuses.has(status) ? status : DETAIL_STATUS.DONE,
     detailNote: text(raw.detailNote).slice(0, 500)
   };

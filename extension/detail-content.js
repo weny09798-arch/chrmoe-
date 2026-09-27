@@ -128,7 +128,7 @@
     const url = location.href;
     const goodsId = new URL(url).searchParams.get('goods_id') || '';
     const reason = blockedReason();
-    if (reason) return { url, goodsId, blocked: true, reason, detail: null };
+    if (reason) return { url, goodsId, blocked: true, reason, ready: false, source: 'blocked', detail: null };
 
     const candidates = productCandidates(goodsId);
     const root = productRoot(goodsId);
@@ -142,6 +142,8 @@
     }
     const detail = {
       title: value(first(candidates, ['goodsName', 'title'])) || words(titleElement),
+      price: value(first(candidates, ['price'])),
+      cents: first(candidates, ['cents']),
       galleryImages: unique([...urls(first(candidates, ['gallery', 'galleryImages'])), ...images.galleryImages]),
       descriptionText: value(first(candidates, ['descriptionText', 'description'])),
       detailImages: unique([...urls(first(candidates, ['detailGallery', 'detailImages'])), ...images.detailImages]),
@@ -154,6 +156,7 @@
       skus: Array.isArray(jsonSkus) ? jsonSkus.map(sku => ({
         id: value(sku?.id ?? sku?.skuId),
         specs: Array.isArray(sku?.specs) ? sku.specs.map(value) : [],
+        cents: sku?.cents,
         price: value(sku?.price),
         image: httpsUrl(sku?.image),
         stock: value(sku?.stock),
@@ -161,9 +164,9 @@
         sizeCm: value(sku?.sizeCm)
       })) : [],
       detailStatus: candidates.length ? 'done' : 'partial',
-      detailNote: ''
+      detailNote: candidates.length ? '' : '仅通过页面可见内容采集，部分详情可能缺失'
     };
-    return { url, goodsId, blocked: false, reason: '', detail };
+    return { url, goodsId, blocked: false, reason: '', ready: candidates.length > 0, source: candidates.length ? 'json' : 'dom', detail };
   }
 
   chrome.runtime.onMessage.addListener((message, sender, respond) => {

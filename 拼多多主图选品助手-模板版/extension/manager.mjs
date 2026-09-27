@@ -1,6 +1,6 @@
 import { addKeyword, enqueueKeyword, retryJob, selected, recoverTask, STATUS } from './lib/core.mjs';
 import { Runner } from './lib/runner.mjs';
-import { browserPorts } from './lib/browser.mjs';
+import { browserPorts, closeTaskDetailTab } from './lib/browser.mjs';
 import { taskSheets, workbookBytes, workbookXlsBytes } from './lib/xlsx.mjs';
 
 const $ = id => document.getElementById(id);
@@ -35,6 +35,14 @@ function renderKeywords() {
   }));
 }
 function badge(status) { return element('span', STATUS[status] || status, `badge ${status}`); }
+const DETAIL_LABEL = { pending: '等待', running: '采集中', done: '完整', partial: '部分', error: '失败' };
+function detailCounts(items) {
+  return {
+    complete: items.filter(item => item.detailStatus === 'done').length,
+    partial: items.filter(item => item.detailStatus === 'partial').length,
+    errors: items.filter(item => item.detailStatus === 'error').length
+  };
+}
 function renderTask() {
   const jobs = task?.jobs || [];
   const done = jobs.filter(j => ['done', 'short', 'error', 'stopped'].includes(j.status)).length;
@@ -51,10 +59,10 @@ function renderTask() {
   $('progress-label').textContent = task ? `已处理 ${done} / ${jobs.length} 个商品名称` : '添加商品名称后自动搜索';
   $('progress-percent').textContent = `${percent}%`; $('progress').value = percent;
   const activeItems = active ? selected(active) : [];
-  const detailErrors = activeItems.filter(item => item.detailStatus === 'error').length;
+  const activeDetails = detailCounts(activeItems);
   $('current-detail').textContent = active
     ? active.phase === 'detail'
-      ? `正在补全详情 ${active.detailDone || 0} / ${activeItems.length} · 失败 ${detailErrors} 个`
+      ? `正在补全详情 ${active.detailDone || 0} / ${activeItems.length} · 完整 ${activeDetails.complete} · 部分 ${activeDetails.partial} · 失败 ${activeDetails.errors}`
       : `已扫描 ${active.scanned} / 200 条 · ${active.groups.length} 组主图 · 保留 ${activeItems.length} / 20 条${active.note ? ` · ${active.note}` : ''}`
     : (task?.status === 'error' ? '部分任务失败，已保留采集结果；请查看每行说明。' : '每个名称收集到 20 条即切换；最多扫描 200 条。');
   $('add-button').disabled = lockedOut || clearing;
@@ -64,7 +72,7 @@ function renderTask() {
   $('resume').disabled = lockedOut || !installed;
   $('resume').textContent = task?.permissionOrigin ? '授权图片并继续' : '继续';
   $('stop').disabled = lockedOut || !(busy || resumable);
-  $('show-tab').hidden = !task?.tabId;
+  $('show-tab').hidden = !Number.isInteger(task?.detailTabId) && !Number.isInteger(task?.tabId);
   $('export').disabled = lockedOut || !task;
   $('results-empty').hidden = Boolean(jobs.length); $('result-table-wrap').hidden = !jobs.length;
   $('result-rows').replaceChildren(...jobs.map((job, index) => {
@@ -83,9 +91,10 @@ function renderTask() {
       action.append(retry);
     }
     const items = selected(job);
-    const detailErrors = items.filter(item => item.detailStatus === 'error').length;
-    const detailFinished = items.filter(item => ['done', 'partial'].includes(item.detailStatus)).length;
-    const detailSummary = detailFinished || detailErrors ? `详情完成 ${detailFinished} 个 · 失败 ${detailErrors} 个` : '';
+    const counts = detailCounts(items);
+    const detailSummary = counts.complete || counts.partial || counts.errors
+      ? `详情完整 ${counts.complete} 个 · 部分 ${counts.partial} 个 · 失败 ${counts.errors} 个`
+      : '';
     const explanation = job.note || (job.skipped ? `已跳过 ${job.skipped} 条` : (['done', 'short', 'error', 'stopped'].includes(job.status) ? detailSummary || '—' : '—'));
     row.append(element('td', job.keyword), status, element('td', String(job.scanned)), element('td', `${items.length}/20`), element('td', explanation, 'note'), action);
     return row;
@@ -98,7 +107,10 @@ function renderLinks() {
   $('link-rows').replaceChildren(...(task?.jobs || []).flatMap(job => selected(job).map(item => {
     const row = document.createElement('tr'), linkCell = document.createElement('td'), a = element('a', '打开商品 ↗');
     a.href = item.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; linkCell.append(a);
-    row.append(element('td', job.keyword), element('td', item.title), element('td', `¥${(item.cents / 100).toFixed(2)}`), linkCell); return row;
+    const status = DETAIL_LABEL[item.detailStatus] || '等待';
+    const note = item.detailNote || (item.detailStatus === 'done' ? '详情字段已采集' : '—');
+    row.append(element('td', job.keyword), element('td', item.title), element('td', `¥${(item.cents / 100).toFixed(2)}`),
+      element('td', status), element('td', note, 'note'), linkCell); return row;
   })));
 }
 function saveTask(current) {
@@ -152,6 +164,7 @@ $('clear-all').addEventListener('click', async () => {
   notice('正在停止搜索并清空本机数据…'); renderKeywords(); renderTask();
   try {
     if (activeRun) await activeRun.catch(() => {});
+    await closeTaskDetailTab(task);
     await Promise.allSettled([keywordWrites, taskWrites]);
     await storage.set({ keywords: [], task: null });
     keywords = []; task = null; busy = false; runner = null;
@@ -189,18 +202,21 @@ $('stop').addEventListener('click', async () => {
     current.status = 'stopped';
     for (const job of current.jobs) if (['pending', 'paused', 'blocked', 'running'].includes(job.status)) job.status = 'stopped';
     notice('已停止，已采集结果可以导出。');
-    try { await saveTask(current); } catch (error) { notice(error.message, 'error'); }
+    try { await closeTaskDetailTab(current); await saveTask(current); } catch (error) { notice(error.message, 'error'); }
     finally { if (pendingResume === request) { pendingResume = null; busy = false; } }
   }
   else if (busy) { runner?.stop(); notice('正在停止，已采集结果可以导出。'); }
   else if (task) {
     task.status = 'stopped'; for (const job of task.jobs) if (['pending', 'paused', 'blocked', 'running'].includes(job.status)) job.status = 'stopped';
-    try { await saveTask(task); } catch (error) { notice(error.message, 'error'); }
+    try { await closeTaskDetailTab(task); await saveTask(task); } catch (error) { notice(error.message, 'error'); }
   }
   renderTask();
 });
 $('show-tab').addEventListener('click', async () => {
-  try { const tab = await chrome.tabs.update(task.tabId, { active: true }); await chrome.windows.update(tab.windowId, { focused: true }); }
+  try {
+    const targetTabId = Number.isInteger(task?.detailTabId) ? task.detailTabId : task?.tabId;
+    const tab = await chrome.tabs.update(targetTabId, { active: true }); await chrome.windows.update(tab.windowId, { focused: true });
+  }
   catch { notice('采集页已经关闭。点击继续可重新打开。'); }
 });
 $('export').addEventListener('click', async () => {

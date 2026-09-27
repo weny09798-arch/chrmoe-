@@ -49,6 +49,7 @@ test('reads the current product with its actual two-dimensional SKU combinations
     </main>
     <script type="application/json" id="__PDD_DETAIL_DATA__">${JSON.stringify({ goods: {
       goodsId: '123', goodsName: '当前商品',
+      price: '20.00', cents: 2000,
       gallery: ['https://img.pddpic.com/main.jpg'],
       detailGallery: ['https://img.pddpic.com/detail.jpg'],
       properties: [{ name: '材质', value: '棉' }],
@@ -64,7 +65,11 @@ test('reads the current product with its actual two-dimensional SKU combinations
   assert.equal(result.url, 'https://mobile.pinduoduo.com/goods.html?goods_id=123');
   assert.equal(result.goodsId, '123');
   assert.equal(result.blocked, false);
+  assert.equal(result.ready, true);
+  assert.equal(result.source, 'json');
   assert.equal(result.detail.title, '当前商品');
+  assert.equal(result.detail.price, '20.00');
+  assert.equal(result.detail.cents, 2000);
   assert.deepEqual(Array.from(result.detail.specNames), ['颜色', '尺码']);
   assert.deepEqual(Array.from(result.detail.skus, sku => Array.from(sku.specs)), [['红色', 'S'], ['蓝色', 'M']]);
   assert.deepEqual(Array.from(result.detail.skus, sku => sku.id), ['sku-red-s', 'sku-blue-m']);
@@ -88,7 +93,18 @@ test('ignores matching fields in other products and never invents SKU combinatio
   assert.deepEqual(Array.from(result.detail.attributes, item => [item.name, item.value]), [['面料', '亚麻']]);
   assert.deepEqual(Array.from(result.detail.specNames), []);
   assert.deepEqual(Array.from(result.detail.skus), []);
+  assert.equal(result.ready, false);
+  assert.equal(result.source, 'dom');
   assert.equal(JSON.stringify(result.detail).includes('推荐商品'), false);
+});
+
+test('reads only explicit product-root prices and ignores promotional text numbers', async () => {
+  const result = await snapshot(`
+    <main data-goods-id="123"><h1>商品</h1><p>立减 99 元，本店已拼 500 万+</p></main>
+    <script type="application/json">${JSON.stringify({ goods: { goodsId: '123', goodsName: '商品', price: '20.00', cents: 2000 } })}</script>`);
+  assert.equal(result.detail.price, '20.00');
+  assert.equal(result.detail.cents, 2000);
+  assert.equal(JSON.stringify(result.detail).includes('99'), false);
 });
 
 test('reports a visible validation challenge before exporting product data', async () => {

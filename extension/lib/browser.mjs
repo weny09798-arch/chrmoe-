@@ -19,21 +19,71 @@ function isSearch(url, keyword) {
 }
 function blocked(message, permissionOrigin = '') { return Object.assign(new Error(message), { blocked: true, permissionOrigin }); }
 
-export function browserPorts({ save, update }) {
+export async function closeTaskDetailTab(currentTask) {
+  if (!currentTask || typeof currentTask !== 'object') return;
+  const id = Number.isInteger(currentTask.detailTabId) ? currentTask.detailTabId : undefined;
+  delete currentTask.detailTabId;
+  delete currentTask.detailGoodsId;
+  if (id !== undefined) await chrome.tabs.remove(id).catch(() => {});
+}
+
+export function browserPorts({ save, update, detailPollLimit = 40, detailPollWait = wait }) {
   let tabId, task, detailTabId;
   const imageCache = new Map();
-  async function closeDetail() {
+  async function closeDetail({ preserveBlocked = false } = {}) {
+    if (preserveBlocked && task?.status === 'blocked' && Number.isInteger(task.detailTabId)) return;
+    if (detailTabId === undefined && Number.isInteger(task?.detailTabId)) detailTabId = task.detailTabId;
     const id = detailTabId;
     detailTabId = undefined;
+    if (task) {
+      delete task.detailTabId;
+      delete task.detailGoodsId;
+    }
     if (id !== undefined) await chrome.tabs.remove(id).catch(() => {});
+    if (task) await save(task).catch(() => {});
   }
-  async function enrich(item) {
+  function usableDetail(detail) {
+    return detail && (detail.title || ['galleryImages', 'detailImages', 'certificateImages', 'sizeChartImages', 'attributes', 'skus'].some(key => detail[key]?.length));
+  }
+  function detailScore(detail) {
+    if (!detail) return -1;
+    let score = detail.title ? 1 : 0;
+    if (detail.descriptionText) score += 8;
+    if (detail.category) score += 4;
+    if (detail.videoUrl) score += 4;
+    if (detail.price || detail.cents) score += 2;
+    for (const key of ['galleryImages', 'detailImages', 'certificateImages', 'sizeChartImages', 'attributes', 'specNames', 'skus']) score += (detail[key]?.length || 0) * 3;
+    return score;
+  }
+  async function enrich(item, currentTask) {
+    task = currentTask || task;
     const id = typeof item?.id === 'string' ? item.id : Number.isSafeInteger(item?.id) ? String(item.id) : '';
     if (!/^\d+$/.test(id)) throw new Error('无效商品 ID');
     const detailUrl = `https://mobile.pinduoduo.com/goods.html?goods_id=${id}`;
+    let preserveDetailTab = false;
     try {
-      const tab = await chrome.tabs.create({ url: detailUrl, active: false });
-      detailTabId = tab.id;
+      let tab = null;
+      if (Number.isInteger(task?.detailTabId) && (!task.detailGoodsId || task.detailGoodsId === id)) {
+        tab = await chrome.tabs.get(task.detailTabId).catch(() => null);
+        if (tab && (!task.detailGoodsId && productId(tab.url || '') !== id)) tab = null;
+      }
+      if (!tab) {
+        if (Number.isInteger(task?.detailTabId)) await closeDetail();
+        tab = await chrome.tabs.create({ url: detailUrl, active: false });
+        detailTabId = tab.id;
+        if (task) {
+          task.detailTabId = detailTabId;
+          task.detailGoodsId = id;
+          await save(task);
+        }
+      } else {
+        detailTabId = tab.id;
+        if (task) {
+          task.detailTabId = detailTabId;
+          task.detailGoodsId = id;
+          await save(task);
+        }
+      }
       let ready = false;
       for (let i = 0; i < 40; i++) {
         if ((await chrome.tabs.get(detailTabId)).status === 'complete') { ready = true; break; }
@@ -41,20 +91,34 @@ export function browserPorts({ save, update }) {
       }
       if (!ready) throw new Error('商品详情加载超时');
       await chrome.scripting.executeScript({ target: { tabId: detailTabId }, files: ['detail-content.js'] });
-      for (let i = 0; i < 40; i++) {
+      let best = null, bestScore = -1, stableKey = '', stableCount = 0;
+      for (let i = 0; i < detailPollLimit; i++) {
         const snapshot = await chrome.tabs.sendMessage(detailTabId, { type: 'PDD_DETAIL_SNAPSHOT' });
         if (!snapshot) throw new Error('商品详情页未响应');
-        if (snapshot.goodsId !== id) throw new Error('商品详情 ID 不匹配');
-        if (snapshot.blocked) throw blocked(snapshot.reason || '商品详情页已阻断');
-        if (snapshot.error) throw new Error(snapshot.error);
-        const detail = snapshot.detail;
-        if (detail && (detail.title || ['galleryImages', 'detailImages', 'certificateImages', 'sizeChartImages', 'attributes', 'skus'].some(key => detail[key]?.length))) {
-          return normalizeDetail(detail, item);
+        if (snapshot.blocked) {
+          preserveDetailTab = true;
+          throw blocked(snapshot.reason || '商品详情页已阻断');
         }
-        if (i < 39) await wait(300);
+        if (snapshot.error) throw new Error(snapshot.error);
+        if (snapshot.goodsId !== id) throw new Error('商品详情 ID 不匹配');
+        const detail = snapshot.detail;
+        if (usableDetail(detail)) {
+          const score = detailScore(detail);
+          if (score >= bestScore) { best = detail; bestScore = score; }
+          const key = JSON.stringify(detail);
+          stableCount = key === stableKey ? stableCount + 1 : 1;
+          stableKey = key;
+          // A matching top-level JSON product root is the reader's explicit readiness signal.
+          // Responses from older reader versions did not include this field and remain compatible.
+          if (snapshot.ready !== false || stableCount >= 8) return normalizeDetail(best, item);
+        }
+        if (i < detailPollLimit - 1) await detailPollWait(300);
       }
+      if (best) return normalizeDetail(best, item);
       throw new Error('商品详情加载超时');
-    } finally { await closeDetail(); }
+    } finally {
+      if (!preserveDetailTab) await closeDetail();
+    }
   }
   async function ready() {
     for (let i = 0; i < 40; i++) {

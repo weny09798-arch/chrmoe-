@@ -37,7 +37,10 @@ export class Runner {
         }
       } else if (this.task.status !== 'blocked') this.task.status = this.task.jobs.some(j => j.status === 'error') ? 'error' : 'done';
       await this.checkpoint();
-    } finally { await this.ports.close?.(); this.running = false; this.ports.update(this.task); }
+    } finally {
+      await this.ports.close?.({ preserveBlocked: this.task.status === 'blocked' });
+      this.running = false; this.ports.update(this.task);
+    }
   }
   async collect(job) {
     let stalled = 0, noCardProgress = 0, previousSnapshot = '';
@@ -109,13 +112,13 @@ export class Runner {
       item.detailStatus = 'running'; item.detailNote = '';
       await this.checkpoint();
       try {
-        const detail = await this.ports.enrich(item);
+        const detail = await this.ports.enrich(item, this.task);
         Object.assign(item, detail);
-        item.detailStatus = hasDetailData(item) ? 'done' : 'partial';
-        item.detailNote = item.detailStatus === 'partial' ? '仅采集到基础商品信息' : '';
+        item.detailStatus = detail.detailStatus === 'partial' || !hasDetailData(item) ? 'partial' : 'done';
+        item.detailNote = detail.detailNote || (item.detailStatus === 'partial' ? '仅采集到基础商品信息' : '');
       } catch (error) {
         if (error.blocked) {
-          item.detailStatus = 'pending'; item.detailNote = '';
+          item.detailStatus = 'pending'; item.detailNote = String(error.message || '详情页等待处理').slice(0, 500);
           await this.checkpoint();
           throw error;
         }
@@ -126,10 +129,12 @@ export class Runner {
     }
     if (this.intent) return;
     const items = selected(job);
+    const complete = items.filter(item => item.detailStatus === 'done').length;
+    const partial = items.filter(item => item.detailStatus === 'partial').length;
     const failures = items.filter(item => item.detailStatus === 'error').length;
     job.phase = 'done';
     job.status = job.searchStatus || (items.length >= 20 ? 'done' : 'short');
-    job.note = `${job.note || `保留 ${items.length}/20 组`}；详情完成 ${items.length - failures}，失败 ${failures}`;
+    job.note = `${job.note || `保留 ${items.length}/20 组`}；详情完整 ${complete}，部分 ${partial}，失败 ${failures}`;
     await this.checkpoint();
   }
 }

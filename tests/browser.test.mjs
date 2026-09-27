@@ -133,15 +133,44 @@ test('detail enrichment retries an empty snapshot until content appears', async 
   } finally { globalThis.chrome = prior; }
 });
 
-test('detail verification page raises a blocked error and closes only the detail tab', async () => {
+test('detail verification is handled before goods ID validation and preserves its tab', async () => {
   const prior = globalThis.chrome;
-  const { chrome, calls } = detailChrome([{ goodsId: '123', blocked: true, reason: '请完成安全验证', detail: null }]);
+  const { chrome, calls } = detailChrome([{ goodsId: '', blocked: true, reason: '请完成安全验证', detail: null }]);
   globalThis.chrome = chrome;
   try {
+    const task = { status: 'running' };
     const ports = browserPorts({ save: async () => {}, update: () => {} });
-    await assert.rejects(() => ports.enrich({ id: '123' }), error => error.blocked === true && error.message === '请完成安全验证');
+    await assert.rejects(() => ports.enrich({ id: '123' }, task), error => error.blocked === true && error.message === '请完成安全验证');
+    assert.equal(task.detailTabId, 99);
+    assert.equal(task.detailGoodsId, '123');
+    assert.deepEqual(calls.removed, []);
+    task.status = 'blocked';
+    await ports.close({ preserveBlocked: true });
+    assert.deepEqual(calls.removed, []);
+    await ports.close();
     assert.deepEqual(calls.removed, [99]);
+    assert.equal(task.detailTabId, undefined);
     assert.deepEqual(calls.updates, []);
+  } finally { globalThis.chrome = prior; }
+});
+
+test('resume reuses a preserved verification tab and closes it after the current product succeeds', async () => {
+  const prior = globalThis.chrome;
+  const { chrome, calls } = detailChrome([
+    { goodsId: '', blocked: true, reason: '请完成安全验证', detail: null },
+    { goodsId: '123', blocked: false, ready: true, detail: { title: '已验证商品', skus: [{ id: 'sku', price: '20.00' }] } }
+  ]);
+  globalThis.chrome = chrome;
+  try {
+    const task = { status: 'running' };
+    const ports = browserPorts({ save: async () => {}, update: () => {} });
+    await assert.rejects(() => ports.enrich({ id: '123' }, task), error => error.blocked);
+    task.status = 'running';
+    const detail = await ports.enrich({ id: '123', cents: 1000 }, task);
+    assert.equal(detail.skus[0].cents, 2000);
+    assert.equal(calls.created.length, 1);
+    assert.deepEqual(calls.removed, [99]);
+    assert.equal(task.detailTabId, undefined);
   } finally { globalThis.chrome = prior; }
 });
 
@@ -155,6 +184,19 @@ test('detail snapshot for another product is rejected and the detail tab is clos
   } finally { globalThis.chrome = prior; }
 });
 
+test('ordinary detail errors clear the persisted detail tab state', async () => {
+  const prior = globalThis.chrome;
+  const { chrome, calls } = detailChrome([{ goodsId: '456', blocked: false, detail: { title: '另一个商品' } }]);
+  globalThis.chrome = chrome;
+  try {
+    const task = { status: 'running' };
+    await assert.rejects(() => browserPorts({ save: async () => {}, update: () => {} }).enrich({ id: '123' }, task), /ID 不匹配/);
+    assert.deepEqual(calls.removed, [99]);
+    assert.equal(task.detailTabId, undefined);
+    assert.equal(task.detailGoodsId, undefined);
+  } finally { globalThis.chrome = prior; }
+});
+
 test('detail read failure still closes the detail tab', async () => {
   const prior = globalThis.chrome;
   const { chrome, calls } = detailChrome([new Error('详情解析失败')]);
@@ -165,13 +207,45 @@ test('detail read failure still closes the detail tab', async () => {
   } finally { globalThis.chrome = prior; }
 });
 
-test('detail timeout closes its tab after forty empty snapshots', async () => {
+test('detail timeout closes its tab after the configured empty-snapshot limit', async () => {
   const prior = globalThis.chrome;
   const { chrome, calls } = detailChrome([{ goodsId: '123', blocked: false, detail: { title: '', galleryImages: [], attributes: [], skus: [] } }]);
   globalThis.chrome = chrome;
   try {
-    await assert.rejects(() => browserPorts({ save: async () => {}, update: () => {} }).enrich({ id: '123' }), /商品详情加载超时/);
-    assert.equal(calls.messages.length, 40);
+    await assert.rejects(() => browserPorts({ save: async () => {}, update: () => {}, detailPollLimit: 3, detailPollWait: async () => {} }).enrich({ id: '123' }), /商品详情加载超时/);
+    assert.equal(calls.messages.length, 3);
+    assert.deepEqual(calls.removed, [99]);
+  } finally { globalThis.chrome = prior; }
+});
+
+test('detail enrichment waits past a title-only frame for later SKU data', async () => {
+  const prior = globalThis.chrome;
+  const { chrome, calls } = detailChrome([
+    { goodsId: '123', blocked: false, ready: false, detail: { title: '先出现标题', galleryImages: [], skus: [] } },
+    { goodsId: '123', blocked: false, ready: true, detail: { title: '完整商品', skus: [{ id: 'sku-1', specs: ['黑色'], price: '20.00' }] } }
+  ]);
+  globalThis.chrome = chrome;
+  try {
+    const detail = await browserPorts({ save: async () => {}, update: () => {}, detailPollWait: async () => {} }).enrich({ id: '123', cents: 1000 });
+    assert.equal(detail.skus[0].id, 'sku-1');
+    assert.equal(detail.skus[0].cents, 2000);
+    assert.equal(calls.messages.length, 2);
+  } finally { globalThis.chrome = prior; }
+});
+
+test('detail polling returns the best partial snapshot when the poll limit expires', async () => {
+  const prior = globalThis.chrome;
+  const { chrome, calls } = detailChrome([
+    { goodsId: '123', blocked: false, ready: false, detail: { title: '基础标题', galleryImages: [], skus: [], detailStatus: 'partial' } },
+    { goodsId: '123', blocked: false, ready: false, detail: { title: '基础标题', galleryImages: ['https://img.pddpic.com/base.jpg'], skus: [], detailStatus: 'partial' } }
+  ]);
+  globalThis.chrome = chrome;
+  try {
+    const detail = await browserPorts({ save: async () => {}, update: () => {}, detailPollLimit: 2, detailPollWait: async () => {} }).enrich({ id: '123', cents: 1000 });
+    assert.equal(detail.title, '基础标题');
+    assert.deepEqual(detail.galleryImages, ['https://img.pddpic.com/base.jpg']);
+    assert.equal(detail.detailStatus, 'partial');
+    assert.equal(calls.messages.length, 2);
     assert.deepEqual(calls.removed, [99]);
   } finally { globalThis.chrome = prior; }
 });

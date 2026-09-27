@@ -22,7 +22,7 @@ test('returns the stable shape, trims title and uses fallback title when missing
     title: '原始标题', galleryImages: [], descriptionText: '', detailImages: [], category: '',
     attributes: [], videoUrl: '', certificateImages: [], sizeChartImages: [], specNames: [],
     skus: [{ id: '', specs: [], cents: 0, image: '', stock: '', weightKg: '', sizeCm: '' }],
-    detailStatus: 'done', detailNote: ''
+    detailCents: 0, detailStatus: 'done', detailNote: ''
   });
   assert.equal(normalizeDetail({}, { title: '  兜底标题  ' }).title, '兜底标题');
 });
@@ -90,6 +90,15 @@ test('uses exactly one fallback SKU if raw SKUs have no valid prices', () => {
   assert.deepEqual(normalizeDetail({ skus: [{ id: 'bad', specs: ['黑'], cents: 0 }] }, {
     id: 'search-id', title: '鞋', cents: 0, image: 'https://img/search.jpg'
   }).skus, [{ id: '', specs: [], cents: 0, image: 'https://img/search.jpg', stock: '', weightKg: '', sizeCm: '' }]);
+});
+
+test('fallback SKU prefers explicit product detail price over the search-card price', () => {
+  const fromPrice = normalizeDetail({ price: '20.00', skus: [] }, { cents: 1000, image: 'https://img/search.jpg' });
+  assert.equal(fromPrice.detailCents, 2000);
+  assert.equal(fromPrice.skus[0].cents, 2000);
+  const fromCents = normalizeDetail({ cents: '2150', price: '99.00', skus: [] }, { cents: 1000 });
+  assert.equal(fromCents.detailCents, 2150);
+  assert.equal(fromCents.skus[0].cents, 2150);
 });
 
 test('fallback SKU accepts only positive safe integer cents and HTTPS image', () => {

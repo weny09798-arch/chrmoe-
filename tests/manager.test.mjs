@@ -84,11 +84,13 @@ test('clear all stops an active search before old checkpoints can restore data',
   assert.equal(document.getElementById('export').disabled,true);
 });
 
-async function managerFixture() {
+async function managerFixture(configureTask = () => {}) {
   const { document, window } = parseHTML(html);
   const task = createTask(['相机']);
   task.status = 'paused'; task.jobs[0].status = 'paused'; task.permissionOrigin = 'https://img.pddpic.com/*';
+  configureTask(task);
   let decidePermission, tabCreates = 0, permissionRequests = 0;
+  const removedTabs = [], activatedTabs = [];
   const permission = new Promise(resolve => { decidePermission = resolve; });
   const saved = { keywords: ['相机'], task };
   globalThis.document = document;
@@ -97,13 +99,18 @@ async function managerFixture() {
     runtime: { id: 'test-extension' },
     storage: { local: { async get() { return saved; }, async set(values) { Object.assign(saved, values); } } },
     permissions: { request: async () => { permissionRequests++; return permission; } },
-    tabs: { async create() { tabCreates++; throw new Error('unexpected collection'); } }
+    tabs: {
+      async create() { tabCreates++; throw new Error('unexpected collection'); },
+      async remove(id) { removedTabs.push(id); },
+      async update(id) { activatedTabs.push(id); return { id, windowId: 5 }; }
+    },
+    windows: { async update() {} }
   };
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: { request: async (_name, _options, callback) => callback({}) } } });
   await import(`../extension/manager.mjs?case=${Math.random()}`);
   await tick();
   const click = id => document.getElementById(id).dispatchEvent(new window.Event('click'));
-  return { document, saved, click, decidePermission, get tabCreates() { return tabCreates; }, get permissionRequests() { return permissionRequests; } };
+  return { document, saved, click, decidePermission, removedTabs, activatedTabs, get tabCreates() { return tabCreates; }, get permissionRequests() { return permissionRequests; } };
 }
 
 test('resume locks task immediately and stop cancels a pending permission grant', async () => {
@@ -149,16 +156,24 @@ test('detail collection shows its own progress and failures while keeping result
   job.status = 'running'; job.phase = 'detail'; job.detailDone = 7; job.scanned = 200;
   job.groups = Array.from({ length: 20 }, (_, index) => ({ best: {
     id: `item-${index}`, title: `相机商品${index}`, url: `https://mobile.pinduoduo.com/goods.html?goods_id=${index}`,
-    cents: 2999, detailStatus: index < 5 ? 'done' : index < 7 ? 'error' : 'pending'
+    cents: 2999, detailStatus: index < 5 ? 'done' : index < 7 ? 'partial' : index < 9 ? 'error' : 'pending',
+    detailNote: index === 5 ? '仅采集到基础商品信息' : index === 7 ? '详情解析失败' : ''
   } }));
   await import(`../extension/manager.mjs?case=${Math.random()}`);
   await tick();
   assert.equal(fixture.document.getElementById('task-title').textContent, '正在补全详情 · 相机');
-  assert.match(fixture.document.getElementById('current-detail').textContent, /正在补全详情 7 \/ 20 · 失败 2 个/);
+  assert.match(fixture.document.getElementById('current-detail').textContent, /正在补全详情 9 \/ 20 · 完整 5 · 部分 2 · 失败 2/);
   assert.equal(fixture.document.getElementById('export').disabled, false);
   assert.equal(fixture.document.getElementById('pause').hidden, true);
   assert.equal(fixture.document.getElementById('resume').hidden, false);
   assert.equal(fixture.document.getElementById('stop').disabled, false);
+  const panel = fixture.document.getElementById('links-panel');
+  panel.open = true;
+  panel.dispatchEvent(new fixture.document.defaultView.Event('toggle'));
+  assert.match(panel.textContent, /详情状态/);
+  assert.match(fixture.document.getElementById('link-rows').textContent, /部分/);
+  assert.match(fixture.document.getElementById('link-rows').textContent, /仅采集到基础商品信息/);
+  assert.match(fixture.document.getElementById('link-rows').textContent, /详情解析失败/);
 });
 
 test('search progress wording remains unchanged', async () => {
@@ -176,13 +191,37 @@ test('finished detail jobs explain completed and failed detail counts unless a j
   fixture.saved.task.status = 'done'; job.status = 'done'; job.phase = 'done'; job.detailDone = 2;
   job.groups = [
     { best: { id: 'done', title: '相机完成', cents: 100, detailStatus: 'done' } },
+    { best: { id: 'partial', title: '相机部分', cents: 100, detailStatus: 'partial' } },
     { best: { id: 'error', title: '相机失败', cents: 100, detailStatus: 'error' } }
   ];
   await import(`../extension/manager.mjs?case=${Math.random()}`);
   await tick();
-  assert.match(fixture.document.getElementById('result-rows').textContent, /详情完成 1 个 · 失败 1 个/);
+  assert.match(fixture.document.getElementById('result-rows').textContent, /详情完整 1 个 · 部分 1 个 · 失败 1 个/);
   fixture.saved.task.jobs[0].note = '原有说明优先';
   await import(`../extension/manager.mjs?case=${Math.random()}`);
   await tick();
   assert.match(fixture.document.getElementById('result-rows').textContent, /原有说明优先/);
+});
+
+test('show collection tab prefers the preserved blocked detail tab', async () => {
+  const fixture = await managerFixture(task => { task.tabId = 42; task.detailTabId = 77; });
+  fixture.click('show-tab');
+  await tick();
+  assert.deepEqual(fixture.activatedTabs, [77]);
+});
+
+test('stop and clear force-close a preserved detail tab', async () => {
+  const stopFixture = await managerFixture(task => {
+    task.status = 'blocked'; task.jobs[0].status = 'blocked'; task.detailTabId = 77; task.detailGoodsId = '123';
+  });
+  stopFixture.click('stop');
+  await tick(); await tick();
+  assert.deepEqual(stopFixture.removedTabs, [77]);
+  assert.equal(stopFixture.saved.task.detailTabId, undefined);
+
+  const clearFixture = await managerFixture(task => { task.detailTabId = 88; task.detailGoodsId = '456'; });
+  clearFixture.click('clear-all');
+  await tick(); await tick();
+  assert.deepEqual(clearFixture.removedTabs, [88]);
+  assert.equal(clearFixture.saved.task, null);
 });
