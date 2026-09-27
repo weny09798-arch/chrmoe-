@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { workbookBytes, taskSheets } from '../extension/lib/xlsx.mjs';
+import * as xlsx from '../extension/lib/xlsx.mjs';
+
+const { workbookBytes, taskSheets, productRows } = xlsx;
 
 const decoder = new TextDecoder();
 
@@ -69,7 +71,7 @@ test('maps first twenty selected groups into the supplied 22-column import templ
   assert.equal(sheets[0].rows.length, 29); // 9 template rows + 20 products
   assert.deepEqual(sheets[0].rows[9], [
     'PDDid-0','苹果商品0','CNY','https://img.example/0.jpg','https://mobile.pinduoduo.com/goods.html?goods_id=0','拼多多','id-0',
-    '', '', '', '', '', '', '', '', '', '', '12.34', '', '', '', ''
+    '', '', '', '', '', '', '', '', '', '', '12.34', 'https://img.example/0.jpg', '', '', ''
   ]);
   assert.equal(sheets[0].rows[28][0], 'PDDid-19');
   assert.equal(sheets[0].rows[28][17], '12.53');
@@ -81,6 +83,48 @@ test('maps first twenty selected groups into the supplied 22-column import templ
   assert.match(output.get('xl/worksheets/sheet1.xml'), /<mergeCell ref="A1:L8"\/>/);
   assert.match(output.get('xl/worksheets/sheet1.xml'), /<c r="R10" t="inlineStr"><is><t>12\.34<\/t><\/is><\/c>/);
   assert.doesNotMatch(output.get('xl/worksheets/sheet1.xml'), /验证码/);
+});
+
+test('expands one product into three actual SKU rows with common fields only on the first row', () => {
+  const item = {
+    id: '7788', title: '运动鞋', cents: 1999, image: 'https://img.example/search.jpg',
+    url: 'https://mobile.pinduoduo.com/goods.html?goods_id=7788',
+    galleryImages: ['https://img.example/1.jpg', '', 'https://img.example/2.jpg'],
+    descriptionText: '轻便透气', detailImages: ['https://img.example/detail1.jpg', null, 'https://img.example/detail2.jpg'],
+    category: '运动鞋', attributes: [{ name: '材质', value: '网面' }, { name: '', value: '忽略' }, { name: '鞋底', value: '橡胶' }],
+    videoUrl: 'https://video.example/demo.mp4', certificateImages: ['https://img.example/cert.jpg'],
+    sizeChartImages: ['https://img.example/size.jpg'],
+    skus: [
+      { id: 'red-40', specs: ['红色', '40'], cents: 2099, image: 'https://img.example/red.jpg', stock: '8', weightKg: '0.7', sizeCm: '30x20x10' },
+      { id: 'red-41', specs: ['红色', '41'], cents: 2199, image: 'https://img.example/red41.jpg', stock: '3', weightKg: '', sizeCm: '' },
+      { id: 'blue-40', specs: ['蓝色', '40'], cents: 0, image: 'https://img.example/blue.jpg', stock: '12', weightKg: '0.8', sizeCm: '31x21x11' },
+    ],
+  };
+  const expected = [
+    ['PDD7788', '运动鞋', 'CNY', 'https://img.example/1.jpg，https://img.example/2.jpg', item.url, '拼多多', '7788',
+      '轻便透气', 'https://img.example/detail1.jpg，https://img.example/detail2.jpg', '运动鞋', '材质:网面；鞋底:橡胶',
+      'https://video.example/demo.mp4', 'https://img.example/cert.jpg', 'https://img.example/size.jpg',
+      '红色', '40', 'red-40', '20.99', 'https://img.example/red.jpg', '8', '0.7', '30x20x10'],
+    ['PDD7788', ...Array(13).fill(''), '红色', '41', 'red-41', '21.99', 'https://img.example/red41.jpg', '3', '', ''],
+    ['PDD7788', ...Array(13).fill(''), '蓝色', '40', 'blue-40', '19.99', 'https://img.example/blue.jpg', '12', '0.8', '31x21x11'],
+  ];
+  assert.equal(typeof productRows, 'function');
+  assert.deepEqual(productRows(item), expected);
+  const sheets = taskSheets({ jobs: [{ keyword: '运动鞋', groups: [{ best: item }] }] });
+  assert.equal(sheets[0].rows.length, 12);
+  assert.deepEqual(sheets[0].rows.slice(9), expected);
+  const xml = zipEntries(workbookBytes(sheets)).get('xl/worksheets/sheet1.xml');
+  assert.match(xml, /<dimension ref="A1:V12"\/>/);
+  assert.match(xml, /<c r="D10" t="inlineStr"><is><t>https:\/\/img\.example\/1\.jpg，https:\/\/img\.example\/2\.jpg<\/t><\/is><\/c>/);
+  assert.match(xml, /<c r="Q12" t="inlineStr"><is><t>blue-40<\/t><\/is><\/c>/);
+  assert.match(xml, /<c r="R12" t="inlineStr"><is><t>19\.99<\/t><\/is><\/c>/);
+});
+
+test('uses a specification-free fallback SKU and the search image when details have no SKU or gallery', () => {
+  const row = productRows({ id: '9', title: '相机', cents: 3500, image: 'https://img.example/search.jpg', skus: [] })[0];
+  assert.equal(row.length, 22);
+  assert.equal(row[3], 'https://img.example/search.jpg');
+  assert.deepEqual(row.slice(14), ['', '', '', '35.00', 'https://img.example/search.jpg', '', '', '']);
 });
 test('template export omits stale promotional titles while retaining a searched product', () => {
   const old={id:'1',title:'未发货秒退',cents:1000,url:'https://mobile.pinduoduo.com/goods.html?goods_id=1',image:'https://img.example/1.jpg'};
