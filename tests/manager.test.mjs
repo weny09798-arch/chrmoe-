@@ -47,8 +47,8 @@ test('a name added during collection is saved and searched after the current nam
 });
 test('the per-name retry replaces stale results and restarts that name', async () => {
   const {document,window}=parseHTML(html);
-  const task=createTask(['相机']);task.status='done';task.jobs[0].status='done';task.jobs[0].scanned=12;
-  task.jobs[0].groups=[{best:{id:'old',title:'已缴纳保证金',url:'https://mobile.pinduoduo.com/goods.html?goods_id=1',cents:2999}}];
+  const task=createTask(['相机']);task.status='done';task.jobs[0].status='done';task.jobs[0].phase='done';task.jobs[0].searchStatus='done';task.jobs[0].detailDone=1;task.jobs[0].scanned=12;
+  task.jobs[0].groups=[{best:{id:'old',title:'已缴纳保证金',url:'https://mobile.pinduoduo.com/goods.html?goods_id=1',cents:2999,detailStatus:'done'}}];
   const saved={keywords:['相机'],task};let created=0;
   globalThis.document=document;globalThis.window=window;
   globalThis.chrome={runtime:{id:'test-extension'},storage:{local:{async get(){return saved;},async set(values){Object.assign(saved,values);}}},tabs:{async create(){created++;return new Promise(()=>{});}}};

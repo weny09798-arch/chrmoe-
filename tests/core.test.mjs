@@ -80,6 +80,29 @@ test('retrying one name clears only its old results and keeps other names', () =
   assert.equal(task.jobs[0].scanned,0);assert.equal(task.status,'pending');
   assert.equal(selected(task.jobs[1])[0].id,'2');
 });
+test('new and retried jobs begin in search with no detail progress', () => {
+  const task=createTask(['相机']);
+  assert.deepEqual([task.jobs[0].phase,task.jobs[0].detailDone,task.jobs[0].searchStatus],['search',0,'']);
+  task.jobs[0].phase='done';task.jobs[0].detailDone=1;
+  const retried=core.retryJob(task,0);
+  assert.deepEqual([retried.phase,retried.detailDone,retried.searchStatus],['search',0,'']);
+});
+test('recoverTask preserves search progress and resumes only missing legacy details', () => {
+  const task=createTask(['相机']);const job=task.jobs[0];
+  addCandidate(job,item('1',2988));addCandidate(job,item('2',3988,1));
+  job.groups[0].best.descriptionText='已有详情';job.groups[1].best.detailStatus='error';
+  job.seen=['1','2'];job.scanned=2;job.status='short';task.status='done';
+  core.recoverTask(task);
+  assert.equal(job.groups[0].best.detailStatus,'done');
+  assert.equal(job.groups[1].best.detailStatus,'error');
+  assert.deepEqual(job.seen,['1','2']);assert.equal(job.scanned,2);
+  assert.equal(job.status,'short');assert.equal(task.status,'done');
+  delete job.groups[1].best.detailStatus;
+  core.recoverTask(task);
+  assert.equal(job.groups[1].best.detailStatus,'pending');
+  assert.deepEqual([job.phase,job.searchStatus,job.status,task.status],['detail','short','paused','paused']);
+  assert.equal(job.detailDone,1);
+});
 test('image fingerprint matches slightly changed pixels but separates different art and colors', () => {
   const pixels=new Uint8ClampedArray(32*32*4);
   for(let y=0;y<32;y++) for(let x=0;x<32;x++){let k=(y*32+x)*4;pixels[k]=x*7;pixels[k+1]=y*7;pixels[k+2]=(x*y)%255;pixels[k+3]=255;}

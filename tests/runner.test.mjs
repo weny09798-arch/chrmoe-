@@ -4,7 +4,7 @@ import {createTask,selected} from '../extension/lib/core.mjs';
 import {Runner} from '../extension/lib/runner.mjs';
 
 const card=(id,price)=>({id,title:'相机',url:`https://mobile.pinduoduo.com/goods.html?goods_id=${id}`,image:`https://img.pddpic.com/${id}.jpg`,priceText:`¥${price}`,key:id});
-function ports(pages, overrides={}) {let i=0;return {open:async()=>{},read:async()=>pages[Math.min(i++,pages.length-1)],scroll:async()=>{},hash:async()=>({bits:'0000000000000000',color:[100,100,100],spread:50}),resolve:async c=>c,save:async()=>{},update:()=>{},wait:async()=>{},...overrides};}
+function ports(pages, overrides={}) {let i=0;return {open:async()=>{},read:async()=>pages[Math.min(i++,pages.length-1)],scroll:async()=>{},hash:async()=>({bits:'0000000000000000',color:[100,100,100],spread:50}),resolve:async c=>c,enrich:async()=>({}),save:async()=>{},update:()=>{},wait:async()=>{},...overrides};}
 test('later cheaper listing wins and no-result completion is reported as short',async()=>{
   const task=createTask(['相机']); const r=new Runner(task,ports([{cards:[card('1',32)],end:false},{cards:[card('2',29.88)],end:true}]));
   await r.run();assert.equal(task.status,'done');assert.equal(task.jobs[0].status,'short');assert.equal(selected(task.jobs[0])[0].id,'2');
@@ -93,4 +93,58 @@ test('stopping leaves current and remaining jobs explicitly stopped',async()=>{
   const task=createTask(['相机','帽子']);let runner;
   runner=new Runner(task,ports([{cards:[card('1',32)]}],{hash:async()=>{runner.stop();return {};}}));
   await runner.run();assert.equal(task.status,'stopped');assert.deepEqual(task.jobs.map(x=>x.status),['stopped','stopped']);
+});
+test('twenty groups stop reads immediately and enrich in selected order',async()=>{
+  const task=createTask(['相机']);const cards=Array.from({length:21},(_,i)=>card(String(i+1),i+1));
+  let reads=0;const enriched=[];const events=[];
+  const custom=ports([],{read:async()=>{reads++;events.push('read');return {cards,end:false};},
+    hash:async image=>({bits:'0'.repeat(16),color:[Number(image.match(/\/(\d+)\.jpg/)[1])*40,0,0],spread:50}),
+    enrich:async item=>{enriched.push(item.id);events.push(`enrich:${item.id}`);return {descriptionText:`详情${item.id}`};}});
+  await new Runner(task,custom).run();
+  assert.equal(reads,1);assert.deepEqual(enriched,Array.from({length:20},(_,i)=>String(i+1)));
+  assert.equal(events.indexOf('enrich:1'),1);
+  assert.equal(task.jobs[0].scanned,20);assert.equal(task.jobs[0].detailDone,20);
+  assert.equal(task.jobs[0].phase,'done');assert.equal(task.jobs[0].status,'done');
+  assert.ok(selected(task.jobs[0]).every(x=>x.detailStatus==='done'));
+});
+test('short search enriches basic-only results as partial',async()=>{
+  const task=createTask(['相机']);let calls=0;
+  await new Runner(task,ports([{cards:[card('1',32)],end:true}],{enrich:async()=>{calls++;return {title:'详情标题',galleryImages:['https://img.pddpic.com/1.jpg'],skus:[{id:'',specs:[],cents:3200,image:'https://img.pddpic.com/1.jpg',stock:''}]};}})).run();
+  assert.equal(calls,1);assert.equal(task.jobs[0].status,'short');
+  assert.equal(selected(task.jobs[0])[0].detailStatus,'partial');
+  assert.match(selected(task.jobs[0])[0].detailNote,/基础商品信息/);
+  assert.equal(task.jobs[0].detailDone,1);
+});
+test('ordinary detail error records item and proceeds to the next',async()=>{
+  const task=createTask(['相机']);const ids=[];
+  await new Runner(task,ports([{cards:[card('1',32),card('2',33)],end:true}],{
+    hash:async image=>({bits:'0'.repeat(16),color:[Number(image.match(/\/(\d+)\.jpg/)[1])*100,0,0],spread:50}),
+    enrich:async item=>{ids.push(item.id);if(item.id==='1')throw new Error('解析失败'.repeat(200));return {skus:[{id:'sku-2',specs:['蓝色'],cents:3300}]};}
+  })).run();
+  assert.deepEqual(ids,['1','2']);assert.deepEqual(selected(task.jobs[0]).map(x=>x.detailStatus),['error','done']);
+  assert.equal(selected(task.jobs[0])[0].detailNote.length,500);assert.equal(task.jobs[0].detailDone,2);
+  assert.match(task.jobs[0].note,/失败 1/);
+});
+test('blocked detail stays pending and resume skips completed items without reopening search',async()=>{
+  const task=createTask(['相机']);let first;
+  const hashes=async image=>({bits:'0'.repeat(16),color:[Number(image.match(/\/(\d+)\.jpg/)[1])*100,0,0],spread:50});
+  first=new Runner(task,ports([{cards:[card('1',32),card('2',33)],end:true}],{hash:hashes,
+    enrich:async item=>{if(item.id==='2')throw Object.assign(new Error('验证码'),{blocked:true,permissionOrigin:'https://mobile.pinduoduo.com'});return {descriptionText:'已完成'};}
+  }));
+  await first.run();
+  assert.equal(task.status,'blocked');assert.equal(task.jobs[0].phase,'detail');
+  assert.deepEqual(selected(task.jobs[0]).map(x=>x.detailStatus),['done','pending']);
+  assert.equal(task.jobs[0].detailDone,1);
+  const enriched=[];let opened=0,reads=0;
+  await new Runner(task,ports([],{open:async()=>opened++,read:async()=>{reads++;throw new Error('unexpected read');},
+    enrich:async item=>{enriched.push(item.id);return {attributes:[{name:'颜色',value:'蓝'}]};}})).run();
+  assert.deepEqual(enriched,['2']);assert.equal(opened,0);assert.equal(reads,0);
+  assert.equal(task.jobs[0].detailDone,2);assert.equal(task.jobs[0].status,'short');
+});
+test('pausing or stopping during detail always closes the detail tab',async()=>{
+  for(const action of ['pause','stop']){
+    const task=createTask(['相机']);let runner,closes=0;
+    runner=new Runner(task,ports([{cards:[card('1',32)],end:true}],{enrich:async()=>{runner[action]();return {descriptionText:'详情'};},close:async()=>{closes++;}}));
+    await runner.run();assert.equal(task.status,action==='pause'?'paused':'stopped');assert.equal(closes,1);
+  }
 });
