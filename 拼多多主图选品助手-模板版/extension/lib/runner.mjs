@@ -23,6 +23,9 @@ export class Runner {
           else { await this.ports.open(job, this.task); await this.collect(job); }
         } catch (error) {
           if (error.blocked) {
+            // A user stop/pause that races with a verification response wins.
+            // The current detail item was already reset to pending by enrich().
+            if (this.intent) break;
             this.task.status = 'blocked'; job.status = 'blocked'; job.note = error.message;
             this.task.permissionOrigin = error.permissionOrigin || ''; await this.checkpoint(); return;
           }

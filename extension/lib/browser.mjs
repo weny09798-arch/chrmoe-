@@ -55,6 +55,12 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
     for (const key of ['galleryImages', 'detailImages', 'certificateImages', 'sizeChartImages', 'attributes', 'specNames', 'skus']) score += (detail[key]?.length || 0) * 3;
     return score;
   }
+  function hasReadyDetail(detail) {
+    return Boolean(detail && (
+      detail.descriptionText || detail.category || detail.videoUrl ||
+      ['detailImages', 'certificateImages', 'sizeChartImages', 'attributes', 'specNames', 'skus'].some(key => detail[key]?.length)
+    ));
+  }
   async function enrich(item, currentTask) {
     task = currentTask || task;
     const id = typeof item?.id === 'string' ? item.id : Number.isSafeInteger(item?.id) ? String(item.id) : '';
@@ -110,7 +116,7 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
           stableKey = key;
           // A matching top-level JSON product root is the reader's explicit readiness signal.
           // Responses from older reader versions did not include this field and remain compatible.
-          if (snapshot.ready !== false || stableCount >= 8) return normalizeDetail(best, item);
+          if ((snapshot.ready !== false && hasReadyDetail(detail)) || stableCount >= 8) return normalizeDetail(best, item);
         }
         if (i < detailPollLimit - 1) await detailPollWait(300);
       }

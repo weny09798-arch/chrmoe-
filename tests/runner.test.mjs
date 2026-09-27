@@ -152,3 +152,22 @@ test('pausing or stopping during detail always closes the detail tab',async()=>{
     assert.deepEqual(closeOptions,{preserveBlocked:false});
   }
 });
+test('stop or pause wins when a detail verification response arrives at the same time',async()=>{
+  for(const action of ['pause','stop']){
+    const task=createTask(['相机']);let runner,release,started;
+    const snapshotStarted=new Promise(resolve=>{started=resolve;});
+    const closeOptions=[];
+    runner=new Runner(task,ports([{cards:[card('1',32)],end:true}],{
+      enrich:async()=>new Promise((resolve,reject)=>{release=()=>reject(Object.assign(new Error('请完成验证'),{blocked:true}));started();}),
+      close:async options=>closeOptions.push(options)
+    }));
+    const running=runner.run();
+    await snapshotStarted;
+    runner[action]();
+    release();
+    await running;
+    assert.equal(task.status,action==='pause'?'paused':'stopped');
+    assert.equal(selected(task.jobs[0])[0].detailStatus,'pending');
+    assert.deepEqual(closeOptions,[{preserveBlocked:false}]);
+  }
+});

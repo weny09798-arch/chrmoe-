@@ -166,7 +166,12 @@
       detailStatus: candidates.length ? 'done' : 'partial',
       detailNote: candidates.length ? '' : '仅通过页面可见内容采集，部分详情可能缺失'
     };
-    return { url, goodsId, blocked: false, reason: '', ready: candidates.length > 0, source: candidates.length ? 'json' : 'dom', detail };
+    const ready = Boolean(candidates.length && (
+      detail.descriptionText || detail.category || detail.videoUrl ||
+      detail.detailImages.length || detail.certificateImages.length || detail.sizeChartImages.length ||
+      detail.attributes.length || detail.specNames.length || detail.skus.length
+    ));
+    return { url, goodsId, blocked: false, reason: '', ready, source: candidates.length ? 'json' : 'dom', detail };
   }
 
   chrome.runtime.onMessage.addListener((message, sender, respond) => {

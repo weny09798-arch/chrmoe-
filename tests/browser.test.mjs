@@ -73,7 +73,7 @@ test('detail enrichment opens a background tab, reads its snapshot, and preserve
       get: async id => { calls.push(['get', id]); return { id, status: 'complete', url: 'https://mobile.pinduoduo.com/goods.html?goods_id=123' }; },
       sendMessage: async (id, message) => {
         calls.push(['message', id, message]);
-        return { url: 'https://mobile.pinduoduo.com/goods.html?goods_id=123', goodsId: '123', blocked: false, reason: '', detail: { title: '商品详情', galleryImages: ['https://img.pddpic.com/1.jpg'], skus: [] } };
+        return { url: 'https://mobile.pinduoduo.com/goods.html?goods_id=123', goodsId: '123', blocked: false, reason: '', ready: true, detail: { title: '商品详情', galleryImages: ['https://img.pddpic.com/1.jpg'], attributes: [{ name: '材质', value: '塑料' }], skus: [] } };
       },
       update: async () => { throw new Error('search tab must not be updated'); },
       remove: async id => { calls.push(['remove', id]); }
@@ -122,7 +122,7 @@ test('detail enrichment retries an empty snapshot until content appears', async 
   const prior = globalThis.chrome;
   const { chrome, calls } = detailChrome([
     { goodsId: '123', blocked: false, detail: { title: '', galleryImages: [], attributes: [], skus: [] } },
-    { goodsId: '123', blocked: false, detail: { title: '', galleryImages: ['https://img.pddpic.com/2.jpg'] } }
+    { goodsId: '123', blocked: false, ready: true, detail: { title: '', galleryImages: ['https://img.pddpic.com/2.jpg'], attributes: [{ name: '材质', value: '塑料' }] } }
   ]);
   globalThis.chrome = chrome;
   try {
@@ -229,6 +229,20 @@ test('detail enrichment waits past a title-only frame for later SKU data', async
     const detail = await browserPorts({ save: async () => {}, update: () => {}, detailPollWait: async () => {} }).enrich({ id: '123', cents: 1000 });
     assert.equal(detail.skus[0].id, 'sku-1');
     assert.equal(detail.skus[0].cents, 2000);
+    assert.equal(calls.messages.length, 2);
+  } finally { globalThis.chrome = prior; }
+});
+
+test('a JSON root with only a title is not sufficient readiness for later SKU data', async () => {
+  const prior = globalThis.chrome;
+  const { chrome, calls } = detailChrome([
+    { goodsId: '123', blocked: false, ready: true, source: 'json', detail: { title: 'JSON 先出现标题', galleryImages: [], skus: [] } },
+    { goodsId: '123', blocked: false, ready: true, source: 'json', detail: { title: '完整商品', specNames: ['颜色'], skus: [{ id: 'sku-json', specs: ['黑色'], price: '20.00' }] } }
+  ]);
+  globalThis.chrome = chrome;
+  try {
+    const detail = await browserPorts({ save: async () => {}, update: () => {}, detailPollWait: async () => {} }).enrich({ id: '123', cents: 1000 });
+    assert.equal(detail.skus[0].id, 'sku-json');
     assert.equal(calls.messages.length, 2);
   } finally { globalThis.chrome = prior; }
 });

@@ -107,6 +107,15 @@ test('reads only explicit product-root prices and ignores promotional text numbe
   assert.equal(JSON.stringify(result.detail).includes('99'), false);
 });
 
+test('a matching JSON product root with only base fields is not marked ready', async () => {
+  const result = await snapshot(`
+    <main data-goods-id="123"><h1>商品</h1></main>
+    <script type="application/json">${JSON.stringify({ goods: { goodsId: '123', goodsName: '商品' } })}</script>`);
+  assert.equal(result.source, 'json');
+  assert.equal(result.ready, false);
+  assert.equal(result.detail.title, '商品');
+});
+
 test('reports a visible validation challenge before exporting product data', async () => {
   const result = await snapshot('<main data-goods-id="123"><h1>商品</h1></main><div role="dialog">请完成验证，拖动滑块</div>');
   assert.equal(result.blocked, true);
