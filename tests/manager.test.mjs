@@ -225,3 +225,27 @@ test('stop and clear force-close a preserved detail tab', async () => {
   assert.deepEqual(clearFixture.removedTabs, [88]);
   assert.equal(clearFixture.saved.task, null);
 });
+
+test('an unsupported collection address does not add a name or open a tab', async () => {
+  const { document, window } = parseHTML(html);
+  const saved = { keywords: [], task: null };
+  let tabCreates = 0;
+  globalThis.document = document;
+  globalThis.window = window;
+  globalThis.chrome = {
+    runtime: { id: 'test-extension' },
+    storage: { local: { async get() { return saved; }, async set(values) { Object.assign(saved, values); } } },
+    tabs: { async create() { tabCreates++; throw new Error('不应打开采集页'); } }
+  };
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: { request: async (_name, _options, callback) => callback({}) } } });
+  await import(`../extension/manager.mjs?case=${Math.random()}`);
+  await tick();
+  document.getElementById('source-url').value = 'https://example.com/search';
+  document.getElementById('keyword-input').value = '相机';
+  document.getElementById('add-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+  await tick();
+  assert.deepEqual(saved.keywords, []);
+  assert.equal(saved.task, null);
+  assert.equal(tabCreates, 0);
+  assert.match(document.getElementById('notice').textContent, /暂不支持|还不能采集/);
+});

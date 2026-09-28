@@ -1,8 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { browserPorts, productId, searchUrl } from '../extension/lib/browser.mjs';
+import { browserPorts, descriptionDocumentUrl, imageUrlsInDescription, productId, searchUrl } from '../extension/lib/browser.mjs';
 import { createTask } from '../extension/lib/core.mjs';
 
+test('a 1688 description document yields the long detail images', () => {
+  const html = String.raw`var desc='<img src="https:\/\/cbu01.alicdn.com\/img\/ibank\/detail-long.jpg"><img src="https://cbu01.alicdn.com/tps/icon.png">';`;
+  assert.deepEqual(imageUrlsInDescription(html), ['https://cbu01.alicdn.com/img/ibank/detail-long.jpg']);
+  assert.equal(descriptionDocumentUrl('https://itemcdn.tmall.com/desc/icoss123'), 'https://itemcdn.tmall.com/desc/icoss123');
+  assert.equal(descriptionDocumentUrl('https://detail.1688.com/offer/888.html'), '');
+});
 test('search URL encodes a keyword as one query value',()=>{
   const value=searchUrl('相机 & 充电器?#');
   const url=new URL(value);
@@ -85,13 +91,70 @@ test('detail enrichment opens a background tab, reads its snapshot, and preserve
     const detail = await ports.enrich({ id: '123', url: searchUrlValue, title: '卡片名', cents: 1999 });
     assert.equal(detail.title, '商品详情');
     assert.equal(detail.skus[0].cents, 1999);
-    assert.deepEqual(calls, [
-      ['create', { url: 'https://mobile.pinduoduo.com/goods.html?goods_id=123', active: false }],
-      ['get', 99],
-      ['script', { target: { tabId: 99 }, files: ['detail-content.js'] }],
-      ['message', 99, { type: 'PDD_DETAIL_SNAPSHOT' }],
-      ['remove', 99]
-    ]);
+    assert.deepEqual(calls.map(call => call[0]), ['create', 'get', 'script', 'script', 'message', 'remove']);
+    assert.deepEqual(calls[0][1], { url: 'https://mobile.pinduoduo.com/goods.html?goods_id=123', active: false });
+    assert.deepEqual(calls[2][1], { target: { tabId: 99 }, files: ['detail-content.js'] });
+    assert.equal(calls[3][1].world, 'MAIN');
+    assert.equal(calls[3][1].target.tabId, 99);
+    assert.equal(typeof calls[3][1].func, 'function');
+    assert.deepEqual(calls[4], ['message', 99, { type: 'PDD_DETAIL_SNAPSHOT' }]);
+    assert.deepEqual(calls[5], ['remove', 99]);
+  } finally { globalThis.chrome = prior; }
+});
+
+test('1688 search stays in a background tab and does not open or focus a window', async () => {
+  const prior = globalThis.chrome;
+  const task = createTask(['手电']);
+  task.jobs[0].site = '1688';
+  const created = [];
+  globalThis.chrome = {
+    tabs: {
+      get: async id => ({ id, status: 'complete', url: 'https://s.1688.com/selloffer/offer_search.htm?keywords=1' }),
+      create: async options => { created.push(options); return { id: 7 }; },
+      update: async () => { throw new Error('must not activate a tab'); }
+    },
+    windows: {
+      create: async () => { throw new Error('must not open a window'); },
+      update: async () => { throw new Error('must not change window focus'); },
+      get: async () => { throw new Error('must not inspect windows'); }
+    }
+  };
+  try {
+    const ports = browserPorts({ save: async () => {}, update: () => {} });
+    await ports.open(task.jobs[0], task);
+    assert.equal(created.length, 1);
+    assert.equal(created[0].active, false);
+    assert.match(created[0].url, /^https:\/\/s\.1688\.com\/selloffer\/offer_search\.htm\?keywords=/);
+    assert.equal(task.tabId, 7);
+  } finally { globalThis.chrome = prior; }
+});
+
+test('1688 detail stays in a background tab and does not focus a window', async () => {
+  const prior = globalThis.chrome;
+  const task = createTask(['手电']);
+  task.tabId = 42;
+  const created = [];
+  globalThis.chrome = {
+    tabs: {
+      get: async id => ({ id, status: 'complete', url: 'https://detail.1688.com/offer/123.html' }),
+      create: async options => { created.push(options); return { id: 99 }; },
+      update: async () => { throw new Error('must not activate a tab'); },
+      remove: async () => {},
+      sendMessage: async () => ({
+        url: 'https://detail.1688.com/offer/123.html', goodsId: '123', blocked: false, ready: true,
+        detailPending: false, skuPending: false, descriptionUrls: [],
+        detail: { title: '三光源照玉石专用手电筒', galleryImages: ['https://cbu01.alicdn.com/a.jpg'], detailImages: ['https://cbu01.alicdn.com/d.jpg'], skus: [] }
+      })
+    },
+    windows: {
+      create: async () => { throw new Error('must not open a window'); },
+      update: async () => { throw new Error('must not change window focus'); }
+    },
+    scripting: { executeScript: async () => [{ result: null }] }
+  };
+  try {
+    await browserPorts({ save: async () => {}, update: () => {} }).enrich({ id: '123', site: '1688', title: '三光源照玉石专用手电筒', cents: 2550 }, task);
+    assert.deepEqual(created, [{ url: 'https://detail.1688.com/offer/123.html', active: false }]);
   } finally { globalThis.chrome = prior; }
 });
 

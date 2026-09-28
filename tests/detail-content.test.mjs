@@ -180,9 +180,73 @@ test('DOM fallback does not infer description text or video URL', async () => {
 });
 
 test('visible login and frequent-access prompts block extraction', async () => {
-  for (const phrase of ['手机号登录', '访问过于频繁']) {
+  for (const phrase of ['手机号登录', '访问过于频繁', '商品已售罄，推荐以下相似商品']) {
     const result = await snapshot(`<main data-goods-id="123"><h1>商品</h1></main><div role="dialog">${phrase}</div>`);
     assert.equal(result.blocked, true, phrase);
     assert.equal(result.detail, null, phrase);
   }
+});
+
+test('reads Pinduoduo window.rawData goods, SKU specs, galleries and attributes', async () => {
+  const raw = {
+    store: {
+      initDataObj: {
+        alsoViewed: {
+          goodsId: '123', goodsName: '旁支商品',
+          skus: [{ skuID: 1, specs: [{ spec_key: '颜色', spec_value: '错误' }], groupPrice: '1.00', thumbUrl: 'https://img.pddpic.com/wrong.jpg' }]
+        },
+        goods: {
+          goodsID: 123,
+          goodsName: '真实商品',
+          shareDesc: '真实商品',
+          catID1: 8439,
+          minGroupPrice: '12.8',
+          topGallery: [{ url: 'https://img.pddpic.com/main.jpg' }],
+          detailGallery: [{ url: 'https://img.pddpic.com/detail.jpg', width: 750, height: 400 }],
+          goodsProperty: [{ key: '材质', values: ['棉', '聚酯纤维'] }],
+          videoGallery: [{ url: 'https://img.pddpic.com/cover.jpg', videoUrl: 'https://video.pddpic.com/demo.mp4' }],
+          decoration: [{ key: 'DecImage', type: 'image', contents: [{ imgUrl: 'https://img.pddpic.com/detail.jpg' }] }],
+          skus: [
+            {
+              skuID: 57114357891, skuId: 57114357891, goodsId: 123,
+              price: 0, groupPrice: '12.80', oldGroupPrice: 1280, normalPrice: '15',
+              quantity: 8, weight: 0, thumbUrl: 'https://img.pddpic.com/red.jpg',
+              specs: [
+                { spec_key: '颜色', spec_value: '红色', spec_key_id: 1215 },
+                { spec_key: '尺码', spec_value: 'S', spec_key_id: 1226 }
+              ]
+            },
+            {
+              skuID: 57114357892, price: 0, groupPrice: '13.50', quantity: 0, weight: 500,
+              thumbUrl: 'https://img.pddpic.com/blue.jpg',
+              specs: [
+                { spec_key: '颜色', spec_value: '蓝色' },
+                { spec_key: '尺码', spec_value: 'M' }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  };
+  const result = await snapshot(`<main data-goods-id="123"><h1>真实商品</h1></main><script>window.rawData = ${JSON.stringify(raw)};</script>`);
+  assert.equal(result.ready, true);
+  assert.equal(result.source, 'json');
+  assert.equal(result.detail.title, '真实商品');
+  assert.equal(result.detail.descriptionText, '');
+  assert.equal(result.detail.category, '');
+  assert.equal(result.detail.price, '12.8');
+  assert.deepEqual(Array.from(result.detail.galleryImages), ['https://img.pddpic.com/main.jpg']);
+  assert.deepEqual(Array.from(result.detail.detailImages), ['https://img.pddpic.com/detail.jpg']);
+  assert.deepEqual(Array.from(result.detail.attributes, item => [item.name, item.value]), [['材质', '棉，聚酯纤维']]);
+  assert.equal(result.detail.videoUrl, 'https://video.pddpic.com/demo.mp4');
+  assert.deepEqual(Array.from(result.detail.specNames), ['颜色', '尺码']);
+  assert.deepEqual(Array.from(result.detail.skus, sku => sku.id), ['57114357891', '57114357892']);
+  assert.deepEqual(Array.from(result.detail.skus, sku => Array.from(sku.specs)), [['红色', 'S'], ['蓝色', 'M']]);
+  assert.deepEqual(Array.from(result.detail.skus, sku => sku.price), ['12.80', '13.50']);
+  assert.deepEqual(Array.from(result.detail.skus, sku => sku.image), ['https://img.pddpic.com/red.jpg', 'https://img.pddpic.com/blue.jpg']);
+  assert.deepEqual(Array.from(result.detail.skus, sku => sku.stock), ['8', '0']);
+  assert.deepEqual(Array.from(result.detail.skus, sku => sku.weightKg), ['', '0.5']);
+  assert.equal(JSON.stringify(result.detail).includes('旁支商品'), false);
+  assert.equal(JSON.stringify(result.detail).includes('错误'), false);
 });

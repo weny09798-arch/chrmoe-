@@ -1,4 +1,5 @@
 import { addCandidate, countDetails, hasDetailData, parsePrice, selected, validProductTitle, SCAN_LIMIT } from './core.mjs';
+import { siteForJob } from './sites.mjs';
 
 const finished = status => ['done', 'short', 'error', 'stopped'].includes(status);
 export class Runner {
@@ -69,7 +70,8 @@ export class Runner {
           if (this.intent) return;
           navigated ||= Boolean(resolved.navigated);
           if (!resolved.id || !resolved.url) throw new Error('未识别到商品详情链接');
-          candidate = { ...resolved, cents, fingerprint, collectedAt: new Date().toISOString() };
+          const site = siteForJob(job);
+          candidate = { ...resolved, cents, fingerprint, collectedAt: new Date().toISOString(), site: site.id, platform: site.label };
         } catch (error) {
           if (this.intent) return;
           if (error.blocked || error.fatal) throw error;

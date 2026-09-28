@@ -44,20 +44,24 @@ export function validProductTitle(title, keyword) {
   return true;
 }
 
-function createJob(keyword) {
-  return { keyword, status: 'pending', phase: 'search', searchStatus: '', detailDone: 0, scanned: 0, skipped: 0, seen: [], groups: [], note: '', scrolls: 0 };
+function createJob(keyword, site = 'pdd') {
+  return { keyword, site: site === '1688' ? '1688' : 'pdd', status: 'pending', phase: 'search', searchStatus: '', detailDone: 0, scanned: 0, skipped: 0, seen: [], groups: [], note: '', scrolls: 0 };
 }
 
 export function createTask(keywords) {
   return {
     version: 1, id: globalThis.crypto.randomUUID(), createdAt: new Date().toISOString(), status: 'pending',
-    jobs: keywords.map(createJob)
+    jobs: keywords.map(keyword => createJob(keyword))
   };
 }
 
-export function enqueueKeyword(task, keyword) {
-  if (!task) return createTask([keyword]);
-  task.jobs.push(createJob(keyword));
+export function enqueueKeyword(task, keyword, site = 'pdd') {
+  if (!task) {
+    const created = createTask([keyword]);
+    created.jobs[0] = createJob(keyword, site);
+    return created;
+  }
+  task.jobs.push(createJob(keyword, site));
   if (['done', 'error', 'stopped'].includes(task.status)) task.status = 'pending';
   return task;
 }
@@ -65,7 +69,7 @@ export function enqueueKeyword(task, keyword) {
 export function retryJob(task, index) {
   const previous = task?.jobs?.[index];
   if (!previous) throw new Error('找不到要重新搜索的商品名称');
-  task.jobs[index] = createJob(previous.keyword);
+  task.jobs[index] = createJob(previous.keyword, previous.site || 'pdd');
   if (['done', 'error', 'stopped'].includes(task.status)) task.status = 'pending';
   return task.jobs[index];
 }

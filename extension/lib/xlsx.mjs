@@ -26,12 +26,12 @@ function sheetXml(sheet, sheetIndex) {
   const priceColumn = Math.max(rows[headerRow]?.indexOf('展示价格') ?? -1, rows[headerRow]?.indexOf('*SKU售价') ?? -1);
   const linkColumns = rows[headerRow]?.map((value, index) => LINK_HEADERS.has(value) ? index : -1).filter(index => index >= 0) || [];
   const links = [];
-  let body = '';
+  const rowXml = new Array(rows.length);
   rows.forEach((row, rowIndex) => {
     const rowNumber = rowIndex + 1;
-    let cells = '';
+    const cells = [];
     row.forEach((value, cellIndex) => {
-      if (value === null || value === undefined) return;
+      if (value === null || value === undefined || value === '') return;
       const ref = `${column(cellIndex)}${rowNumber}`;
       const styleId = sheet.template
         ? rowIndex === 0 && cellIndex === 0 ? 5
@@ -40,18 +40,19 @@ function sheetXml(sheet, sheetIndex) {
         : rowIndex === 0 ? 1 : cellIndex === priceColumn && typeof value === 'number' ? 2 : 0;
       const style = styleId ? ` s="${styleId}"` : '';
       if (typeof value === 'number' && Number.isFinite(value)) {
-        cells += `<c r="${ref}"${style}><v>${value}</v></c>`;
+        cells.push(`<c r="${ref}"${style}><v>${value}</v></c>`);
       } else {
         const content = xml(value);
         const preserve = /^\s|\s$/.test(String(value)) ? ' xml:space="preserve"' : '';
-        cells += `<c r="${ref}"${style} t="inlineStr"><is><t${preserve}>${content}</t></is></c>`;
-        if (rowIndex > headerRow && linkColumns.includes(cellIndex) && /^https?:\/\//i.test(String(value))) {
+        cells.push(`<c r="${ref}"${style} t="inlineStr"><is><t${preserve}>${content}</t></is></c>`);
+        if (rowIndex > headerRow && linkColumns.includes(cellIndex) && /^https?:\/\/[^\s，,]+$/i.test(String(value))) {
           links.push({ ref, target: String(value) });
         }
       }
     });
-    body += `<row r="${rowNumber}"${sheet.template && rowIndex < 8 ? ' ht="25" customHeight="1"' : ''}>${cells}</row>`;
+    rowXml[rowIndex] = `<row r="${rowNumber}"${sheet.template && rowIndex < 8 ? ' ht="25" customHeight="1"' : ''}>${cells.join('')}</row>`;
   });
+  const body = rowXml.join('');
   const widths = sheet.widths?.length ? `<cols>${sheet.widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${Number(width)}" customWidth="1"/>`).join('')}</cols>` : '';
   const lastRef = `${column(count - 1)}${Math.max(rows.length, 1)}`;
   const hyperlinkXml = links.length ? `<hyperlinks>${links.map((link, index) => `<hyperlink ref="${link.ref}" r:id="rId${index + 1}"/>`).join('')}</hyperlinks>` : '';
@@ -140,7 +141,7 @@ export function workbookXlsBytes(sheets, sheetjs = globalThis.XLSX) {
     for (let row = headerRow + 1; row < sheet.rows.length; row++) for (const column of linkColumns) {
       const value = sheet.rows[row]?.[column];
       const ref = sheetjs.utils.encode_cell({ r: row, c: column });
-      if (typeof value === 'string' && /^https?:\/\//i.test(value) && worksheet[ref]) worksheet[ref].l = { Target: value };
+        if (typeof value === 'string' && /^https?:\/\/[^\s，,]+$/i.test(value) && worksheet[ref]) worksheet[ref].l = { Target: value };
     }
     sheetjs.utils.book_append_sheet(workbook, worksheet, sheet.name);
   }
@@ -163,7 +164,7 @@ export function productRows(item, fallbackNumber = 0) {
     }).filter(Boolean).join('；')
     : '';
   const common = [
-    cellText(item.title), 'CNY', gallery, cellText(item.url), '拼多多', id,
+    cellText(item.title), 'CNY', gallery, cellText(item.url), cellText(item.platform) || '拼多多', id,
     cellText(item.descriptionText), joinedValues(item.detailImages), cellText(item.category),
     attributes, cellText(item.videoUrl), joinedValues(item.certificateImages), joinedValues(item.sizeChartImages)
   ];

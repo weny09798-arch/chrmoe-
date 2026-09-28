@@ -1,7 +1,8 @@
 import { addKeyword, enqueueKeyword, retryJob, selected, recoverTask, STATUS } from './lib/core.mjs';
 import { Runner } from './lib/runner.mjs';
 import { browserPorts, closeTaskDetailTab } from './lib/browser.mjs';
-import { taskSheets, workbookBytes, workbookXlsBytes } from './lib/xlsx.mjs';
+import { taskSheets, workbookBytes } from './lib/xlsx.mjs';
+import { resolveSite } from './lib/sites.mjs';
 
 const $ = id => document.getElementById(id);
 const installed = Boolean(globalThis.chrome?.runtime?.id);
@@ -9,7 +10,7 @@ const storage = installed ? chrome.storage.local : {
   async get(keys) { return Object.fromEntries(keys.map(key => [key, JSON.parse(localStorage.getItem(`pdd-preview-${key}`) || 'null')])); },
   async set(values) { for (const [key, value] of Object.entries(values)) localStorage.setItem(`pdd-preview-${key}`, JSON.stringify(value)); }
 };
-let keywords = [], task = null, runner = null, busy = false, lockedOut = false, clearing = false, pendingResume = null, activeRun = null;
+let keywords = [], task = null, runner = null, busy = false, lockedOut = false, clearing = false, pendingResume = null, activeRun = null, exporting = false;
 let keywordWrites = Promise.resolve(), taskWrites = Promise.resolve();
 function notice(message, type = '') { $('notice').textContent = message; $('notice').className = `notice ${type}`; $('notice').hidden = !message; }
 function element(tag, value, className = '') { const el = document.createElement(tag); el.textContent = value; el.className = className; return el; }
@@ -73,7 +74,7 @@ function renderTask() {
   $('resume').textContent = task?.permissionOrigin ? '授权图片并继续' : '继续';
   $('stop').disabled = lockedOut || !(busy || resumable);
   $('show-tab').hidden = !Number.isInteger(task?.detailTabId) && !Number.isInteger(task?.tabId);
-  $('export').disabled = lockedOut || !task;
+  $('export').disabled = lockedOut || !task || exporting;
   $('results-empty').hidden = Boolean(jobs.length); $('result-table-wrap').hidden = !jobs.length;
   $('result-rows').replaceChildren(...jobs.map((job, index) => {
     const row = document.createElement('tr'), status = document.createElement('td'); status.append(badge(job.status));
@@ -142,10 +143,27 @@ async function execute() {
     if (canAutoRun()) queueMicrotask(() => { if (canAutoRun()) void execute(); });
   }
 }
+function currentSite() {
+  const site = resolveSite($('source-url').value);
+  if (!site?.supported) {
+    notice('这个网址还不能采集。请填写拼多多或 1688 的网址。', 'error');
+    return null;
+  }
+  return site;
+}
+$('source-url').addEventListener('change', () => {
+  const site = currentSite();
+  if (!site) return;
+  notice(`接下来的商品名称会在${site.label}搜索。`, 'success');
+  void storage.set({ sourceUrl: $('source-url').value.trim() });
+});
 $('add-form').addEventListener('submit', async event => {
   event.preventDefault(); if (lockedOut || clearing) return;
+  const site = currentSite();
+  if (!site) return;
   if (!addKeyword(keywords, $('keyword-input').value)) { notice('请输入新的商品名称，空白或重复名称不会添加。'); return; }
-  task = enqueueKeyword(task, keywords.at(-1));
+  task = enqueueKeyword(task, keywords.at(-1), site.id);
+  void storage.set({ sourceUrl: $('source-url').value.trim() });
   $('keyword-input').value = ''; $('keyword-input').focus(); renderKeywords(); renderTask();
   try {
     await persistKeywords();
@@ -220,26 +238,34 @@ $('show-tab').addEventListener('click', async () => {
   catch { notice('采集页已经关闭。点击继续可重新打开。'); }
 });
 $('export').addEventListener('click', async () => {
-  if (!task) return;
+  if (!task || exporting) return;
+  exporting = true;
+  const button = $('export');
+  button.disabled = true;
+  button.textContent = '正在生成…';
+  notice('正在生成 Excel…');
   try {
-    const format = $('export-format').value;
-    const sheets = taskSheets(structuredClone(task));
-    const bytes = format === 'xls' ? workbookXlsBytes(sheets) : workbookBytes(sheets);
-    const mime = format === 'xls' ? 'application/vnd.ms-excel' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    const blob = new Blob([bytes], { type: mime }), url = URL.createObjectURL(blob);
-    const filename = `拼多多商品链接_${new Date().toISOString().slice(0, 10)}.${format}`;
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const sheets = taskSheets(task);
+    const bytes = workbookBytes(sheets);
+    const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const filename = `拼多多商品链接_${new Date().toISOString().slice(0, 10)}.xlsx`;
     try {
-      if (installed) await chrome.downloads.download({ url, filename, saveAs: true });
+      if (installed) await chrome.downloads.download({ url, filename, saveAs: false });
       else { const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); }
+      notice(`已开始下载「${filename}」。请打开浏览器右上角的下载列表。这次固定为 .xlsx，避免旧版 .xls 把页面撑到内存不足。`, 'success');
     } finally { setTimeout(() => URL.revokeObjectURL(url), 60000); }
   } catch (error) { notice(`导出失败：${error.message}`, 'error'); }
+  finally { exporting = false; button.textContent = '↓ 导出 Excel'; renderTask(); }
 });
 $('links-panel').addEventListener('toggle', () => { if ($('links-panel').open) renderLinks(); });
 window.addEventListener('beforeunload', event => { if (busy) { event.preventDefault(); event.returnValue = ''; } });
 
 async function initialize() {
-  const saved = await storage.get(['keywords', 'task']);
+  const saved = await storage.get(['keywords', 'task', 'sourceUrl']);
   keywords = Array.isArray(saved.keywords) ? saved.keywords.filter(k => typeof k === 'string' && k.trim()) : [];
+  if (typeof saved.sourceUrl === 'string' && saved.sourceUrl.trim()) $('source-url').value = saved.sourceUrl;
   task = recoverTask(saved.task);
   if (task) await saveTask(task);
   renderKeywords(); renderTask();

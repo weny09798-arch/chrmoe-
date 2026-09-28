@@ -91,7 +91,7 @@
   function snapshot() {
     const cards = cardsWithElements().map(x => x.card);
     const phrases = [...document.querySelectorAll('div,p,span,h1,h2')].filter(el => !el.children.length && visible(el)).map(text);
-    const verify = phrases.find(s => s.length < 150 && /请完成.*验证|拖动滑块|安全验证|访问过于频繁|操作频繁|请验证身份/.test(s));
+    const verify = phrases.find(s => s.length < 150 && /请完成.*验证|拖动滑块|安全验证|访问过于频繁|操作频繁|请验证身份|商品已售罄|推荐以下相似商品|当前访问人数较多/.test(s));
     const login = /\/(?:login|login_phone|login_password)\b/.test(location.pathname) || (!cards.length && phrases.some(s => /手机号登录|请先登录|登录后查看/.test(s)));
     const root = scrollRoot();
     return {

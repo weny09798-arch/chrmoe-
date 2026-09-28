@@ -1,5 +1,6 @@
 import { fingerprint } from './fingerprint.mjs';
 import { normalizeDetail } from './detail.mjs';
+import { allowedImageHost, siteById, siteForJob } from './sites.mjs';
 
 export const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 export function productId(raw) {
@@ -14,9 +15,6 @@ export function searchUrl(keyword) {
   url.searchParams.set('search_key', keyword);
   return url.href;
 }
-function isSearch(url, keyword) {
-  try { const u = new URL(url); return u.origin === 'https://mobile.pinduoduo.com' && /\/search_result\.html$/.test(u.pathname) && u.searchParams.get('search_key') === keyword; } catch { return false; }
-}
 function blocked(message, permissionOrigin = '') { return Object.assign(new Error(message), { blocked: true, permissionOrigin }); }
 
 export async function closeTaskDetailTab(currentTask) {
@@ -24,11 +22,200 @@ export async function closeTaskDetailTab(currentTask) {
   const id = Number.isInteger(currentTask.detailTabId) ? currentTask.detailTabId : undefined;
   delete currentTask.detailTabId;
   delete currentTask.detailGoodsId;
+  delete currentTask.detailSite;
   if (id !== undefined) await chrome.tabs.remove(id).catch(() => {});
 }
 
+function readLiveGoods() {
+  const raw = globalThis.rawData;
+  const goods = raw?.store?.initDataObj?.goods || raw?.initDataObj?.goods;
+  if (!goods || typeof goods !== 'object' || Array.isArray(goods)) return null;
+  const skuList = Array.isArray(goods.skus) ? goods.skus : [];
+  return {
+    goodsID: goods.goodsID ?? goods.goodsId,
+    goodsName: goods.goodsName,
+    title: goods.title,
+    shareDesc: goods.shareDesc,
+    goodsDesc: goods.goodsDesc,
+    descriptionText: goods.descriptionText,
+    description: goods.description,
+    minGroupPrice: goods.minGroupPrice,
+    price: goods.price,
+    cents: goods.cents,
+    category: goods.category,
+    catName: goods.catName,
+    categoryName: goods.categoryName,
+    topGallery: goods.topGallery,
+    gallery: goods.gallery,
+    galleryImages: goods.galleryImages,
+    viewImageData: goods.viewImageData,
+    detailGallery: goods.detailGallery,
+    detailImages: goods.detailImages,
+    decoration: goods.decoration,
+    goodsProperty: goods.goodsProperty,
+    properties: goods.properties,
+    attributes: goods.attributes,
+    videoUrl: goods.videoUrl,
+    videoGallery: goods.videoGallery,
+    descVideoGallery: goods.descVideoGallery,
+    certificateImages: goods.certificateImages,
+    sizeChartImages: goods.sizeChartImages,
+    specNames: goods.specNames,
+    skus: skuList.map(sku => ({
+      id: sku?.id,
+      skuId: sku?.skuId,
+      skuID: sku?.skuID,
+      specs: sku?.specs,
+      groupPrice: sku?.groupPrice,
+      oldGroupPrice: sku?.oldGroupPrice,
+      normalPrice: sku?.normalPrice,
+      price: sku?.price,
+      cents: sku?.cents,
+      thumbUrl: sku?.thumbUrl,
+      image: sku?.image,
+      quantity: sku?.quantity,
+      stock: sku?.stock,
+      weight: sku?.weight,
+      weightKg: sku?.weightKg,
+      sizeCm: sku?.sizeCm
+    }))
+  };
+}
+
+export function descriptionDocumentUrl(input) {
+  const raw = String(input || '').trim().replace(/\\\//g, '/').replace(/\\u002[fF]/g, '/');
+  if (!raw) return '';
+  let url;
+  try { url = new URL(raw.startsWith('//') ? `https:${raw}` : raw); }
+  catch { return ''; }
+  if (url.protocol !== 'https:') return '';
+  const host = url.hostname;
+  const allowed = host === 'alicdn.com' || host.endsWith('.alicdn.com') || host === 'tmall.com' || host.endsWith('.tmall.com') || host === '1688.com' || host.endsWith('.1688.com');
+  if (!allowed || /\/offer\/\d+\.html?$/i.test(url.pathname) || /\.(?:jpg|jpeg|png|webp|gif)(?:$|\?)/i.test(url.pathname)) return '';
+  return url.href;
+}
+
+export function imageUrlsInDescription(text) {
+  const source = String(text || '').replace(/\\\//g, '/').replace(/\\u002[fF]/g, '/');
+  const found = [];
+  for (const match of source.matchAll(/(?:https?:)?\/\/[^"'\\\s<>]+\.(?:jpg|jpeg|png|webp)(?:\?[^"'\\\s<>]*)?/gi)) {
+    let url = match[0].startsWith('//') ? `https:${match[0]}` : match[0];
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname === 'alicdn.com' || parsed.hostname.endsWith('.alicdn.com')) {
+        parsed.pathname = parsed.pathname.replace(/(\.(?:jpg|jpeg|png|webp))(?:_[^/]*)?$/i, '$1');
+        if (/x-oss-process|resize/i.test(parsed.search)) parsed.search = '';
+        url = parsed.href;
+      }
+    } catch { /* Keep the original address when it is not a URL. */ }
+    if (/^https:/.test(url) && !/tps-|\/tps\/|avatar|sprite|_20x20|_30x30|_50x50|1x1/i.test(url)) found.push(url);
+  }
+  return [...new Set(found)].slice(0, 60);
+}
+
+function readLive1688() {
+  const offerId = location.pathname.match(/\/offer\/(\d+)/)?.[1] || '';
+  const found = { title: '', price: '', images: [], detailImages: [], detailUrl: '', detailUrls: [], videoUrl: '', skus: [] };
+  const seen = new Set();
+  let visited = 0;
+  const descriptionDocumentUrl = input => {
+    const raw = String(input || '').trim().replace(/\\\//g, '/').replace(/\\u002[fF]/g, '/');
+    if (!raw) return '';
+    let url;
+    try { url = new URL(raw.startsWith('//') ? `https:${raw}` : raw); }
+    catch { return ''; }
+    if (url.protocol !== 'https:') return '';
+    const host = url.hostname;
+    const allowed = host === 'alicdn.com' || host.endsWith('.alicdn.com') || host === 'tmall.com' || host.endsWith('.tmall.com') || host === '1688.com' || host.endsWith('.1688.com');
+    if (!allowed || /\/offer\/\d+\.html?$/i.test(url.pathname) || /\.(?:jpg|jpeg|png|webp|gif)(?:$|\?)/i.test(url.pathname)) return '';
+    return url.href;
+  };
+  const considerTitle = text => {
+    const title = typeof text === 'string' ? text.trim() : '';
+    if (title.length < 8 || title.length > 120 || title.length <= found.title.length || /[¥￥]/.test(title)) return;
+    if (/(?:厂|公司|商行|经营部)$/.test(title)) return;
+    found.title = title;
+  };
+  const visit = node => {
+    if (!node || typeof node !== 'object' || seen.has(node) || visited > 4000) return;
+    seen.add(node);
+    visited += 1;
+    if (Array.isArray(node)) { node.slice(0, 60).forEach(visit); return; }
+    const id = node.offerId || node.offerID;
+    if (id != null && offerId && /^\d+$/.test(String(id)) && String(id) !== offerId) return;
+    considerTitle(node.subject || node.offerTitle);
+    considerTitle(node.title);
+    const video = node.videoUrl || node.videoURL || node.playUrl || node.videoPlayUrl;
+    if (!found.videoUrl && typeof video === 'string' && /^https?:\/\//.test(video)) found.videoUrl = video;
+    if (!found.price && /^\d+(?:\.\d+)?$/.test(String(node.price ?? '')) && Number(node.price) > 0) found.price = String(node.price);
+    for (const key of ['fullPathImageURI', 'originalImageURI', 'size310x310ImageURI']) {
+      const image = node[key];
+      if (typeof image === 'string' && /alicdn\.com/.test(image)) found.images.push(image);
+    }
+    const map = node.skuInfoMap || node.skuMap;
+    if (map && typeof map === 'object' && !Array.isArray(map)) {
+      for (const [key, sku] of Object.entries(map)) {
+        if (!sku || typeof sku !== 'object') continue;
+        found.skus.push({
+          key,
+          skuId: sku.skuId || sku.specId || '',
+          price: sku.discountPrice ?? sku.price ?? '',
+          image: sku.imageUrl || sku.skuImageUrl || '',
+          stock: sku.canBookCount ?? sku.stock ?? ''
+        });
+      }
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (typeof value === 'string' && /^(?:detailUrl|descUrl|descriptionUrl|description|detailHtml|descHtml)$/i.test(key)) {
+        const doc = descriptionDocumentUrl(value);
+        if (doc) found.detailUrls.push(doc);
+        else if (/<img\b/i.test(value)) {
+          for (const match of value.matchAll(/(?:https?:)?\/\/[^"'\\\s>]+\.(?:jpg|jpeg|png|webp)/gi)) found.detailImages.push(match[0]);
+        }
+      } else if (value && typeof value === 'object') visit(value);
+    }
+  };
+  const harvestDocs = node => {
+    const local = new Set();
+    let count = 0;
+    const walk = current => {
+      if (!current || typeof current !== 'object' || local.has(current) || count > 8000) return;
+      local.add(current);
+      count += 1;
+      if (Array.isArray(current)) { current.slice(0, 40).forEach(walk); return; }
+      for (const [key, value] of Object.entries(current)) {
+        if (typeof value === 'string' && /detailUrl|descUrl|descriptionUrl/i.test(key)) {
+          const url = descriptionDocumentUrl(value);
+          if (url) found.detailUrls.push(url);
+        } else if (value && typeof value === 'object' && !/skuInfoMap|skuMap/i.test(key)) walk(value);
+      }
+    };
+    walk(node);
+  };
+  harvestDocs(globalThis.context);
+  harvestDocs(globalThis.__INIT_DATA);
+  visit(globalThis.context);
+  visit(globalThis.__INIT_DATA);
+  found.images = [...new Set(found.images)].slice(0, 30);
+  found.detailImages = [...new Set(found.detailImages.map(item => item.startsWith('//') ? `https:${item}` : item))].slice(0, 60);
+  found.detailUrls = [...new Set(found.detailUrls)].slice(0, 5);
+  found.detailUrl = found.detailUrls[0] || '';
+  found.skus = found.skus.filter(sku => sku.price !== '' && sku.price != null).slice(0, 200);
+  return found.title || found.skus.length || found.images.length || found.detailImages.length || found.detailUrls.length || found.videoUrl ? found : null;
+}
+
+async function descriptionImages(detailUrl) {
+  const url = descriptionDocumentUrl(detailUrl);
+  if (!url) return [];
+  try {
+    const response = await fetch(url, { credentials: 'omit', redirect: 'follow' });
+    if (!response.ok) return [];
+    return imageUrlsInDescription(await response.text());
+  } catch { return []; }
+}
+
 export function browserPorts({ save, update, detailPollLimit = 40, detailPollWait = wait }) {
-  let tabId, task, detailTabId;
+  let tabId, task, detailTabId, currentJob;
   const imageCache = new Map();
   async function closeDetail({ preserveBlocked = false } = {}) {
     if (preserveBlocked && task?.status === 'blocked' && Number.isInteger(task.detailTabId)) return;
@@ -38,6 +225,7 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
     if (task) {
       delete task.detailTabId;
       delete task.detailGoodsId;
+      delete task.detailSite;
     }
     if (id !== undefined) await chrome.tabs.remove(id).catch(() => {});
     if (task) await save(task).catch(() => {});
@@ -65,13 +253,15 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
     task = currentTask || task;
     const id = typeof item?.id === 'string' ? item.id : Number.isSafeInteger(item?.id) ? String(item.id) : '';
     if (!/^\d+$/.test(id)) throw new Error('无效商品 ID');
-    const detailUrl = `https://mobile.pinduoduo.com/goods.html?goods_id=${id}`;
+    const site = siteById(item?.site);
+    const detailUrl = site.productUrl(id);
     let preserveDetailTab = false;
     try {
       let tab = null;
-      if (Number.isInteger(task?.detailTabId) && (!task.detailGoodsId || task.detailGoodsId === id)) {
+      if (Number.isInteger(task?.detailTabId) && (!task.detailGoodsId || task.detailGoodsId === id) && (!task.detailSite || task.detailSite === site.id)) {
         tab = await chrome.tabs.get(task.detailTabId).catch(() => null);
-        if (tab && (!task.detailGoodsId && productId(tab.url || '') !== id)) tab = null;
+        if (tab && (!task.detailGoodsId && site.productId(tab.url || '') !== id)) tab = null;
+        if (tab && task.detailSite && task.detailSite !== site.id) tab = null;
       }
       if (!tab) {
         if (Number.isInteger(task?.detailTabId)) await closeDetail();
@@ -80,6 +270,7 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
         if (task) {
           task.detailTabId = detailTabId;
           task.detailGoodsId = id;
+          task.detailSite = site.id;
           await save(task);
         }
       } else {
@@ -87,6 +278,7 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
         if (task) {
           task.detailTabId = detailTabId;
           task.detailGoodsId = id;
+          task.detailSite = site.id;
           await save(task);
         }
       }
@@ -96,10 +288,21 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
         await wait(300);
       }
       if (!ready) throw new Error('商品详情加载超时');
-      await chrome.scripting.executeScript({ target: { tabId: detailTabId }, files: ['detail-content.js'] });
+      await chrome.scripting.executeScript({ target: { tabId: detailTabId }, files: [site.detailScript] });
       let best = null, bestScore = -1, stableKey = '', stableCount = 0;
+      const fetchedDocs = new Set();
+      let fetchedDetailImages = [];
       for (let i = 0; i < detailPollLimit; i++) {
-        const snapshot = await chrome.tabs.sendMessage(detailTabId, { type: 'PDD_DETAIL_SNAPSHOT' });
+        let pageGoods = null;
+        if (site.id === 'pdd' || site.id === '1688') {
+          const injected = await chrome.scripting.executeScript({
+            target: { tabId: detailTabId }, world: 'MAIN', func: site.id === '1688' ? readLive1688 : readLiveGoods
+          }).catch(() => null);
+          pageGoods = injected?.[0]?.result || null;
+        }
+        const snapshot = await chrome.tabs.sendMessage(detailTabId, pageGoods
+          ? { type: 'PDD_DETAIL_SNAPSHOT', pageGoods }
+          : { type: 'PDD_DETAIL_SNAPSHOT' });
         if (!snapshot) throw new Error('商品详情页未响应');
         if (snapshot.blocked) {
           preserveDetailTab = true;
@@ -107,6 +310,18 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
         }
         if (snapshot.error) throw new Error(snapshot.error);
         if (snapshot.goodsId !== id) throw new Error('商品详情 ID 不匹配');
+        const docUrls = [...new Set([...(pageGoods?.detailUrls || []), pageGoods?.detailUrl, ...(snapshot.descriptionUrls || [])].filter(url => typeof url === 'string' && url))];
+        if (site.id === '1688' && docUrls.length) {
+          for (const url of docUrls) {
+            if (fetchedDocs.has(url)) continue;
+            fetchedDocs.add(url);
+            fetchedDetailImages.push(...await descriptionImages(url));
+          }
+          fetchedDetailImages = [...new Set(fetchedDetailImages)];
+          const reserved = new Set((snapshot.detail?.skus || []).map(sku => sku?.image).filter(Boolean));
+          const detailOnly = fetchedDetailImages.filter(url => !reserved.has(url));
+          if (detailOnly.length && snapshot.detail) snapshot.detail.detailImages = detailOnly.slice(0, 60);
+        }
         const detail = snapshot.detail;
         if (usableDetail(detail)) {
           const score = detailScore(detail);
@@ -116,7 +331,10 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
           stableKey = key;
           // A matching top-level JSON product root is the reader's explicit readiness signal.
           // Responses from older reader versions did not include this field and remain compatible.
-          if ((snapshot.ready !== false && hasReadyDetail(detail)) || stableCount >= 8) return normalizeDetail(best, item);
+          const detailWait = docUrls.length ? 30 : 15;
+          const waitingForDetail = site.id === '1688' && snapshot.detailPending && !(detail.detailImages || []).length && stableCount < detailWait;
+          const waitingForSku = site.id === '1688' && snapshot.skuPending && stableCount < 12;
+          if (!waitingForDetail && !waitingForSku && ((snapshot.ready !== false && hasReadyDetail(detail)) || stableCount >= 8)) return normalizeDetail(best, item);
         }
         if (i < detailPollLimit - 1) await detailPollWait(300);
       }
@@ -135,29 +353,31 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
     throw new Error('采集页加载超时，请检查网络后重新生成');
   }
   async function message(data) {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: [siteForJob(currentJob).contentScript] });
     const response = await chrome.tabs.sendMessage(tabId, data);
     if (!response) throw new Error('采集页未响应');
     if (response.error) throw new Error(response.error);
     return response;
   }
   async function read(job) {
+    currentJob = job;
+    const site = siteForJob(job);
     await ready();
     let page;
     try { page = await message({ type: 'PDD_SNAPSHOT' }); }
     catch (error) {
       const tab = await chrome.tabs.get(tabId);
-      if (!tab.url?.startsWith('https://mobile.pinduoduo.com/')) throw blocked('采集页离开拼多多，请返回搜索页面后继续');
+      if (!site.isOnSite(tab.url || '')) throw blocked(`采集页离开${site.label}，请返回搜索页面后继续`);
       throw error;
     }
     if (page.blocked) return page;
-    if (!isSearch(page.url, job.keyword)) throw blocked(`采集页已离开“${job.keyword}”的搜索结果，请返回后继续`);
+    if (!site.isSearch(page.url, job.keyword)) throw blocked(`采集页已离开“${job.keyword}”的搜索结果，请返回后继续`);
     return page;
   }
   async function hash(rawUrl) {
     if (imageCache.has(rawUrl)) return imageCache.get(rawUrl);
     const url = new URL(rawUrl);
-    if (url.protocol !== 'https:' || !(url.hostname === 'pddpic.com' || url.hostname.endsWith('.pddpic.com') || url.hostname === 'mobile.pinduoduo.com')) throw new Error(`暂不支持的图片来源：${url.hostname}`);
+    if (url.protocol !== 'https:' || !allowedImageHost(url.hostname)) throw new Error(`暂不支持的图片来源：${url.hostname}`);
     const origin = `${url.origin}/*`;
     if (!await chrome.permissions.contains({ origins: [origin] })) throw blocked(`需要读取 ${url.hostname} 的商品主图；点击“授权图片并继续”`, origin);
     const response = await fetch(url.href, { credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(12000) });
@@ -178,7 +398,9 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
     } finally { bitmap.close(); }
   }
   async function resolve(card, page, job) {
-    // Some mobile result cards have only a click handler. Read the resulting detail URL.
+    currentJob = job;
+    const site = siteForJob(job);
+    // Some result cards have only a click handler. Read the resulting detail URL.
     const children = new Set();
     const onCreated = tab => { if (tab.openerTabId === tabId) children.add(tab.id); };
     chrome.tabs.onCreated.addListener(onCreated);
@@ -189,7 +411,7 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
         await wait(250);
         for (const candidateTabId of [tabId, ...children]) {
           const tab = await chrome.tabs.get(candidateTabId).catch(() => null);
-          const found = productId(tab?.url || '');
+          const found = site.productId(tab?.url || '');
           if (found) { id = found; sameTab = candidateTabId === tabId; break; }
         }
       }
@@ -200,14 +422,14 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
       }
       if (sameTab) {
         // Browser history can return to the Pinduoduo home page after a SPA card click.
-        await chrome.tabs.update(tabId, { url: searchUrl(job.keyword) });
+        await chrome.tabs.update(tabId, { url: site.searchUrl(job.keyword) });
         await wait(300); await ready();
         let restored = await read(job);
         for (let i = 0; i < 8 && !restored.cards.length; i++) { await wait(500); restored = await read(job); }
         await message({ type: 'PDD_SCROLL', position: page.position });
         await wait(500);
       }
-      return { ...card, id, url: `https://mobile.pinduoduo.com/goods.html?goods_id=${id}`, navigated: sameTab };
+      return { ...card, id, url: site.productUrl(id), navigated: sameTab };
     } finally {
       chrome.tabs.onCreated.removeListener(onCreated);
       for (const child of children) await chrome.tabs.remove(child).catch(() => {});
@@ -215,12 +437,14 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
   }
   return {
     async open(job, currentTask) {
-      task = currentTask; tabId = task.tabId;
+      task = currentTask; currentJob = job; tabId = task.tabId;
+      const site = siteForJob(job);
+      const target = site.searchUrl(job.keyword);
       let tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
-      if (!tab || !tab.url?.startsWith('https://mobile.pinduoduo.com/')) {
-        tab = await chrome.tabs.create({ url: searchUrl(job.keyword), active: false });
+      if (!tab) {
+        tab = await chrome.tabs.create({ url: target, active: false });
         tabId = tab.id; task.tabId = tabId;
-      } else if (!isSearch(tab.url, job.keyword)) await chrome.tabs.update(tabId, { url: searchUrl(job.keyword) });
+      } else if (!site.isSearch(tab.url || '', job.keyword)) await chrome.tabs.update(tabId, { url: target });
       await save(task); await wait(900); await ready();
     },
     read, hash, resolve, enrich, close: closeDetail, wait, save, update,

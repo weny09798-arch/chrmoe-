@@ -9,6 +9,9 @@
       <aside class="panel keywords-panel">
         <div class="section-heading"><h2>商品清单</h2><span id="keyword-count" class="count">0 个</span></div>
         <p class="muted">一次添加一个名称，添加后立即搜索；后续名称自动排队。</p>
+        <label class="sr-only" for="source-url">采集网址</label>
+        <div class="input-group"><input id="source-url" value="https://mobile.pinduoduo.com/" placeholder="https://www.1688.com 或拼多多网址" autocomplete="off"></div>
+        <p class="muted">填写 1688 的网址就只在 1688 搜索，填写拼多多的网址就只在拼多多搜索。</p>
         <form id="add-form"><label class="sr-only" for="keyword-input">商品名称</label><div class="input-group"><input id="keyword-input" maxlength="100" placeholder="例如：CCD 数码相机" autocomplete="off" required><button class="button primary" id="add-button" type="submit">添加</button></div></form>
         <p><button id="clear-all" class="button subtle" type="button" disabled>清空全部</button> <small class="muted">清除名称、搜索进度和结果</small></p>
         <ul id="keyword-list" aria-label="已保存的商品名称"></ul>
@@ -16,7 +19,7 @@
         <div class="aside-note"><span class="dot"></span><p>清单会自动保存，下次打开继续使用。</p></div>
       </aside>
       <section class="workspace">
-        <div class="section-heading workspace-heading"><div><h2>采集工作台</h2><p class="muted">搜索商品 → 主图去重 → 保留最低价 → 导出 Excel</p></div><div class="export-controls"><label class="sr-only" for="export-format">导出文件类型</label><select id="export-format" aria-label="导出文件类型"><option value="xls">模板同款 .xls</option><option value="xlsx">新版 .xlsx</option></select><button id="export" class="button export" disabled>↓ 导出 Excel</button></div></div>
+        <div class="section-heading workspace-heading"><div><h2>采集工作台</h2><p class="muted">搜索商品 → 主图去重 → 保留最低价 → 导出 Excel</p></div><div class="export-controls"><label class="sr-only" for="export-format">导出文件类型</label><select id="export-format" aria-label="导出文件类型"><option value="xlsx" selected>新版 .xlsx</option><option value="xls">模板同款 .xls</option></select><button id="export" class="button export" disabled>↓ 导出 Excel</button></div></div>
         <div class="stats"><div class="stat"><span>本次商品名称</span><strong id="stat-keywords">0<small>个</small></strong></div><div class="stat"><span>已处理名称</span><strong id="stat-done">0<small>个</small></strong></div><div class="stat"><span>已收集链接</span><strong id="stat-links">0<small>条</small></strong></div></div>
         <section class="panel progress-panel" aria-label="任务进度">
           <div class="section-heading"><h3 id="task-title">准备开始</h3><span id="task-badge" class="badge">未开始</span></div>
@@ -35,6 +38,5 @@
       </section>
     </main>
   </div>
-  <script src="vendor/xlsx.full.min.js"></script>
   <script type="module" src="manager.mjs"></script>
 </body></html>
