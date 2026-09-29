@@ -12,6 +12,12 @@
         <label class="sr-only" for="source-url">采集网址</label>
         <div class="input-group"><input id="source-url" value="https://mobile.pinduoduo.com/" placeholder="https://www.1688.com 或拼多多网址" autocomplete="off"></div>
         <p class="muted">填写 1688 的网址就只在 1688 搜索，填写拼多多的网址就只在拼多多搜索。</p>
+        <div class="collect-options">
+          <label>采集数量<input id="target-count" type="number" min="1" max="200" step="1" value="20" inputmode="numeric"></label>
+          <label>最低价<input id="price-min" inputmode="decimal" placeholder="不限" autocomplete="off"></label>
+          <label>最高价<input id="price-max" inputmode="decimal" placeholder="不限" autocomplete="off"></label>
+        </div>
+        <p class="muted">数量默认 20，改成 10 就只收 10 个。价格留空按原来的规则；填写后只保留搜索页展示价落在这个区间里的商品。</p>
         <form id="add-form"><label class="sr-only" for="keyword-input">商品名称</label><div class="input-group"><input id="keyword-input" maxlength="100" placeholder="例如：CCD 数码相机" autocomplete="off" required><button class="button primary" id="add-button" type="submit">添加</button></div></form>
         <p><button id="clear-all" class="button subtle" type="button" disabled>清空全部</button> <small class="muted">清除名称、搜索进度和结果</small></p>
         <ul id="keyword-list" aria-label="已保存的商品名称"></ul>
@@ -25,11 +31,11 @@
           <div class="section-heading"><h3 id="task-title">准备开始</h3><span id="task-badge" class="badge">未开始</span></div>
           <div class="progress-caption"><span id="progress-label">添加商品名称后自动搜索</span><strong id="progress-percent">0%</strong></div>
           <progress id="progress" max="100" value="0" aria-label="已处理商品名称进度"></progress>
-          <p id="current-detail" class="muted current-detail">每个名称收集到 20 条即切换；最多扫描 200 条。</p>
+          <p id="current-detail" class="muted current-detail">每个名称收集到设定数量即切换；最多扫描 200 条。</p>
           <div class="actions"><button id="pause" class="button" disabled>暂停</button><button id="resume" class="button" hidden>继续</button><button id="stop" class="button subtle" disabled>停止</button><button id="show-tab" class="text-button" hidden>查看采集页 ↗</button></div>
           <p class="keep-open">运行时请保持本管理页和采集页打开。关闭后可从已保存的进度继续。</p>
         </section>
-        <section class="panel results-panel"><div class="section-heading"><h3>采集结果</h3><span class="muted" id="result-subtitle">每个名称最多 20 条链接</span></div>
+        <section class="panel results-panel"><div class="section-heading"><h3>采集结果</h3><span class="muted" id="result-subtitle">每个名称按设定数量收集</span></div>
           <div id="results-empty" class="results-empty"><div class="empty-art" aria-hidden="true"><i></i><i></i><i></i></div><h3>你的选品结果将在这里</h3><p>相同主图的商品只保留展示价格最低的一条。</p></div>
           <div id="result-table-wrap" class="table-wrap" hidden><table><thead><tr><th>商品名称</th><th>状态</th><th>已扫描</th><th>链接</th><th>说明</th><th>操作</th></tr></thead><tbody id="result-rows"></tbody></table></div>
         </section>

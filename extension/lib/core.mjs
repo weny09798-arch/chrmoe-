@@ -2,6 +2,28 @@ import { similar } from './fingerprint.mjs';
 
 export const SCAN_LIMIT = 200;
 export const OUTPUT_LIMIT = 20;
+export function normalizeLimit(value) {
+  if (value == null || value === '') return OUTPUT_LIMIT;
+  const number = typeof value === 'number' ? value : Number(String(value).trim());
+  return Number.isInteger(number) && number >= 1 && number <= SCAN_LIMIT ? number : null;
+}
+export function normalizePriceCents(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null;
+  const cents = Math.round(Number(text) * 100);
+  return Number.isSafeInteger(cents) && cents > 0 ? cents : null;
+}
+export function outputLimit(job) {
+  const limit = job?.limit;
+  return Number.isInteger(limit) && limit >= 1 && limit <= SCAN_LIMIT ? limit : OUTPUT_LIMIT;
+}
+export function priceAllowed(cents, job) {
+  if (!Number.isSafeInteger(cents) || cents <= 0) return false;
+  if (Number.isSafeInteger(job?.priceMin) && cents < job.priceMin) return false;
+  if (Number.isSafeInteger(job?.priceMax) && cents > job.priceMax) return false;
+  return true;
+}
 export const STATUS = { pending: '等待', running: '搜索中', paused: '已暂停', blocked: '等待处理', done: '完成', short: '数量不足', error: '失败', stopped: '已停止' };
 
 export function parsePrice(text) {
@@ -44,8 +66,15 @@ export function validProductTitle(title, keyword) {
   return true;
 }
 
-function createJob(keyword, site = 'pdd') {
-  return { keyword, site: site === '1688' ? '1688' : 'pdd', status: 'pending', phase: 'search', searchStatus: '', detailDone: 0, scanned: 0, skipped: 0, seen: [], groups: [], note: '', scrolls: 0 };
+function createJob(keyword, site = 'pdd', options = {}) {
+  const limit = normalizeLimit(options.limit);
+  return {
+    keyword, site: site === '1688' ? '1688' : 'pdd',
+    limit: limit || OUTPUT_LIMIT,
+    priceMin: Number.isSafeInteger(options.priceMin) ? options.priceMin : null,
+    priceMax: Number.isSafeInteger(options.priceMax) ? options.priceMax : null,
+    status: 'pending', phase: 'search', searchStatus: '', detailDone: 0, scanned: 0, skipped: 0, seen: [], groups: [], note: '', scrolls: 0
+  };
 }
 
 export function createTask(keywords) {
@@ -55,13 +84,13 @@ export function createTask(keywords) {
   };
 }
 
-export function enqueueKeyword(task, keyword, site = 'pdd') {
+export function enqueueKeyword(task, keyword, site = 'pdd', options = {}) {
   if (!task) {
     const created = createTask([keyword]);
-    created.jobs[0] = createJob(keyword, site);
+    created.jobs[0] = createJob(keyword, site, options);
     return created;
   }
-  task.jobs.push(createJob(keyword, site));
+  task.jobs.push(createJob(keyword, site, options));
   if (['done', 'error', 'stopped'].includes(task.status)) task.status = 'pending';
   return task;
 }
@@ -69,12 +98,14 @@ export function enqueueKeyword(task, keyword, site = 'pdd') {
 export function retryJob(task, index) {
   const previous = task?.jobs?.[index];
   if (!previous) throw new Error('找不到要重新搜索的商品名称');
-  task.jobs[index] = createJob(previous.keyword, previous.site || 'pdd');
+  task.jobs[index] = createJob(previous.keyword, previous.site || 'pdd', {
+    limit: previous.limit, priceMin: previous.priceMin, priceMax: previous.priceMax
+  });
   if (['done', 'error', 'stopped'].includes(task.status)) task.status = 'pending';
   return task.jobs[index];
 }
 
-export function selected(job) { return job.groups.slice(0, OUTPUT_LIMIT).map(group => group.best); }
+export function selected(job) { return job.groups.slice(0, outputLimit(job)).map(group => group.best); }
 
 const hasValues = value => Array.isArray(value) && value.length > 0;
 export function hasDetailData(item) {

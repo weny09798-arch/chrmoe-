@@ -249,3 +249,50 @@ test('an unsupported collection address does not add a name or open a tab', asyn
   assert.equal(tabCreates, 0);
   assert.match(document.getElementById('notice').textContent, /暂不支持|还不能采集/);
 });
+test('collection count and price range are stored with the new name', async () => {
+  const { document, window } = parseHTML(html);
+  const saved = { keywords: [], task: null };
+  globalThis.document = document;
+  globalThis.window = window;
+  globalThis.chrome = {
+    runtime: { id: 'test-extension' },
+    storage: { local: { async get() { return saved; }, async set(values) { Object.assign(saved, values); } } },
+    tabs: { async create() { throw new Error('测试中断页面打开'); } }
+  };
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: { request: async (_name, _options, callback) => callback({}) } } });
+  await import(`../extension/manager.mjs?case=${Math.random()}`);
+  await tick();
+  document.getElementById('target-count').value = '10';
+  document.getElementById('price-min').value = '12.5';
+  document.getElementById('price-max').value = '80';
+  document.getElementById('keyword-input').value = '手电筒';
+  document.getElementById('add-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+  await tick();
+  await tick();
+  assert.equal(saved.task.jobs[0].limit, 10);
+  assert.equal(saved.task.jobs[0].priceMin, 1250);
+  assert.equal(saved.task.jobs[0].priceMax, 8000);
+  assert.equal(saved.targetCount, '10');
+});
+test('an inverted price range does not add a name', async () => {
+  const { document, window } = parseHTML(html);
+  const saved = { keywords: [], task: null };
+  globalThis.document = document;
+  globalThis.window = window;
+  globalThis.chrome = {
+    runtime: { id: 'test-extension' },
+    storage: { local: { async get() { return saved; }, async set(values) { Object.assign(saved, values); } } },
+    tabs: { async create() { throw new Error('不应打开采集页'); } }
+  };
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: { request: async (_name, _options, callback) => callback({}) } } });
+  await import(`../extension/manager.mjs?case=${Math.random()}`);
+  await tick();
+  document.getElementById('price-min').value = '80';
+  document.getElementById('price-max').value = '10';
+  document.getElementById('keyword-input').value = '手电筒';
+  document.getElementById('add-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+  await tick();
+  assert.deepEqual(saved.keywords, []);
+  assert.equal(saved.task, null);
+  assert.match(document.getElementById('notice').textContent, /最低价/);
+});

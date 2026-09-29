@@ -1,4 +1,4 @@
-import { addCandidate, countDetails, hasDetailData, parsePrice, selected, validProductTitle, SCAN_LIMIT } from './core.mjs';
+import { addCandidate, countDetails, hasDetailData, outputLimit, parsePrice, priceAllowed, selected, validProductTitle, SCAN_LIMIT } from './core.mjs';
 import { siteForJob } from './sites.mjs';
 
 const finished = status => ['done', 'short', 'error', 'stopped'].includes(status);
@@ -50,7 +50,8 @@ export class Runner {
     let stalled = 0, noCardProgress = 0, previousSnapshot = '';
     const processedKeys = new Set(job.seen), replayedKeys = new Set();
     const noCardProgressLimit = Math.min(60, Math.max(8, job.scrolls + 8));
-    while (!this.intent && job.scanned < SCAN_LIMIT && selected(job).length < 20) {
+    const limit = outputLimit(job);
+    while (!this.intent && job.scanned < SCAN_LIMIT && selected(job).length < limit) {
       const page = await this.ports.read(job);
       if (this.intent) return;
       if (page.blocked) throw Object.assign(new Error(page.reason || '请处理登录或验证码后继续'), { blocked: true });
@@ -58,12 +59,13 @@ export class Runner {
       const snapshot = JSON.stringify([page.position ?? null, page.cards.map(c => c.key)]);
       let navigated = false;
       for (const raw of fresh) {
-        if (this.intent || job.scanned >= SCAN_LIMIT || selected(job).length >= 20) break;
+        if (this.intent || job.scanned >= SCAN_LIMIT || selected(job).length >= limit) break;
         let candidate, problem = '';
         try {
           if (!validProductTitle(raw.title, job.keyword)) throw new Error('商品名称与搜索名称无关联，或仅识别到平台标签');
           const cents = parsePrice(raw.priceText);
           if (cents === null) throw new Error('展示价格无法明确识别');
+          if (!priceAllowed(cents, job)) throw new Error('展示价格不在设定区间内');
           const fingerprint = await this.ports.hash(raw.image);
           if (this.intent) return;
           const resolved = raw.id ? raw : await this.ports.resolve(raw, page, job);
@@ -85,7 +87,7 @@ export class Runner {
         if (navigated) break;
       }
       if (this.intent) return;
-      if (selected(job).length >= 20 || job.scanned >= SCAN_LIMIT || (page.end && !navigated)) break;
+      if (selected(job).length >= limit || job.scanned >= SCAN_LIMIT || (page.end && !navigated)) break;
       if (fresh.length) { stalled = 0; noCardProgress = 0; }
       else {
         let newlyReplayed = false;
@@ -102,10 +104,11 @@ export class Runner {
       await this.ports.wait(1300);
     }
     if (this.intent) return;
-    job.searchStatus = selected(job).length >= 20 ? 'done' : 'short';
+    const full = selected(job).length >= limit;
+    job.searchStatus = full ? 'done' : 'short';
     job.phase = 'detail';
     job.status = 'running';
-    job.note = `${selected(job).length >= 20 ? '已收集20条，转到下一名称' : job.scanned >= SCAN_LIMIT ? '已扫描至200条上限' : '页面提示搜索结束'}；保留 ${selected(job).length}/20 组`;
+    job.note = `${full ? `已收集${limit}条，转到下一名称` : job.scanned >= SCAN_LIMIT ? '已扫描至200条上限' : '页面提示搜索结束'}；保留 ${selected(job).length}/${limit} 组`;
     if (job.skipped) job.note += `；跳过 ${job.skipped} 条，最近原因：${job.lastSkip}`;
     await this.checkpoint();
     await this.enrich(job);
@@ -138,8 +141,9 @@ export class Runner {
     const partial = items.filter(item => item.detailStatus === 'partial').length;
     const failures = items.filter(item => item.detailStatus === 'error').length;
     job.phase = 'done';
-    job.status = job.searchStatus || (items.length >= 20 ? 'done' : 'short');
-    job.note = `${job.note || `保留 ${items.length}/20 组`}；详情完整 ${complete}，部分 ${partial}，失败 ${failures}`;
+    const kept = outputLimit(job);
+    job.status = job.searchStatus || (items.length >= kept ? 'done' : 'short');
+    job.note = `${job.note || `保留 ${items.length}/${kept} 组`}；详情完整 ${complete}，部分 ${partial}，失败 ${failures}`;
     await this.checkpoint();
   }
 }

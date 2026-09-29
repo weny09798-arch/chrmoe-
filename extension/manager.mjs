@@ -1,4 +1,4 @@
-import { addKeyword, enqueueKeyword, retryJob, selected, recoverTask, STATUS } from './lib/core.mjs';
+import { addKeyword, enqueueKeyword, normalizeLimit, normalizePriceCents, outputLimit, retryJob, selected, recoverTask, STATUS } from './lib/core.mjs';
 import { Runner } from './lib/runner.mjs';
 import { browserPorts, closeTaskDetailTab } from './lib/browser.mjs';
 import { taskSheets, workbookBytes } from './lib/xlsx.mjs';
@@ -55,7 +55,7 @@ function renderTask() {
   $('stat-done').replaceChildren(String(done), element('small', '个'));
   $('stat-links').replaceChildren(String(totalLinks), element('small', '条'));
   $('task-title').textContent = active ? (active.phase === 'detail' ? `正在补全详情 · ${active.keyword}` : `正在处理 · ${active.keyword}`) : (task ? '本次采集' : '准备开始');
-  $('task-badge').textContent = task ? (task.status === 'done' && jobs.some(j => j.status === 'short') ? '已结束 · 部分不足20条' : STATUS[task.status] || task.status) : '未开始';
+  $('task-badge').textContent = task ? (task.status === 'done' && jobs.some(j => j.status === 'short') ? '已结束 · 部分数量不足' : STATUS[task.status] || task.status) : '未开始';
   $('task-badge').className = `badge ${task?.status || ''}`;
   $('progress-label').textContent = task ? `已处理 ${done} / ${jobs.length} 个商品名称` : '添加商品名称后自动搜索';
   $('progress-percent').textContent = `${percent}%`; $('progress').value = percent;
@@ -64,8 +64,8 @@ function renderTask() {
   $('current-detail').textContent = active
     ? active.phase === 'detail'
       ? `正在补全详情 ${active.detailDone || 0} / ${activeItems.length} · 完整 ${activeDetails.complete} · 部分 ${activeDetails.partial} · 失败 ${activeDetails.errors}`
-      : `已扫描 ${active.scanned} / 200 条 · ${active.groups.length} 组主图 · 保留 ${activeItems.length} / 20 条${active.note ? ` · ${active.note}` : ''}`
-    : (task?.status === 'error' ? '部分任务失败，已保留采集结果；请查看每行说明。' : '每个名称收集到 20 条即切换；最多扫描 200 条。');
+      : `已扫描 ${active.scanned} / 200 条 · ${active.groups.length} 组主图 · 保留 ${activeItems.length} / ${outputLimit(active)} 条${active.note ? ` · ${active.note}` : ''}`
+    : (task?.status === 'error' ? '部分任务失败，已保留采集结果；请查看每行说明。' : '每个名称收集到设定数量即切换；最多扫描 200 条。');
   $('add-button').disabled = lockedOut || clearing;
   $('clear-all').disabled = lockedOut || clearing || (!keywords.length && !task);
   $('pause').disabled = !busy || Boolean(runner?.intent); $('pause').hidden = Boolean(resumable);
@@ -97,7 +97,7 @@ function renderTask() {
       ? `详情完整 ${counts.complete} 个 · 部分 ${counts.partial} 个 · 失败 ${counts.errors} 个`
       : '';
     const explanation = job.note || (job.skipped ? `已跳过 ${job.skipped} 条` : (['done', 'short', 'error', 'stopped'].includes(job.status) ? detailSummary || '—' : '—'));
-    row.append(element('td', job.keyword), status, element('td', String(job.scanned)), element('td', `${items.length}/20`), element('td', explanation, 'note'), action);
+    row.append(element('td', job.keyword), status, element('td', String(job.scanned)), element('td', `${items.length}/${outputLimit(job)}`), element('td', explanation, 'note'), action);
     return row;
   }));
   $('links-panel').hidden = !totalLinks; $('links-count').textContent = `${totalLinks} 条`;
@@ -143,6 +143,30 @@ async function execute() {
     if (canAutoRun()) queueMicrotask(() => { if (canAutoRun()) void execute(); });
   }
 }
+function collectSettings() {
+  const limit = normalizeLimit($('target-count').value);
+  if (!limit) { notice('采集数量请填写 1 到 200 的整数。', 'error'); return null; }
+  const minText = $('price-min').value.trim();
+  const maxText = $('price-max').value.trim();
+  const priceMin = minText ? normalizePriceCents(minText) : null;
+  const priceMax = maxText ? normalizePriceCents(maxText) : null;
+  if ((minText && priceMin == null) || (maxText && priceMax == null)) {
+    notice('价格请填写大于 0 的数字，最多两位小数。', 'error');
+    return null;
+  }
+  if (priceMin != null && priceMax != null && priceMin > priceMax) {
+    notice('最低价不能高于最高价。', 'error');
+    return null;
+  }
+  return { limit, priceMin, priceMax };
+}
+function persistCollectSettings() {
+  void storage.set({
+    targetCount: $('target-count').value.trim(),
+    priceMin: $('price-min').value.trim(),
+    priceMax: $('price-max').value.trim()
+  });
+}
 function currentSite() {
   const site = resolveSite($('source-url').value);
   if (!site?.supported) {
@@ -157,12 +181,16 @@ $('source-url').addEventListener('change', () => {
   notice(`接下来的商品名称会在${site.label}搜索。`, 'success');
   void storage.set({ sourceUrl: $('source-url').value.trim() });
 });
+for (const id of ['target-count', 'price-min', 'price-max']) $(id).addEventListener('change', persistCollectSettings);
 $('add-form').addEventListener('submit', async event => {
   event.preventDefault(); if (lockedOut || clearing) return;
   const site = currentSite();
   if (!site) return;
+  const settings = collectSettings();
+  if (!settings) return;
   if (!addKeyword(keywords, $('keyword-input').value)) { notice('请输入新的商品名称，空白或重复名称不会添加。'); return; }
-  task = enqueueKeyword(task, keywords.at(-1), site.id);
+  task = enqueueKeyword(task, keywords.at(-1), site.id, settings);
+  persistCollectSettings();
   void storage.set({ sourceUrl: $('source-url').value.trim() });
   $('keyword-input').value = ''; $('keyword-input').focus(); renderKeywords(); renderTask();
   try {
@@ -263,9 +291,12 @@ $('links-panel').addEventListener('toggle', () => { if ($('links-panel').open) r
 window.addEventListener('beforeunload', event => { if (busy) { event.preventDefault(); event.returnValue = ''; } });
 
 async function initialize() {
-  const saved = await storage.get(['keywords', 'task', 'sourceUrl']);
+  const saved = await storage.get(['keywords', 'task', 'sourceUrl', 'targetCount', 'priceMin', 'priceMax']);
   keywords = Array.isArray(saved.keywords) ? saved.keywords.filter(k => typeof k === 'string' && k.trim()) : [];
   if (typeof saved.sourceUrl === 'string' && saved.sourceUrl.trim()) $('source-url').value = saved.sourceUrl;
+  if (normalizeLimit(saved.targetCount)) $('target-count').value = String(normalizeLimit(saved.targetCount));
+  if (typeof saved.priceMin === 'string') $('price-min').value = saved.priceMin;
+  if (typeof saved.priceMax === 'string') $('price-max').value = saved.priceMax;
   task = recoverTask(saved.task);
   if (task) await saveTask(task);
   renderKeywords(); renderTask();

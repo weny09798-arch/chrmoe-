@@ -171,3 +171,38 @@ test('stop or pause wins when a detail verification response arrives at the same
     assert.deepEqual(closeOptions,[{preserveBlocked:false}]);
   }
 });
+test('a collection count of two stops at two distinct listings',async()=>{
+  const task=createTask(['相机','书包']);
+  task.jobs[0].limit=2;
+  const first=Array.from({length:4},(_,i)=>card(String(i+1),29+i));
+  const pages=[{cards:first,end:false},{cards:[{...card('100',50),title:'书包'}],end:true}];
+  let reads=0;
+  await new Runner(task,ports(pages,{
+    read:async()=>pages[Math.min(reads++,pages.length-1)],
+    hash:async image=>({bits:'0'.repeat(16),color:[Number(image.match(/\/(\d+)\.jpg/)[1])*40,0,0],spread:50})
+  })).run();
+  assert.equal(task.jobs[0].scanned,2);
+  assert.equal(selected(task.jobs[0]).length,2);
+  assert.match(task.jobs[0].note,/2条/);
+  assert.equal(task.jobs[1].scanned,1);
+});
+test('a price range keeps only listings inside it and still keeps the cheaper match',async()=>{
+  const task=createTask(['相机']);
+  task.jobs[0].priceMin=2000;
+  task.jobs[0].priceMax=4000;
+  const cards=[card('1',10),card('2',40),card('3',19.99),card('4',25),card('5',40.01)];
+  await new Runner(task,ports([{cards,end:true}],{
+    hash:async image=>({bits:'0'.repeat(16),color:[Number(image.match(/\/(\d+)\.jpg/)[1])*40,0,0],spread:50})
+  })).run();
+  assert.deepEqual(selected(task.jobs[0]).map(item=>item.id),['2','4']);
+  assert.equal(task.jobs[0].skipped,3);
+  assert.match(task.jobs[0].lastSkip,/区间/);
+});
+test('an empty price range still keeps the cheaper listing',async()=>{
+  const task=createTask(['相机']);
+  task.jobs[0].priceMin=null;
+  task.jobs[0].priceMax=null;
+  await new Runner(task,ports([{cards:[card('1',80),card('2',12)],end:true}])).run();
+  assert.equal(selected(task.jobs[0])[0].id,'2');
+  assert.equal(task.jobs[0].skipped,0);
+});

@@ -1,7 +1,7 @@
 // Small OOXML writer for extension exports. ZIP entries are stored without compression.
 const encoder = new TextEncoder();
 import { TEMPLATE_HEADERS, TEMPLATE_INSTRUCTIONS } from './template.mjs';
-import { validProductTitle } from './core.mjs';
+import { outputLimit, validProductTitle } from './core.mjs';
 import { fallbackSku } from './detail.mjs';
 import { matchTemplateXls } from './xls-biff.mjs';
 const LINK_HEADERS = new Set(['商品链接', '主图地址', '货源链接', '产品主图']);
@@ -184,7 +184,7 @@ export function taskSheets(task) {
   const rows = [[TEMPLATE_INSTRUCTIONS], [], [], [], [], [], [], [], [...TEMPLATE_HEADERS]];
   let productNumber = 0;
   for (const job of task.jobs) {
-    const chosen = (job.groups || []).map(group => group.best).filter(item => item && validProductTitle(item.title, job.keyword)).slice(0, 20);
+    const chosen = (job.groups || []).map(group => group.best).filter(item => item && validProductTitle(item.title, job.keyword)).slice(0, outputLimit(job));
     for (const item of chosen) {
       productNumber++;
       rows.push(...productRows(item, productNumber));

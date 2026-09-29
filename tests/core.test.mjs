@@ -40,6 +40,27 @@ test('output is capped at 20 without discarding later cheap replacements', () =>
   addCandidate(job,{...item('cheap',1000),fingerprint:{bits:'0'.repeat(16),color:[0,0,0],spread:50}});
   assert.equal(job.groups.length,25); assert.equal(selected(job).length,20); assert.equal(selected(job)[0].id,'cheap');
 });
+test('a smaller limit keeps that many, and a price range is inclusive', () => {
+  const job=createTask(['相机']).jobs[0];
+  job.limit=10;
+  for(let n=0;n<12;n++) addCandidate(job,{...item(String(n),4000),fingerprint:{bits:'0'.repeat(16),color:[n*100,0,0],spread:50}});
+  assert.equal(selected(job).length,10);
+  assert.equal(core.normalizePriceCents(''),null);
+  assert.equal(core.normalizePriceCents('10.5'),1050);
+  assert.equal(core.normalizePriceCents('0'),null);
+  assert.equal(core.priceAllowed(1000,{priceMin:1000,priceMax:4000}),true);
+  assert.equal(core.priceAllowed(999,{priceMin:1000,priceMax:4000}),false);
+  assert.equal(core.priceAllowed(4001,{priceMin:1000,priceMax:4000}),false);
+  assert.equal(core.priceAllowed(50,{}),true);
+  const task=core.enqueueKeyword(null,'相机','pdd',{limit:10,priceMin:1000,priceMax:5000});
+  assert.equal(task.jobs[0].limit,10);
+  assert.equal(task.jobs[0].priceMin,1000);
+  task.jobs[0].status='done';
+  core.retryJob(task,0);
+  assert.equal(task.jobs[0].limit,10);
+  assert.equal(task.jobs[0].priceMax,5000);
+  assert.equal(task.jobs[0].groups.length,0);
+});
 test('keywords trim, persist without duplication and reject empty values', () => {
   const list=[]; addKeyword(list,'  相机  '); addKeyword(list,'相机'); addKeyword(list,'');
   assert.deepEqual(list,['相机']);
