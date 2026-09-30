@@ -82,7 +82,7 @@ function scanSummary(job) {
   const reasons=Object.entries(job.skipReasons || {}).map(([name,count])=>`${name} ${count}`).join('、');
   const start=job.statsStart ? `此前 ${job.statsStart} 条未记录分类；以下为恢复后的统计：` : '';
   const skips=Math.max(0,(job.skipped || 0)-(job.statsStartSkipped || 0));
-  return `${start}同图合并 ${job.merged || 0} 条 · 识别跳过 ${skips} 条${reasons ? `（${reasons}）` : ''}${job.excluded ? ` · 已删除同类排除 ${job.excluded} 条` : ''}`;
+  return `${start}按商品 ID 去重 · 识别跳过 ${skips} 条${reasons ? `（${reasons}）` : ''}${job.excluded ? ` · 已删除商品排除 ${job.excluded} 条` : ''}`;
 }
 function renderTask() {
   const jobs = task?.jobs || [];
@@ -104,14 +104,14 @@ function renderTask() {
   $('current-detail').textContent = active
     ? active.phase === 'detail'
       ? `正在补全详情 ${active.detailDone || 0} / ${activeItems.length} · 完整 ${activeDetails.complete} · 部分 ${activeDetails.partial} · 失败 ${activeDetails.errors}`
-      : `已扫描 ${active.scanned} / 200 条 · ${active.groups.length} 组主图 · 保留 ${activeItems.length} / ${outputLimit(active)} 条${active.note ? ` · ${active.note}` : ''}${scanSummary(active) ? ` · ${scanSummary(active)}` : ''}`
+      : `已扫描 ${active.scanned} / 200 条 · 保留 ${activeItems.length} / ${outputLimit(active)} 条${active.note ? ` · ${active.note}` : ''}${scanSummary(active) ? ` · ${scanSummary(active)}` : ''}`
     : (task?.status === 'error' ? '部分任务失败，已保留采集结果；请查看每行说明。' : '每个名称收集到设定数量即切换；最多扫描 200 条。');
   $('add-button').disabled = lockedOut || clearing;
   $('clear-all').disabled = lockedOut || clearing || (!keywords.length && !task);
   $('pause').disabled = !(busy || refillWaiting) || (Boolean(runner?.intent) && !refillWaiting); $('pause').hidden = Boolean(resumable);
   $('resume').hidden = !resumable;
   $('resume').disabled = lockedOut || !installed;
-  $('resume').textContent = task?.permissionOrigin ? '授权图片并继续' : '继续';
+  $('resume').textContent = '继续';
   $('stop').disabled = lockedOut || !(busy || resumable || refillWaiting);
   $('show-tab').hidden = !Number.isInteger(task?.detailTabId) && !Number.isInteger(task?.tabId);
   $('export').disabled = lockedOut || !task || exporting;
@@ -299,12 +299,6 @@ $('resume').addEventListener('click', async () => {
   const current = task, request = { cancelled: false };
   pendingResume = request; busy = true; renderTask();
   try {
-    if (current.permissionOrigin) {
-      const granted = await chrome.permissions.request({ origins: [current.permissionOrigin] });
-      if (request.cancelled || task !== current) return;
-      if (!granted) { notice('未获得主图读取权限，任务仍保持暂停。'); return; }
-      current.permissionOrigin = '';
-    }
     if (request.cancelled || task !== current) return;
     pendingResume = null;
     await execute();

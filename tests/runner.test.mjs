@@ -5,9 +5,9 @@ import {Runner} from '../extension/lib/runner.mjs';
 
 const card=(id,price)=>({id,title:'相机',url:`https://mobile.pinduoduo.com/goods.html?goods_id=${id}`,image:`https://img.pddpic.com/${id}.jpg`,priceText:`¥${price}`,key:id});
 function ports(pages, overrides={}) {let i=0;return {open:async()=>{},read:async()=>pages[Math.min(i++,pages.length-1)],scroll:async()=>{},hash:async()=>({bits:'0000000000000000',color:[100,100,100],spread:50}),resolve:async c=>c,enrich:async()=>({}),save:async()=>{},update:()=>{},wait:async()=>{},...overrides};}
-test('later cheaper listing wins and no-result completion is reported as short',async()=>{
+test('different IDs retain both listings and no-result completion is reported as short',async()=>{
   const task=createTask(['相机']); const r=new Runner(task,ports([{cards:[card('1',32)],end:false},{cards:[card('2',29.88)],end:true}]));
-  await r.run();assert.equal(task.status,'done');assert.equal(task.jobs[0].status,'short');assert.equal(selected(task.jobs[0])[0].id,'2');
+  await r.run();assert.equal(task.status,'done');assert.equal(task.jobs[0].status,'short');assert.deepEqual(selected(task.jobs[0]).map(x=>x.id),['1','2']);
 });
 test('skips cards without a recognizable merchandise name before saving results',async()=>{
   const task=createTask(['相机']);const nameless={...card('1',29.88),title:''};
@@ -74,14 +74,16 @@ test('moving viewport over unchanged saved cards eventually stops',async()=>{
   await new Runner(task,ports([],{read:async()=>({cards:job.seen.map(id=>card(id,32)),position:reads++*400,end:false})})).run();
   assert.equal(job.status,'error');assert.ok(reads<=35);
 });
-test('pause during image fetch does not mark candidate processed and resume loses no data',async()=>{
+test('pause during reading does not mark candidate processed and resume loses no data',async()=>{
   const task=createTask(['相机']);let runner;
-  runner=new Runner(task,ports([{cards:[card('1',32)],end:true}],{hash:async()=>{runner.pause();return {bits:'0'.repeat(16),color:[100,100,100],spread:50};}}));
+  runner=new Runner(task,ports([],{read:async()=>{runner.pause();return {cards:[card('1',32)],end:true};}}));
   await runner.run();assert.equal(task.status,'paused');assert.equal(task.jobs[0].seen.length,0);
-  await new Runner(JSON.parse(JSON.stringify(task)),ports([{cards:[card('1',32)],end:true}])).run();
+  const restored=JSON.parse(JSON.stringify(task));
+  await new Runner(restored,ports([{cards:[card('1',32)],end:true}])).run();
+  assert.deepEqual(selected(restored.jobs[0]).map(x=>x.id),['1']);
 });
 test('scan cap is enforced before processing next card',async()=>{
-  const task=createTask(['相机']);const cards=Array.from({length:230},(_,i)=>card(String(i+1),i+1));
+  const task=createTask(['相机']);const cards=Array.from({length:230},(_,i)=>({...card(String(i+1),i+1),title:'本店已拼1万+'}));
   await new Runner(task,ports([{cards,end:true}])).run();assert.equal(task.jobs[0].scanned,200);
 });
 test('twenty distinct links immediately advance to the next product name',async()=>{
@@ -99,7 +101,7 @@ test('twenty distinct links immediately advance to the next product name',async(
 });
 test('stopping leaves current and remaining jobs explicitly stopped',async()=>{
   const task=createTask(['相机','帽子']);let runner;
-  runner=new Runner(task,ports([{cards:[card('1',32)]}],{hash:async()=>{runner.stop();return {};}}));
+  runner=new Runner(task,ports([],{read:async()=>{runner.stop();return {cards:[card('1',32)]};}}));
   await runner.run();assert.equal(task.status,'stopped');assert.deepEqual(task.jobs.map(x=>x.status),['stopped','stopped']);
 });
 test('twenty groups stop reads immediately and enrich in selected order',async()=>{
@@ -206,11 +208,11 @@ test('a price range keeps only listings inside it and still keeps the cheaper ma
   assert.equal(task.jobs[0].skipped,3);
   assert.match(task.jobs[0].lastSkip,/区间/);
 });
-test('an empty price range still keeps the cheaper listing',async()=>{
+test('an empty price range retains both different IDs in discovery order',async()=>{
   const task=createTask(['相机']);
   task.jobs[0].priceMin=null;
   task.jobs[0].priceMax=null;
   await new Runner(task,ports([{cards:[card('1',80),card('2',12)],end:true}])).run();
-  assert.equal(selected(task.jobs[0])[0].id,'2');
+  assert.deepEqual(selected(task.jobs[0]).map(x=>x.id),['1','2']);
   assert.equal(task.jobs[0].skipped,0);
 });

@@ -59,3 +59,8 @@ test('a GBK search keyword still matches the Chinese product title', async () =>
   assert.equal(data.cards[0].title, '天然玉石手电筒');
   assert.equal(data.cards[0].id, '8899');
 });
+
+test('1688 keeps image-free offer IDs and their own title and price, excluding hidden or foreign offers',async()=>{
+  const data=await snapshot('<section><a href="https://detail.1688.com/offer/5566.html"><h3>数码相机</h3><div>¥12.80</div></a><a href="https://detail.1688.com/offer/7788.html"><img src=""><h3>高清相机</h3><div>¥15.00</div></a><a hidden href="https://detail.1688.com/offer/9999.html"><h3>相机</h3><div>¥1</div></a><a href="https://example.com/offer/1111.html"><h3>相机</h3><div>¥1</div></a></section>');
+  assert.deepEqual(Array.from(data.cards,c=>[c.id,c.title,c.priceText,c.image]),[['5566','数码相机','¥12.80',''],['7788','高清相机','¥15.00','']]);
+});

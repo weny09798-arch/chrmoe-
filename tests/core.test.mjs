@@ -20,11 +20,11 @@ test('price extraction ignores promotions and sales counts', () => {
   assert.equal(parsePrice('¥5优惠券 售价39元'), null);
   assert.equal(parsePrice('券后 ¥ 29\n.88'), 2988);
 });
-test('cheaper different listing replaces same-image winner while keeping group order', () => {
+test('different IDs remain in discovery order even if their images match and another is cheaper', () => {
   const job=createTask(['相机']).jobs[0];
   addCandidate(job,item('1',3200)); addCandidate(job,item('2',5000,1)); addCandidate(job,item('3',2988));
-  assert.deepEqual(selected(job).map(x=>x.id),['3','2']);
-  assert.equal(selected(job)[0].cents,2988);
+  assert.deepEqual(selected(job).map(x=>x.id),['1','2','3']);
+  assert.equal(selected(job)[2].cents,2988);
 });
 test('same ID never creates a second group, and serialised checkpoint still deduplicates', () => {
   let job=createTask(['相机']).jobs[0];
@@ -34,11 +34,11 @@ test('same ID never creates a second group, and serialised checkpoint still dedu
   assert.equal(selected(job).length,1);
   assert.equal(selected(job)[0].cents,3000);
 });
-test('output is capped at 20 without discarding later cheap replacements', () => {
+test('output is capped at 20 and a cheaper different ID does not displace retained IDs', () => {
   const job=createTask(['相机']).jobs[0];
   for(let n=0;n<25;n++) addCandidate(job,{...item(String(n),4000),fingerprint:{bits:'0'.repeat(16),color:[n*100,0,0],spread:50}});
   addCandidate(job,{...item('cheap',1000),fingerprint:{bits:'0'.repeat(16),color:[0,0,0],spread:50}});
-  assert.equal(job.groups.length,25); assert.equal(selected(job).length,20); assert.equal(selected(job)[0].id,'cheap');
+  assert.equal(job.groups.length,26); assert.equal(selected(job).length,20); assert.equal(selected(job)[0].id,'0');
 });
 test('a smaller limit keeps that many, and a price range is inclusive', () => {
   const job=createTask(['相机']).jobs[0];

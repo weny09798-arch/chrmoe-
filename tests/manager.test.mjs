@@ -102,7 +102,7 @@ test('clear all stops an active search before old checkpoints can restore data',
   assert.equal(document.getElementById('export').disabled,true);
 });
 
-async function managerFixture(configureTask = () => {}) {
+async function managerFixture(configureTask = () => {}, create = async () => { throw new Error('unexpected collection'); }) {
   const { document, window } = parseHTML(html);
   const task = createTask(['相机']);
   task.status = 'paused'; task.jobs[0].status = 'paused'; task.permissionOrigin = 'https://img.pddpic.com/*';
@@ -118,7 +118,7 @@ async function managerFixture(configureTask = () => {}) {
     storage: { local: { async get() { return saved; }, async set(values) { Object.assign(saved, values); } } },
     permissions: { request: async () => { permissionRequests++; return permission; } },
     tabs: {
-      async create() { tabCreates++; throw new Error('unexpected collection'); },
+      async create() { tabCreates++; return create(); },
       async remove(id) { removedTabs.push(id); },
       async update(id) { activatedTabs.push(id); return { id, windowId: 5 }; }
     },
@@ -131,13 +131,13 @@ async function managerFixture(configureTask = () => {}) {
   return { document, saved, click, decidePermission, removedTabs, activatedTabs, get tabCreates() { return tabCreates; }, get permissionRequests() { return permissionRequests; } };
 }
 
-test('collection explanation distinguishes merged images from rejected names and prices',async()=>{
+test('collection explanation shows ID dedup and rejected fields without claiming historical image merges',async()=>{
   const f=await managerFixture(task=>{
     const job=task.jobs[0];job.scanned=50;job.merged=8;job.skipped=3;
     job.skipReasons={'名称未识别':1,'价格未识别':2};job.note='列表加载停滞，已保留当前结果';
   });
   const note=f.document.querySelector('#result-rows .note').textContent;
-  assert.match(note,/同图合并 8/);assert.match(note,/识别跳过 3/);
+  assert.match(note,/商品 ID 去重/);assert.doesNotMatch(note,/同图合并/);assert.match(note,/识别跳过 3/);
   assert.match(note,/名称未识别 1/);assert.match(note,/价格未识别 2/);
   assert.match(note,/已保留当前结果/);
 });
@@ -152,40 +152,37 @@ test('resuming a legacy task labels the missing prior statistics and only counts
   assert.match(note,/此前 50 条未记录分类/);assert.match(note,/恢复后的统计/);assert.match(note,/识别跳过 0 条/);
 });
 
-test('resume locks task immediately and stop cancels a pending permission grant', async () => {
-  const fixture = await managerFixture();
+test('resume locks task during page opening and stop prevents a duplicate run', async () => {
+  let rejectOpen;const opening=new Promise((_resolve,reject)=>{rejectOpen=reject;});
+  const fixture = await managerFixture(()=>{},()=>opening);
   fixture.click('resume');
   fixture.click('resume');
-  assert.equal(fixture.permissionRequests, 1);
   assert.equal(fixture.document.getElementById('resume').hidden, true);
+  await tick();await tick();assert.equal(fixture.tabCreates,1);
   fixture.click('stop');
-  fixture.decidePermission(true);
+  rejectOpen(new Error('页面打开取消'));
   await tick(); await tick();
   assert.equal(fixture.saved.task.status, 'stopped');
   assert.equal(fixture.saved.task.jobs[0].status, 'stopped');
-  assert.equal(fixture.tabCreates, 0);
+  assert.equal(fixture.tabCreates, 1);assert.equal(fixture.permissionRequests,0);
 });
 
-test('rejected permission request releases the guard for another attempt', async () => {
+test('a failed resume releases the guard for retrying the failed name', async () => {
   const fixture = await managerFixture();
   fixture.click('resume');
-  fixture.decidePermission(Promise.reject(new Error('权限请求失败')));
   await tick(); await tick();
-  assert.equal(fixture.document.getElementById('resume').hidden, false);
   assert.equal(fixture.document.getElementById('add-button').disabled, false);
-  assert.match(fixture.document.getElementById('notice').textContent, /权限请求失败/);
-  assert.equal(fixture.saved.task.status, 'paused');
+  assert.equal(fixture.saved.task.status, 'error');
+  const retry=fixture.document.querySelector('[data-retry-job]');assert.ok(retry);assert.equal(retry.disabled,false);
 });
 
-test('denied permission releases resume guard and keeps saved task resumable', async () => {
+test('resuming a legacy image-blocked task opens collection without asking for image permission', async () => {
   const fixture = await managerFixture();
   fixture.click('resume');
-  fixture.decidePermission(false);
   await tick(); await tick();
-  assert.equal(fixture.saved.task.status, 'paused');
-  assert.equal(fixture.document.getElementById('resume').hidden, false);
   assert.equal(fixture.document.getElementById('add-button').disabled, false);
-  assert.equal(fixture.tabCreates, 0);
+  assert.equal(fixture.tabCreates, 1);assert.equal(fixture.permissionRequests,0);
+  assert.equal(fixture.saved.task.permissionOrigin,'');
 });
 test('detail collection shows its own progress and failures while keeping results exportable', async () => {
   const fixture = await managerFixture();
@@ -215,14 +212,14 @@ test('detail collection shows its own progress and failures while keeping result
   assert.match(fixture.document.getElementById('link-rows').textContent, /详情解析失败/);
 });
 
-test('search progress wording remains unchanged', async () => {
+test('search progress shows retained links without suggesting image groups', async () => {
   const fixture = await managerFixture();
   const job = fixture.saved.task.jobs[0];
   job.status = 'running'; job.phase = 'search'; job.scanned = 43;
   job.groups = [{ best: { id: 'one', title: '相机', cents: 100, url: 'https://example.com' } }];
   await import(`../extension/manager.mjs?case=${Math.random()}`);
   await tick();
-  assert.equal(fixture.document.getElementById('current-detail').textContent, '已扫描 43 / 200 条 · 1 组主图 · 保留 1 / 20 条');
+  assert.equal(fixture.document.getElementById('current-detail').textContent, '已扫描 43 / 200 条 · 保留 1 / 20 条');
 });
 test('finished detail jobs explain completed and failed detail counts unless a job note exists', async () => {
   const fixture = await managerFixture();

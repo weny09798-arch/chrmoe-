@@ -112,12 +112,14 @@ export function normalizeDetail(raw = {}, fallback = {}) {
       skus.push(sku);
     }
   }
-  if (!skus.length) skus.push(fallbackSku({ ...fallback, cents: detailCents || fallback.cents }));
+  const image = galleryImages[0] || httpsUrl(fallback.image);
+  if (!skus.length) skus.push(fallbackSku({ ...fallback, image, cents: detailCents || fallback.cents }));
 
   const rawTitle = text(raw.title);
   const status = text(raw.detailStatus);
   return {
     title: rawTitle || text(fallback.title),
+    image,
     galleryImages,
     descriptionText: text(raw.descriptionText),
     detailImages: urlList(raw.detailImages),

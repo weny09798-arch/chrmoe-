@@ -1,5 +1,6 @@
 import { addCandidate, countDetails, hasDetailData, outputLimit, parsePrice, priceAllowed, selected, validProductTitle, SCAN_LIMIT } from './core.mjs';
 import { siteForJob } from './sites.mjs';
+import { productImage } from './products.mjs';
 
 const finished = status => ['done', 'short', 'error', 'stopped'].includes(status);
 export class Runner {
@@ -24,6 +25,7 @@ export class Runner {
           if (job.phase === 'detail') await this.enrich(job);
           else { await this.ports.open(job, this.task); await this.collect(job); }
         } catch (error) {
+          if (this.intent && !this.refillPause) break;
           if (error.blocked) {
             // A user stop/pause that races with a verification response wins.
             // The current detail item was already reset to pending by enrich().
@@ -89,18 +91,13 @@ export class Runner {
           if (cents === null) throw new Error('展示价格无法明确识别');
           skipReason = '价格不在区间';
           if (!priceAllowed(cents, job)) throw new Error('展示价格不在设定区间内');
-          skipReason = '主图未识别';
-          if (!raw.image) throw new Error('未识别到商品主图，已跳过');
-          skipReason = '主图读取失败';
-          const fingerprint = await this.ports.hash(raw.image);
-          if (this.intent) return;
           skipReason = '链接未识别';
           const resolved = raw.id ? raw : await this.ports.resolve(raw, page, job);
           if (this.intent) return;
           navigated ||= Boolean(resolved.navigated);
           if (!resolved.id || !resolved.url) throw new Error('未识别到商品详情链接');
           const site = siteForJob(job);
-          candidate = { ...resolved, cents, fingerprint, collectedAt: new Date().toISOString(), site: site.id, platform: site.platformForUrl?.(resolved.url) || site.label };
+          candidate = { ...resolved, cents, collectedAt: new Date().toISOString(), site: site.id, platform: site.platformForUrl?.(resolved.url) || site.label };
         } catch (error) {
           if (this.intent && !this.refillPause) return;
           if (error.blocked || error.fatal) throw error;
@@ -117,7 +114,7 @@ export class Runner {
         }
         job.seen.push(raw.key); processedKeys.add(raw.key); job.scanned++;
         await this.checkpoint();
-        extractionFailures = !candidate && ['名称未识别','价格未识别','主图未识别','页面商品变化'].includes(skipReason) ? extractionFailures + 1 : 0;
+        extractionFailures = !candidate && ['名称未识别','价格未识别','页面商品变化'].includes(skipReason) ? extractionFailures + 1 : 0;
         if (job.site === 'taobao' && extractionFailures >= 5) throw new Error('连续 5 条商品在加载重读后仍无法识别，已停止本名称并保留结果；当前淘宝页面需要进一步适配');
         // A detail-page visit replaces the DOM; reread before using other card descriptors.
         if (navigated) break;
@@ -150,7 +147,7 @@ export class Runner {
     job.searchStatus = full ? 'done' : 'short';
     job.phase = 'detail';
     job.status = 'running';
-    job.note = `${full ? `已收集${limit}条，转到下一名称` : job.scanned >= SCAN_LIMIT ? '已扫描至200条上限' : '页面提示搜索结束'}；保留 ${selected(job).length}/${limit} 组`;
+    job.note = `${full ? `已收集${limit}条，开始采集详情` : job.scanned >= SCAN_LIMIT ? '已扫描至200条上限' : '页面提示搜索结束'}；保留 ${selected(job).length}/${limit} 条`;
     if (job.skipped) job.note += `；跳过 ${job.skipped} 条，最近原因：${job.lastSkip}`;
     await this.checkpoint();
     await this.enrich(job);
@@ -166,6 +163,10 @@ export class Runner {
         Object.assign(item, detail);
         item.detailStatus = detail.detailStatus === 'partial' || !hasDetailData(item) ? 'partial' : 'done';
         item.detailNote = detail.detailNote || (item.detailStatus === 'partial' ? '仅采集到基础商品信息' : '');
+        if (!productImage(item)) {
+          item.detailStatus = 'partial';
+          item.detailNote = [item.detailNote,'详情页未读到商品图片，链接已保留'].filter(Boolean).join('；');
+        }
       } catch (error) {
         if (error.blocked) {
           item.detailStatus = 'pending'; item.detailNote = String(error.message || '详情页等待处理').slice(0, 500);

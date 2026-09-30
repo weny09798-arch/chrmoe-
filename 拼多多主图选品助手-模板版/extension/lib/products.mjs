@@ -1,5 +1,3 @@
-import { similar } from './fingerprint.mjs';
-
 function safeImage(value) {
   if (typeof value !== 'string' || !value.trim()) return '';
   try { const url = new URL(value); return url.protocol === 'https:' ? url.href : ''; }
@@ -12,21 +10,14 @@ export function productImage(item) {
   return safeImage(item?.image);
 }
 export function candidateExcluded(job, candidate) {
-  return (job.exclusions || []).some(group =>
-    (candidate.id && group.ids.includes(candidate.id)) ||
-    (candidate.image && group.images.includes(candidate.image)) ||
-    group.fingerprints.some(fp => similar(fp, candidate.fingerprint)));
+  return (job.exclusions || []).some(group => candidate.id && group.ids?.includes(candidate.id));
 }
 export function removeProduct(job, id) {
   const index = job?.groups?.findIndex(group => group.best?.id === id) ?? -1;
   if (index < 0) return false;
   const [group] = job.groups.splice(index, 1);
   job.exclusions ||= [];
-  job.exclusions.push({
-    ids: [...new Set([...(group.ids || []), group.best.id].filter(Boolean))],
-    images: [...new Set([group.image, group.best.image, productImage(group.best)].filter(Boolean))],
-    fingerprints: [group.fingerprint, group.best.fingerprint].filter(Boolean)
-  });
+  job.exclusions.push({ ids: [group.best.id] });
   job.refillRequested = true;
   job.detailDone = job.groups.filter(g => ['done', 'partial', 'error'].includes(g.best?.detailStatus)).length;
   return true;

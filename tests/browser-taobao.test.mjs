@@ -5,6 +5,16 @@ import {readLiveTaobao} from '../extension/lib/taobao-page.mjs';
 import {browserPorts,descriptionDocumentUrl} from '../extension/lib/browser.mjs';
 import {enqueueKeyword} from '../extension/lib/core.mjs';
 
+test('missing search image does not cause preparation to request the page or wait',async()=>{
+  const previous=globalThis.chrome;globalThis.chrome={tabs:{get:async()=>{throw new Error('Must not reread a complete title and price');}}};
+  try {
+    const task=enqueueKeyword(null,'相机','taobao');
+    const raw={id:'123',key:'123',title:'相机',image:'',priceText:'¥13',url:'https://item.taobao.com/item.htm?id=123'};
+    const result=await browserPorts({save:async()=>{},update(){},cardPollWait:async()=>{throw new Error('Must not wait for search images');}}).prepareCard(raw,task.jobs[0]);
+    assert.equal(result.id,'123');assert.equal(result.priceText,'¥13');assert.equal(result.image,'');
+  }finally{globalThis.chrome=previous;}
+});
+
 test('card preparation scrolls once and rereads delayed image and price with a bounded retry',async()=>{
   const previous=globalThis.chrome;let polls=0,scrolls=0,waits=0;
   const raw={id:'123',key:'123',title:'相机',image:'',priceText:'',url:'https://item.taobao.com/item.htm?id=123'};

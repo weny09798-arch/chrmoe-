@@ -34,17 +34,6 @@ test('product ID extraction rejects foreign sites and malformed IDs',()=>{
   assert.equal(productId('javascript:alert(1)'),'');
   assert.equal(productId('https://mobile.pinduoduo.com/goods.html?goods_id=NaN'),'');
 });
-test('image access requests only the observed source and never fetches before permission',async()=>{
-  const prior=globalThis.chrome, priorFetch=globalThis.fetch; let requested, fetched=false;
-  globalThis.chrome={permissions:{contains:async value=>{requested=value;return false;}}};
-  globalThis.fetch=async()=>{fetched=true;throw new Error('must not reach network');};
-  try {
-    const ports=browserPorts({save:async()=>{},update:()=>{}});
-    await assert.rejects(()=>ports.hash('https://img.pddpic.com/goods/a.jpg'),error=>error.blocked&&error.permissionOrigin==='https://img.pddpic.com/*');
-    assert.deepEqual(requested,{origins:['https://img.pddpic.com/*']});assert.equal(fetched,false);
-    await assert.rejects(()=>ports.hash('https://img.pddpic.com.attacker.example/a.jpg'),/暂不支持/);
-  } finally {globalThis.chrome=prior;globalThis.fetch=priorFetch;}
-});
 test('manual navigation to a different search pauses rather than saving unrelated goods',async()=>{
   const prior=globalThis.chrome; const task=createTask(['相机']); task.tabId=42;
   let pageUrl=searchUrl('相机');

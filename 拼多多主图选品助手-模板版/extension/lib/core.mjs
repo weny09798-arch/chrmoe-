@@ -1,4 +1,3 @@
-import { similar } from './fingerprint.mjs';
 import { candidateExcluded, prepareRefill } from './products.mjs';
 
 export const SCAN_LIMIT = 200;
@@ -123,15 +122,12 @@ const detailFinished = item => ['done', 'partial', 'error'].includes(item.detail
 export function countDetails(job) { return selected(job).filter(detailFinished).length; }
 
 export function addCandidate(job, candidate) {
-  if (!candidate.id || !candidate.fingerprint || !Number.isSafeInteger(candidate.cents) || candidate.cents <= 0) return false;
+  if (!candidate.id || !Number.isSafeInteger(candidate.cents) || candidate.cents <= 0) return false;
   if (candidateExcluded(job, candidate)) return false;
-  // Keep the original group representative stable: replacing it with each winner can cause similarity drift.
-  let group = job.groups.find(g => g.ids.includes(candidate.id));
-  if (!group) group = job.groups.find(g => g.image === candidate.image || similar(g.fingerprint, candidate.fingerprint));
+  const group = job.groups.find(g => g.best.id === candidate.id);
   if (!group) {
-    job.groups.push({ ids: [candidate.id], image: candidate.image, fingerprint: candidate.fingerprint, best: candidate });
+    job.groups.push({ ids: [candidate.id], best: candidate });
   } else {
-    if (!group.ids.includes(candidate.id)) group.ids.push(candidate.id);
     if (!group.retained && candidate.cents < group.best.cents) group.best = candidate;
   }
   return true;
@@ -139,6 +135,7 @@ export function addCandidate(job, candidate) {
 
 export function recoverTask(task) {
   if (!task || task.version !== 1 || !Array.isArray(task.jobs)) return null;
+  task.permissionOrigin = '';
   if (['running', 'pending', 'blocked'].includes(task.status)) task.status = 'paused';
   for (const job of task.jobs) {
     if (prepareRefill(job)) { job.status = 'paused'; task.status = 'paused'; }

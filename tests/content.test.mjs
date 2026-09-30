@@ -20,6 +20,18 @@ test('ignores hidden cards and unrelated small icons',async()=>{
   const data=await snapshot('<a href="goods.html?goods_id=123" hidden><img src="https://img.pddpic.com/a.jpg"><div>¥32</div></a><img width="20" height="20" src="https://img.pddpic.com/icon.png">');
   assert.equal(data.cards.length,0);
 });
+
+test('valid product links are independent of absent or unloaded search images',async()=>{
+  const data=await snapshot('<section><div><a href="goods.html?goods_id=123"><h3>数码相机</h3><span>¥12.80</span></a></div><div><a href="goods.html?goods_id=456"><img src=""><h3>高清相机</h3><span>¥15.00</span></a></div></section>');
+  assert.deepEqual(Array.from(data.cards,c=>[c.id,c.title,c.image]),[['123','数码相机',''],['456','高清相机','']]);
+  assert.match(data.cards[0].priceText,/¥12\.80/);assert.doesNotMatch(data.cards[0].priceText,/¥15\.00/);
+});
+
+test('image-free product extraction ignores hidden and foreign links without merging two card prices',async()=>{
+  const data=await snapshot('<div><a hidden href="goods.html?goods_id=11"><h3>相机</h3><span>¥1</span></a><a href="https://example.com/goods.html?goods_id=22"><h3>相机</h3><span>¥2</span></a><a href="goods.html?goods_id=33"><h3>相机</h3><span>¥3</span></a></div>');
+  assert.deepEqual(Array.from(data.cards,c=>c.id),['33']);
+  assert.equal(data.cards[0].priceText,'相机¥3');
+});
 test('visible validation dialog blocks extraction even with cards behind it',async()=>{
   const data=await snapshot('<div role="dialog">请完成安全验证 拖动滑块</div><a href="goods.html?goods_id=123"><img src="https://img.pddpic.com/a.jpg"><div>¥32</div></a>');
   assert.equal(data.blocked,true);

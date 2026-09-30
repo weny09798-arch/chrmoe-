@@ -134,27 +134,19 @@
       if (!id || seen.has(id)) continue;
       const el = cardForAnchor(anchor);
       const picture = productImage(el, anchor);
-      if (!picture) continue;
-      const title = titleFor(el, anchor, picture.img);
+      const title = titleFor(el, anchor, picture?.img);
       const price = priceText(el);
       seen.add(id);
-      found.push({ el, anchor, card: { id, key: id, image: picture.url, title, priceText: price, url: `https://detail.1688.com/offer/${id}.html` } });
+      found.push({ el, anchor, card: { id, key: id, image: picture?.url || '', title, priceText: price, url: `https://detail.1688.com/offer/${id}.html` } });
     }
     return found;
   }
   function scrollRoot() {
-    const img = foundImage();
-    for (let node = img?.parentElement; node && node !== document.body; node = node.parentElement) {
+    const seed = cardsWithElements()[0]?.el;
+    for (let node = seed; node && node !== document.body; node = node.parentElement) {
       if (node.scrollHeight > node.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(node).overflowY)) return node;
     }
     return document.scrollingElement || document.documentElement;
-  }
-  function foundImage() {
-    for (const anchor of document.querySelectorAll(ANCHOR_SEL)) {
-      const picture = productImage(cardForAnchor(anchor), anchor);
-      if (picture) return picture.img;
-    }
-    return null;
   }
   function snapshot() {
     const cards = cardsWithElements().map(item => item.card);

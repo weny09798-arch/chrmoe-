@@ -1,7 +1,6 @@
-import { fingerprint } from './fingerprint.mjs';
 import { normalizeDetail } from './detail.mjs';
 import {parsePrice,validProductTitle} from './core.mjs';
-import { allowedImageHost, siteById, siteForJob } from './sites.mjs';
+import { siteById, siteForJob } from './sites.mjs';
 import { readLiveTaobao } from './taobao-page.mjs';
 
 export const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -218,7 +217,6 @@ async function descriptionImages(detailUrl) {
 
 export function browserPorts({ save, update, detailPollLimit = 40, detailPollWait = wait, cardPollWait = wait }) {
   let tabId, task, detailTabId, currentJob;
-  const imageCache = new Map();
   async function closeDetail({ preserveBlocked = false } = {}) {
     if (preserveBlocked && task?.status === 'blocked' && Number.isInteger(task.detailTabId)) return;
     if (detailTabId === undefined && Number.isInteger(task?.detailTabId)) detailTabId = task.detailTabId;
@@ -379,31 +377,8 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
     if (!site.isSearch(page.url, job.keyword)) throw blocked(`采集页已离开“${job.keyword}”的搜索结果，请返回后继续`);
     return page;
   }
-  async function hash(rawUrl) {
-    if (imageCache.has(rawUrl)) return imageCache.get(rawUrl);
-    const url = new URL(rawUrl);
-    if (url.protocol !== 'https:' || !allowedImageHost(url.hostname)) throw new Error(`暂不支持的图片来源：${url.hostname}`);
-    const origin = `${url.origin}/*`;
-    if (!await chrome.permissions.contains({ origins: [origin] })) throw blocked(`需要读取 ${url.hostname} 的商品主图；点击“授权图片并继续”`, origin);
-    const response = await fetch(url.href, { credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(12000) });
-    if (!response.ok) throw new Error(`图片下载失败（${response.status}）`);
-    if (Number(response.headers.get('content-length')) > 10 * 1024 * 1024) throw new Error('商品图片过大');
-    const blob = await response.blob();
-    if (blob.size > 10 * 1024 * 1024) throw new Error('商品图片过大');
-    const bitmap = await createImageBitmap(blob);
-    try {
-      if (bitmap.width < 40 || bitmap.height < 40) throw new Error('图片尺寸不足，无法可靠去重');
-      const canvas = new OffscreenCanvas(32, 32), ctx = canvas.getContext('2d', { willReadFrequently: true });
-      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 32, 32); ctx.drawImage(bitmap, 0, 0, 32, 32);
-      const value = fingerprint(ctx.getImageData(0, 0, 32, 32).data);
-      if (value.spread < 8) throw new Error('主图内容过少，无法可靠去重');
-      if (imageCache.size >= 400) imageCache.delete(imageCache.keys().next().value);
-      imageCache.set(rawUrl, value);
-      return value;
-    } finally { bitmap.close(); }
-  }
   async function prepareCard(card,job,cancelled=()=>false) {
-    const complete=c=>c?.image&&validProductTitle(c.title,job.keyword)&&parsePrice(c.priceText)!==null;
+    const complete=c=>c&&validProductTitle(c.title,job.keyword)&&parsePrice(c.priceText)!==null;
     if(siteForJob(job).id!=='taobao'||complete(card)||cancelled())return card;
     currentJob=job;
     const before=await read(job);
@@ -476,7 +451,7 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
       job.restartSearch = false;
       await save(task); await wait(900); await ready();
     },
-    read, prepareCard, hash, resolve, enrich, close: closeDetail, wait, save, update,
+    read, prepareCard, resolve, enrich, close: closeDetail, wait, save, update,
     async scroll() { return message({ type: 'PDD_SCROLL' }); }
   };
 }

@@ -14,6 +14,7 @@
   const text = el => (el?.innerText || el?.textContent || '').trim();
   function imageUrl(img) {
     const raw = img.currentSrc || img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-original');
+    if (!raw) return '';
     try { const url = new URL(raw, location.href); return url.protocol === 'https:' ? url.href : ''; } catch { return ''; }
   }
   function largeImage(img) {
@@ -43,6 +44,17 @@
     }
     return null;
   }
+  const productSelector = 'a[href*="goods_id="], [data-goods-id]';
+  function cardForProduct(seed) {
+    for (let el = seed, depth = 0; el && el !== document.body && depth < 7; el = el.parentElement, depth++) {
+      const ids = new Set([el, ...el.querySelectorAll(productSelector)].map(goodsId).filter(Boolean));
+      if (ids.size > 1) return null;
+      const value = text(el);
+      if (value.length > 1600) return null;
+      if (/[¥￥]\s*\d/.test(value)) return el;
+    }
+    return null;
+  }
   const badgePrefix = /^(?:已(?:缴纳|交纳|交付)保证金|好评(?:超|率)?\d+(?:\.\d+)?%?同款|\d+(?:\.\d+)?(?:万|千)?\+?人好评|[\p{L}]{1,12}(?:地区|地方|省|市)?(?:不配送|不可配送|不支持配送)|未发货秒退|(?:券后|立减|补贴|满减)[¥￥]?\d+(?:\.\d+)?(?:元|折)?|(?:本店)?已拼\d+(?:\.\d+)?(?:万|千)?\+?(?:件|人)?|包邮|旗舰店|正品险|退货包运费)[\s·|]*/u;
   function cleanTitle(value) {
     let title = String(value || '').trim();
@@ -63,13 +75,23 @@
     const candidates = [
       ...(explicit ? [ownText(explicit), ...[...explicit.querySelectorAll('span,div,p')].filter(el => !el.children.length).map(text)] : []),
       ...[...card.querySelectorAll('span,div,p')].filter(el => !el.children.length).map(text),
-      img.getAttribute('alt'), ownText(card)
+      img?.getAttribute('alt'), ownText(card)
     ];
     return candidates.map(cleanTitle).find(title => title && relatedToSearch(title)) || '';
   }
   function cardsWithElements() {
     const found = [], seen = new Set();
+    for (const seed of document.querySelectorAll(productSelector)) {
+      const id = goodsId(seed);
+      if (!id || seen.has(id) || !visible(seed)) continue;
+      const el = cardForProduct(seed);
+      if (!el || !visible(el)) continue;
+      const img = [...el.querySelectorAll('img')].find(largeImage);
+      seen.add(id);
+      found.push({ el, card: { id, key: id, image: img ? imageUrl(img) : '', title: titleFor(el,img), priceText: text(el), url: `https://mobile.pinduoduo.com/goods.html?goods_id=${id}` } });
+    }
     for (const img of document.querySelectorAll('img')) {
+      if (found.some(item => item.el.contains(img))) continue;
       if (!largeImage(img)) continue;
       const el = cardFor(img);
       if (!el || !visible(el)) continue;
@@ -82,8 +104,8 @@
     return found;
   }
   function scrollRoot() {
-    const img = [...document.querySelectorAll('img')].find(largeImage);
-    for (let p = img?.parentElement; p && p !== document.body; p = p.parentElement) {
+    const seed = cardsWithElements()[0]?.el || [...document.querySelectorAll('img')].find(largeImage);
+    for (let p = seed; p && p !== document.body; p = p.parentElement) {
       if (p.scrollHeight > p.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(p).overflowY)) return p;
     }
     return document.scrollingElement || document.documentElement;

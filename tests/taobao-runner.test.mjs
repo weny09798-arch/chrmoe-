@@ -37,7 +37,7 @@ test('systematic extraction failure stops after five post-retry failures rather 
   const task=enqueueKeyword(null,'相机','taobao',{limit:13});let attempts=0;
   const raw=id=>({id,key:id,title:'相机',image:'',priceText:'¥13',url:`https://item.taobao.com/item.htm?id=${id}`});
   const good={...raw('1'),image:'https://img.alicdn.com/item-1.jpg'};
-  await new Runner(task,{...pagePorts({}),read:async()=>({cards:[good,...Array.from({length:103},(_,i)=>raw(String(i+2)))],end:false}),prepareCard:async c=>{if(!c.image)attempts++;return c;}}).run();
+  await new Runner(task,{...pagePorts({}),read:async()=>({cards:[good,...Array.from({length:103},(_,i)=>({...raw(String(i+2)),priceText:''}))],end:false}),prepareCard:async c=>{if(!c.priceText)attempts++;return c;}}).run();
   assert.equal(task.jobs[0].status,'error');assert.equal(attempts,5);assert.equal(task.jobs[0].scanned,6);
   assert.deepEqual(selected(task.jobs[0]).map(x=>x.id),['1']);
   assert.match(task.jobs[0].note,/连续.*5.*识别/);
@@ -58,7 +58,7 @@ test('Taobao collection retains Tmall source and shares the limit, exclusions an
   assert.equal(selected(job)[0].descriptionText,'详情');
 });
 
-test('fifty listings with eight repeated main images keep forty-two goods, never collapse to campaign badges',async()=>{
+test('fifty listings with repeated artwork stop at forty-five distinct product IDs',async()=>{
   let html='';
   for(let id=1;id<=50;id++){
     const picture=id<=42?id:id-42;
@@ -70,9 +70,9 @@ test('fifty listings with eight repeated main images keep forty-two goods, never
   for(const img of f.document.querySelectorAll('img'))img.getBoundingClientRect=()=>img.className==='campaignTag'?{width:96,height:18}:{width:280,height:280};
   const task=enqueueKeyword(null,'相机','taobao',{limit:45});
   await new Runner(task,pagePorts(f)).run();
-  assert.equal(task.jobs[0].scanned,50);assert.equal(task.jobs[0].skipped,0);
-  assert.equal(selected(task.jobs[0]).length,42);assert.equal(task.jobs[0].merged,8);
-  assert.equal(task.jobs[0].status,'short');
+  assert.equal(task.jobs[0].scanned,45);assert.equal(task.jobs[0].skipped,0);
+  assert.equal(selected(task.jobs[0]).length,45);assert.equal(task.jobs[0].merged,0);
+  assert.equal(task.jobs[0].status,'done');
   assert.ok(selected(task.jobs[0]).every(x=>!x.image.includes('shared-campaign')));
 });
 
@@ -123,12 +123,13 @@ test('a document reload cannot click page two again while its goods are still lo
   assert.deepEqual(selected(task.jobs[0]).map(x=>x.id),['1','2']);
 });
 
-test('goods with only a tiny badge are counted as missing main images instead of disappearing',async()=>{
+test('goods with only a tiny badge retain their link without image hashing',async()=>{
   const f=await taobaoPage(taobaoCard('1').replace('<img src=','<img width="20" height="20" src=')+'<div class="Pagination"><button disabled>下一页</button></div>');
   const task=enqueueKeyword(null,'相机','taobao',{limit:2});let hashes=0;
   await new Runner(task,{...pagePorts(f),hash:async()=>{hashes++;return sampleHash(1);}}).run();
-  assert.equal(task.jobs[0].scanned,1);assert.equal(task.jobs[0].skipped,1);
-  assert.equal(task.jobs[0].skipReasons['主图未识别'],1);assert.equal(hashes,0);
+  assert.equal(task.jobs[0].scanned,1);assert.equal(task.jobs[0].skipped,0);
+  assert.equal(selected(task.jobs[0]).length,1);assert.equal(hashes,0);
+  assert.equal(selected(task.jobs[0])[0].detailStatus,'partial');
 });
 
 test('pausing during pagination persists the source keys and resumes after a fresh page document',async()=>{

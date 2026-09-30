@@ -19,7 +19,7 @@ test('normalizes the documented complete detail fixture', () => {
 
 test('returns the stable shape, trims title and uses fallback title when missing', () => {
   assert.deepEqual(normalizeDetail({ title: '  原始标题  ' }, { title: '兜底标题' }), {
-    title: '原始标题', galleryImages: [], descriptionText: '', detailImages: [], category: '',
+    title: '原始标题', image: '', galleryImages: [], descriptionText: '', detailImages: [], category: '',
     attributes: [], videoUrl: '', certificateImages: [], sizeChartImages: [], specNames: [],
     skus: [{ id: '', specs: [], cents: 0, image: '', stock: '', weightKg: '', sizeCm: '' }],
     detailCents: 0, detailStatus: 'done', detailNote: ''

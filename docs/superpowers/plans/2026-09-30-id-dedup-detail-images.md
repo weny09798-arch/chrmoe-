@@ -13,16 +13,20 @@
 - Preserve nine pre-existing local modifications; isolated branch based on main 1ae4eeb. No live-site workaround after prior safety denial.
 
 ### Task 1: ID grouping and deletion
-- [ ] Replace old image-group tests with expectations: IDs 1,2,3 retained even with identical images; duplicate ID 1 still one result; missing image/fingerprint accepted. Run `node --test tests/core.test.mjs tests/products.test.mjs`, observe expected failures.
-- [ ] In core.mjs remove similar import/fingerprint requirement and use `job.groups.find(g=>g.best.id===candidate.id)`. In products.mjs exclude only IDs and store only removed best.id; legacy group members do not merge future products. Recovery keeps previous winners, discards image-based exclusion behavior.
-- [ ] Verify deletion/refill retains prior details, ignores old image exclusions, and reaches target with different IDs of identical art; commit tested behavior.
+- [x] Replace old image-group tests with expectations: IDs 1,2,3 retained even with identical images; duplicate ID 1 still one result; missing image/fingerprint accepted. Run `node --test tests/core.test.mjs tests/products.test.mjs`, observe expected failures.
+- [x] In core.mjs remove similar import/fingerprint requirement and use `job.groups.find(g=>g.best.id===candidate.id)`. In products.mjs exclude only IDs and store only removed best.id; legacy group members do not merge future products. Recovery keeps previous winners, discards image-based exclusion behavior.
+- [x] Verify deletion/refill retains prior details, ignores old image exclusions, and reaches target with different IDs of identical art; commit tested behavior.
 
 ### Task 2: Search and automatic detail images
-- [ ] Write integrated tests for all sources: missing image cards reach requested count without hash calls; details supply first gallery image to preview/export; ordinary detail failure retains link; blocked detail remains resumable. Run `node --test tests/id-collection.test.mjs` red.
-- [ ] Runner removes image requirement/hash, browser removes hash implementation/cache and prepareCard completeness excludes images. normalizeDetail sets primary image and fallback SKU image from gallery first. Enrich marks missing primary image as partial with explicit note, preserves collected item on error.
-- [ ] Update Taobao reader/runner tests to preserve 50 distinct IDs despite repeated art, stop on count, and prepare only missing name/price. Run targeted tests green.
+- [x] Write integrated tests for all sources: missing image cards reach requested count without hash calls; details supply first gallery image to preview/export; ordinary detail failure retains link; blocked detail remains resumable. Run `node --test tests/id-collection.test.mjs` red.
+- [x] Runner removes image requirement/hash, browser removes hash implementation/cache and prepareCard completeness excludes images. normalizeDetail sets primary image and fallback SKU image from gallery first. Enrich marks missing primary image as partial with explicit note, preserves collected item on error.
+- [x] Update Taobao reader/runner tests to preserve 50 distinct IDs despite repeated art, stop on count, and prepare only missing name/price. Run targeted tests green.
 
 ### Task 3: UI, review, release
-- [ ] Update manager text/manifest to ID dedup, detail images and ID-only deletion; no same-image merge claim. Version 1.5.0; README explains behavior change and old task retry.
-- [ ] Full `npm test`, `npm run check`, `git diff --check`; synchronize tracked delivery copies and verify hashes. Request independent reviewer; repair substantive issues with failing tests.
+- [x] Update manager text/manifest to ID dedup, detail images and ID-only deletion; no same-image merge claim. Version 1.5.0; README explains behavior change and old task retry.
+- [x] Full `npm test`, `npm run check`, `git diff --check`; synchronize tracked delivery copies and verify hashes. Request independent reviewer; repair substantive issues with failing tests.
 - [ ] Commit, fast-forward main, reverify merged tests/local-file preservation, create verified 30-entry ZIP, push authorized GitHub main, archive only this managed worktree.
+
+Review scope extension: real PDD and 1688 content adapters also gated on images. Added failing DOM samples before removal of those gates; PDD now finds independent ID/link cards and never turns empty src into /null. No-image nested result scrolling uses the first card rather than a first image. Real adapters -> Runner -> detail normalization -> template export retains 13 IDs for each source in a controlled fixture. Opening errors racing with manual Stop preserve stopped job state.
+
+Verification before integration: 228/228 full tests pass; module/manifest check and whitespace check pass; source/delivery hashes match. Independent read-only reviewer rechecked the repaired adapters and ran 70 relevant tests, with no remaining concrete finding. Actual live-site layout is unverified; no bypass of prior site-access denial was attempted.

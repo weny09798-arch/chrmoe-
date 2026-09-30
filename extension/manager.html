@@ -3,7 +3,7 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>主图选品助手</title><link rel="icon" href="icons/icon48.png"><link rel="stylesheet" href="manager.css"></head>
 <body>
   <div class="app">
-    <header class="masthead"><div class="brand"><img src="icons/icon48.png" width="42" height="42" alt=""><div><h1>主图选品助手</h1><p>不同主图，同图低价。</p></div></div><span class="local-tag"><span></span> 清单保存在本机</span></header>
+    <header class="masthead"><div class="brand"><img src="icons/icon48.png" width="42" height="42" alt=""><div><h1>主图选品助手</h1><p>按商品 ID 收集，自动补全详情。</p></div></div><span class="local-tag"><span></span> 清单保存在本机</span></header>
     <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
     <main class="layout">
       <aside class="panel keywords-panel">
@@ -25,7 +25,7 @@
         <div class="aside-note"><span class="dot"></span><p>清单会自动保存，下次打开继续使用。</p></div>
       </aside>
       <section class="workspace">
-        <div class="section-heading workspace-heading"><div><h2>采集工作台</h2><p class="muted">搜索商品 → 主图去重 → 保留最低价 → 导出 Excel</p></div><div class="export-controls"><label class="sr-only" for="export-format">导出文件类型</label><select id="export-format" aria-label="导出文件类型"><option value="xlsx" selected>新版 .xlsx</option><option value="xls">模板同款 .xls</option></select><button id="export" class="button export" disabled>↓ 导出 Excel</button></div></div>
+        <div class="section-heading workspace-heading"><div><h2>采集工作台</h2><p class="muted">搜索商品 → 收集链接 → 采集详情 → 导出 Excel</p></div><div class="export-controls"><label class="sr-only" for="export-format">导出文件类型</label><select id="export-format" aria-label="导出文件类型"><option value="xlsx" selected>新版 .xlsx</option><option value="xls">模板同款 .xls</option></select><button id="export" class="button export" disabled>↓ 导出 Excel</button></div></div>
         <div class="stats"><div class="stat"><span>本次商品名称</span><strong id="stat-keywords">0<small>个</small></strong></div><div class="stat"><span>已处理名称</span><strong id="stat-done">0<small>个</small></strong></div><div class="stat"><span>已收集链接</span><strong id="stat-links">0<small>条</small></strong></div></div>
         <section class="panel progress-panel" aria-label="任务进度">
           <div class="section-heading"><h3 id="task-title">准备开始</h3><span id="task-badge" class="badge">未开始</span></div>
@@ -36,11 +36,11 @@
           <p class="keep-open">运行时请保持本管理页和采集页打开。关闭后可从已保存的进度继续。</p>
         </section>
         <section class="panel results-panel"><div class="section-heading"><h3>采集结果</h3><span class="muted" id="result-subtitle">每个名称按设定数量收集</span></div>
-          <div id="results-empty" class="results-empty"><div class="empty-art" aria-hidden="true"><i></i><i></i><i></i></div><h3>你的选品结果将在这里</h3><p>相同主图的商品只保留展示价格最低的一条。</p></div>
+          <div id="results-empty" class="results-empty"><div class="empty-art" aria-hidden="true"><i></i><i></i><i></i></div><h3>你的选品结果将在这里</h3><p>同一商品 ID 只保留一次，图片会在详情采集后补全。</p></div>
           <div id="result-table-wrap" class="table-wrap" hidden><table><thead><tr><th>商品名称</th><th>状态</th><th>已扫描</th><th>链接</th><th>说明</th><th>操作</th></tr></thead><tbody id="result-rows"></tbody></table></div>
         </section>
-        <details class="panel links-panel" id="links-panel" hidden><summary>查看已收集的商品链接 <span id="links-count"></span></summary><p class="muted">点击 × 删除不需要的商品，稍后自动补齐这个名称的数量；同主图商品也会排除。</p><div class="table-wrap"><table><thead><tr><th>搜索名称</th><th>商品图片</th><th>商品标题</th><th>展示价格</th><th>详情状态</th><th>详情说明</th><th>链接</th><th>操作</th></tr></thead><tbody id="link-rows"></tbody></table></div></details>
-        <footer>价格以本次扫描到的页面展示价为准，可能因规格或优惠条件不同而变化。主图相似度识别可能存在误差。</footer>
+        <details class="panel links-panel" id="links-panel" hidden><summary>查看已收集的商品链接 <span id="links-count"></span></summary><p class="muted">点击 × 删除不需要的商品，稍后自动补齐这个名称的数量；只排除被删除的商品 ID。</p><div class="table-wrap"><table><thead><tr><th>搜索名称</th><th>商品图片</th><th>商品标题</th><th>展示价格</th><th>详情状态</th><th>详情说明</th><th>链接</th><th>操作</th></tr></thead><tbody id="link-rows"></tbody></table></div></details>
+        <footer>价格以本次扫描到的页面展示价为准，可能因规格或优惠条件不同而变化。图片采集失败会保留链接并显示原因。</footer>
       </section>
     </main>
   </div>
