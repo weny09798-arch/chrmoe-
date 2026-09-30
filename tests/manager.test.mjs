@@ -25,6 +25,23 @@ test('adding a name immediately queues collection and opens the collection tab',
   assert.equal(saved.task.jobs[0].keyword,'苹果手机壳');
   assert.equal(tabCreates,1);
 });
+
+test('a Taobao address from the manager creates a Taobao job with its saved quantity', async () => {
+  const { document, window } = parseHTML(html); const saved = { keywords: [], task: null }; const opened = [];
+  globalThis.document = document; globalThis.window = window;
+  globalThis.chrome = { runtime: { id: 'test-extension' }, storage: { local: { get: async () => saved, set: async values => Object.assign(saved, values) } },
+    tabs: { create: async options => { opened.push(options); throw new Error('受控搜索结束'); } } };
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: { request: async (_name,_options,callback) => callback({}) } } });
+  await import(`../extension/manager.mjs?case=${Math.random()}`); await tick();
+  document.getElementById('source-url').value = 'https://www.taobao.com/';
+  document.getElementById('target-count').value = '2';
+  document.getElementById('keyword-input').value = '相机包';
+  document.getElementById('add-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+  for (let i=0;i<4;i++) await tick();
+  assert.equal(saved.task.jobs[0].site, 'taobao'); assert.equal(saved.task.jobs[0].limit, 2);
+  assert.equal(new URL(opened[0].url).hostname, 's.taobao.com');
+  assert.equal(new URL(opened[0].url).searchParams.get('q'), '相机包');
+});
 test('a name added during collection is saved and searched after the current name', async () => {
   const { document, window }=parseHTML(html);
   const saved={keywords:[],task:null};let created=0,rejectFirst;

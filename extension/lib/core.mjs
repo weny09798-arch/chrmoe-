@@ -70,7 +70,7 @@ export function validProductTitle(title, keyword) {
 function createJob(keyword, site = 'pdd', options = {}) {
   const limit = normalizeLimit(options.limit);
   return {
-    keyword, site: site === '1688' ? '1688' : 'pdd',
+    keyword, site: site === '1688' || site === 'taobao' ? site : 'pdd',
     limit: limit || OUTPUT_LIMIT,
     priceMin: Number.isSafeInteger(options.priceMin) ? options.priceMin : null,
     priceMax: Number.isSafeInteger(options.priceMax) ? options.priceMax : null,

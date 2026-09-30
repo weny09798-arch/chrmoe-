@@ -76,7 +76,7 @@ export class Runner {
           navigated ||= Boolean(resolved.navigated);
           if (!resolved.id || !resolved.url) throw new Error('未识别到商品详情链接');
           const site = siteForJob(job);
-          candidate = { ...resolved, cents, fingerprint, collectedAt: new Date().toISOString(), site: site.id, platform: site.label };
+          candidate = { ...resolved, cents, fingerprint, collectedAt: new Date().toISOString(), site: site.id, platform: site.platformForUrl?.(resolved.url) || site.label };
         } catch (error) {
           if (this.intent && !this.refillPause) return;
           if (error.blocked || error.fatal) throw error;

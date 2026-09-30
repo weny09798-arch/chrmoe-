@@ -229,7 +229,7 @@ function persistCollectSettings() {
 function currentSite() {
   const site = resolveSite($('source-url').value);
   if (!site?.supported) {
-    notice('这个网址还不能采集。请填写拼多多或 1688 的网址。', 'error');
+    notice('这个网址还不能采集。请填写拼多多、1688 或淘宝的网址。', 'error');
     return null;
   }
   return site;

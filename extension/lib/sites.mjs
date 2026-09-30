@@ -58,7 +58,31 @@ const ali = {
   }
 };
 
-const sites = { pdd, '1688': ali };
+const taobao = {
+  id: 'taobao', label: '淘宝', supported: true,
+  contentScript: 'content-taobao.js', detailScript: 'detail-taobao.js',
+  searchUrl(keyword) { const url = new URL('https://s.taobao.com/search'); url.searchParams.set('q', keyword); return url.href; },
+  isSearch(raw, keyword) {
+    try { const url = new URL(raw); return url.protocol === 'https:' && ['s.taobao.com','www.taobao.com','search.taobao.com'].includes(url.hostname) && /^\/search\/?$/.test(url.pathname) && keywordFromSearch(url.search, 'q') === keyword; }
+    catch { return false; }
+  },
+  productId(raw) {
+    try {
+      const url = new URL(raw); const id = url.searchParams.get('id');
+      const path = ['item.taobao.com','detail.tmall.com','detail.m.tmall.com'].includes(url.hostname) && url.pathname === '/item.htm'
+        || url.hostname === 'h5.m.taobao.com' && url.pathname === '/awp/core/detail.htm';
+      return url.protocol === 'https:' && path && /^\d+$/.test(id || '') ? id : '';
+    } catch { return ''; }
+  },
+  productUrl(id, original = '') {
+    const host = this.productId(original) === id && new URL(original).hostname.endsWith('.tmall.com') ? 'detail.tmall.com' : 'item.taobao.com';
+    return `https://${host}/item.htm?id=${id}`;
+  },
+  platformForUrl(raw) { return this.productId(raw) && new URL(raw).hostname.endsWith('.tmall.com') ? '天猫' : '淘宝'; },
+  isOnSite(raw) { try { const url = new URL(raw); return url.protocol === 'https:' && /(^|\.)(taobao|tmall)\.com$/.test(url.hostname); } catch { return false; } }
+};
+
+const sites = { pdd, '1688': ali, taobao };
 
 export function siteById(id) { return sites[id] || pdd; }
 
@@ -73,6 +97,7 @@ export function resolveSite(input) {
   if (url.protocol !== 'https:') return null;
   const host = url.hostname.toLowerCase();
   if (host === '1688.com' || host.endsWith('.1688.com')) return ali;
+  if (/(^|\.)(taobao|tmall)\.com$/.test(host)) return taobao;
   if (host === 'pinduoduo.com' || host.endsWith('.pinduoduo.com') || host.endsWith('.yangkeduo.com')) return pdd;
   return { id: '', label: '', supported: false };
 }

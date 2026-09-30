@@ -154,7 +154,8 @@ const joinedValues = values => Array.isArray(values) ? values.map(cellText).filt
 
 export function productRows(item, fallbackNumber = 0) {
   const id = cellText(item.id);
-  const number = `PDD${id || (fallbackNumber ? String(fallbackNumber).padStart(6, '0') : '')}`;
+  const prefix = item.site === 'taobao' ? item.platform === '天猫' ? 'TM' : 'TB' : 'PDD';
+  const number = `${prefix}${id || (fallbackNumber ? String(fallbackNumber).padStart(6, '0') : '')}`;
   const gallery = joinedValues(item.galleryImages) || cellText(item.image);
   const attributes = Array.isArray(item.attributes)
     ? item.attributes.map(attribute => {

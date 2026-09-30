@@ -1,6 +1,7 @@
 import { fingerprint } from './fingerprint.mjs';
 import { normalizeDetail } from './detail.mjs';
 import { allowedImageHost, siteById, siteForJob } from './sites.mjs';
+import { readLiveTaobao } from './taobao-page.mjs';
 
 export const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 export function productId(raw) {
@@ -90,8 +91,8 @@ export function descriptionDocumentUrl(input) {
   catch { return ''; }
   if (url.protocol !== 'https:') return '';
   const host = url.hostname;
-  const allowed = host === 'alicdn.com' || host.endsWith('.alicdn.com') || host === 'tmall.com' || host.endsWith('.tmall.com') || host === '1688.com' || host.endsWith('.1688.com');
-  if (!allowed || /\/offer\/\d+\.html?$/i.test(url.pathname) || /\.(?:jpg|jpeg|png|webp|gif)(?:$|\?)/i.test(url.pathname)) return '';
+  const allowed = /(^|\.)(alicdn|tmall|taobao|1688)\.com$/.test(host);
+  if (!allowed || /\/offer\/\d+\.html?$/i.test(url.pathname) || /\/(?:item|detail)\.htm$/i.test(url.pathname) || /\.(?:jpg|jpeg|png|webp|gif)(?:$|\?)/i.test(url.pathname)) return '';
   return url.href;
 }
 
@@ -208,7 +209,7 @@ async function descriptionImages(detailUrl) {
   const url = descriptionDocumentUrl(detailUrl);
   if (!url) return [];
   try {
-    const response = await fetch(url, { credentials: 'omit', redirect: 'follow' });
+    const response = await fetch(url, { credentials: 'omit', redirect: 'follow', signal: AbortSignal.timeout(12000) });
     if (!response.ok) return [];
     return imageUrlsInDescription(await response.text());
   } catch { return []; }
@@ -254,7 +255,7 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
     const id = typeof item?.id === 'string' ? item.id : Number.isSafeInteger(item?.id) ? String(item.id) : '';
     if (!/^\d+$/.test(id)) throw new Error('无效商品 ID');
     const site = siteById(item?.site);
-    const detailUrl = site.productUrl(id);
+    const detailUrl = site.productUrl(id, item.url);
     let preserveDetailTab = false;
     try {
       let tab = null;
@@ -294,9 +295,9 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
       let fetchedDetailImages = [];
       for (let i = 0; i < detailPollLimit; i++) {
         let pageGoods = null;
-        if (site.id === 'pdd' || site.id === '1688') {
+        if (site.id === 'pdd' || site.id === '1688' || site.id === 'taobao') {
           const injected = await chrome.scripting.executeScript({
-            target: { tabId: detailTabId }, world: 'MAIN', func: site.id === '1688' ? readLive1688 : readLiveGoods
+            target: { tabId: detailTabId }, world: 'MAIN', func: site.id === '1688' ? readLive1688 : site.id === 'taobao' ? readLiveTaobao : readLiveGoods
           }).catch(() => null);
           pageGoods = injected?.[0]?.result || null;
         }
@@ -311,7 +312,7 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
         if (snapshot.error) throw new Error(snapshot.error);
         if (snapshot.goodsId !== id) throw new Error('商品详情 ID 不匹配');
         const docUrls = [...new Set([...(pageGoods?.detailUrls || []), pageGoods?.detailUrl, ...(snapshot.descriptionUrls || [])].filter(url => typeof url === 'string' && url))];
-        if (site.id === '1688' && docUrls.length) {
+        if ((site.id === '1688' || site.id === 'taobao') && docUrls.length) {
           for (const url of docUrls) {
             if (fetchedDocs.has(url)) continue;
             fetchedDocs.add(url);
@@ -320,7 +321,10 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
           fetchedDetailImages = [...new Set(fetchedDetailImages)];
           const reserved = new Set((snapshot.detail?.skus || []).map(sku => sku?.image).filter(Boolean));
           const detailOnly = fetchedDetailImages.filter(url => !reserved.has(url));
-          if (detailOnly.length && snapshot.detail) snapshot.detail.detailImages = detailOnly.slice(0, 60);
+          if (detailOnly.length && snapshot.detail) {
+            snapshot.detail.detailImages = [...new Set([...(snapshot.detail.detailImages || []),...detailOnly])].slice(0,60);
+            if (site.id === 'taobao' && !snapshot.skuPending) { snapshot.detail.detailStatus = 'done'; snapshot.detail.detailNote = ''; }
+          }
         }
         const detail = snapshot.detail;
         if (usableDetail(detail)) {
@@ -332,8 +336,8 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
           // A matching top-level JSON product root is the reader's explicit readiness signal.
           // Responses from older reader versions did not include this field and remain compatible.
           const detailWait = docUrls.length ? 30 : 15;
-          const waitingForDetail = site.id === '1688' && snapshot.detailPending && !(detail.detailImages || []).length && stableCount < detailWait;
-          const waitingForSku = site.id === '1688' && snapshot.skuPending && stableCount < 12;
+          const waitingForDetail = ['1688','taobao'].includes(site.id) && snapshot.detailPending && !(detail.detailImages || []).length && stableCount < detailWait;
+          const waitingForSku = ['1688','taobao'].includes(site.id) && snapshot.skuPending && stableCount < (site.id === 'taobao' ? 20 : 12);
           if (!waitingForDetail && !waitingForSku && ((snapshot.ready !== false && hasReadyDetail(detail)) || stableCount >= 8)) return normalizeDetail(best, item);
         }
         if (i < detailPollLimit - 1) await detailPollWait(300);
