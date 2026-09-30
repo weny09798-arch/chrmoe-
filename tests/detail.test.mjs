@@ -17,6 +17,11 @@ test('normalizes the documented complete detail fixture', () => {
   assert.equal(detail.detailStatus, 'done');
 });
 
+test('does not retain description text while preserving description images and SKU fields',()=>{
+  const detail=normalizeDetail({descriptionText:'已售1万+ 多人评价 领券 店长主推 联系客服',detailImages:['https://img.alicdn.com/long.jpg'],attributes:[{name:'材质',value:'玻璃'}],skus:[{id:'a',specs:['大号'],price:'2.90',stock:'10'}]});
+  assert.equal(detail.descriptionText,'');assert.deepEqual(detail.detailImages,['https://img.alicdn.com/long.jpg']);assert.equal(detail.skus[0].cents,290);assert.equal(detail.attributes[0].value,'玻璃');
+});
+
 test('returns the stable shape, trims title and uses fallback title when missing', () => {
   assert.deepEqual(normalizeDetail({ title: '  原始标题  ' }, { title: '兜底标题' }), {
     title: '原始标题', image: '', galleryImages: [], descriptionText: '', detailImages: [], category: '',

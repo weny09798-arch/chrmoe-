@@ -144,6 +144,12 @@
   const gallerySelector='#J_UlThumb,#J_ImgBooth,[class*="ItemGallery"],[class*="PicGallery"],[class*="MainPic"],[class*="mainPic"],[class*="gallery"]';
   const detailSelector='#description,#J_DivItemDesc,[class*="ItemDetail"],[class*="Description"],[class*="description"],[class*="detailContent"]';
   const detailLabel=n=>/^(?:图文详情|宝贝详情|商品详情)$/.test(words(n).replace(/\s+/g,''));
+  function descriptionPicture(n){
+    const lazy=n.getAttribute('data-src')||n.getAttribute('data-ks-lazyload')||n.getAttribute('data-lazyload')||n.getAttribute('data-lazy-src')||n.getAttribute('data-original');
+    const set=n.getAttribute('data-srcset')||n.getAttribute('srcset')||'';
+    const choices=set.split(',').map(part=>{const bits=part.trim().split(/\s+/);return {url:image(bits[0]),size:parseFloat(bits[1])||0};}).filter(v=>v.url).sort((a,b)=>b.size-a.size);
+    return image(lazy)||choices[0]?.url||image(n.currentSrc)||image(n.getAttribute('src'));
+  }
   let detailPasses=0,detailSignature='',detailStable=0,openedDetail=false;
   function descriptionArea(){
     const labels=[...document.querySelectorAll('h1,h2,h3,h4,button,a,span,div,[role="tab"]')].filter(n=>present(n)&&productNode(n)&&detailLabel(n));
@@ -154,23 +160,41 @@
       }
     }
     const headings=[...document.querySelectorAll('h1,h2,h3,h4,div,span')].filter(n=>present(n)&&productNode(n)&&detailLabel(n));
-    const heading=headings.find(n=>/^H[1-4]$/.test(n.tagName))||headings.at(-1);
-    const sections=[...document.querySelectorAll(detailSelector)].filter(n=>present(n)&&productNode(n));
+    const heading=headings.find(n=>/^H[1-4]$/.test(n.tagName))||headings.filter(n=>!n.closest('nav,a,button,[role="tab"],[role="navigation"]')).at(-1);
+    const pageFields='h1,[data-sku-id],.sku-row,[class*="ItemGallery"],[class*="PicGallery"],[class*="MainPic"]';
+    const sections=[...document.querySelectorAll(detailSelector)].filter(n=>present(n)&&productNode(n)&&(n.matches('#description,#J_DivItemDesc')||!n.querySelector(pageFields)));
     const frames=[...document.querySelectorAll('iframe')].filter(n=>present(n)&&productNode(n)&&/desc|detail/i.test(n.id+' '+n.className+' '+(n.getAttribute('src')||n.getAttribute('data-src')||n.getAttribute('data-lazy-src')||'')));
     const nodes=new Set();
+    let stop;
     for(const section of sections)for(const n of section.querySelectorAll('*'))if(present(n)&&productNode(n))nodes.add(n);
     if(heading){
-      const stop=[...document.querySelectorAll('h1,h2,h3,h4,div,span')].find(n=>present(n)&&words(n).length<16&&/^(?:本店推荐|看了又看|店铺推荐|热门推荐|猜你喜欢|用户评价)$/.test(words(n).replace(/\s+/g,''))&&(heading.compareDocumentPosition(n)&4));
+      stop=[...document.querySelectorAll('h1,h2,h3,h4,div,span')].find(n=>present(n)&&words(n).length<16&&/^(?:本店推荐|看了又看|店铺推荐|热门推荐|猜你喜欢|用户评价)$/.test(words(n).replace(/\s+/g,''))&&(heading.compareDocumentPosition(n)&4));
       for(const n of document.querySelectorAll('img,p,span,div'))if((heading.compareDocumentPosition(n)&4)&&(!stop||(!(stop.compareDocumentPosition(n)&4)&&!stop.contains(n)))&&present(n)&&productNode(n))nodes.add(n);
     }
     for(const frame of frames)try{for(const n of frame.contentDocument?.querySelectorAll('img,p,span,div')||[])if(present(n)&&productNode(n))nodes.add(n);}catch{/* Cross-origin frames are read through declared description URLs. */}
     const active=Boolean(heading||sections.length||frames.length||labels.length);
+    let scrollPending=false;
     if(active){
       detailPasses++;
       const anchor=heading||sections[0]||frames[0];
-      try{if(anchor){const top=anchor.getBoundingClientRect().top+(window.scrollY||0);window.scrollTo(0,top+Math.min(detailPasses-1,6)*700);}}catch{/* No layout in background samples. */}
+      try{if(anchor){
+        const offset=window.scrollY||0,top=anchor.getBoundingClientRect().top+offset;
+        const bounds=[...sections];
+        for(let scope=heading?.parentElement;scope&&scope!==document.body&&scope!==document.documentElement;scope=scope.parentElement){
+          if(scope.querySelector(pageFields))break;
+          if(scope.querySelector('img,iframe'))bounds.push(scope);
+        }
+        const ends=bounds.map(n=>n.getBoundingClientRect()).filter(b=>Number.isFinite(b.top)&&b.height>0).map(b=>b.top+b.height+offset).filter(n=>n>top);
+        const pageEnd=Math.max(document.documentElement?.scrollHeight||0,document.body?.scrollHeight||0);
+        let end=ends.length?Math.max(...ends):pageEnd>top?pageEnd:NaN;
+        if(stop){const b=stop.getBoundingClientRect();const boundary=b.top+offset;if(Number.isFinite(boundary)&&boundary>top)end=Number.isFinite(end)?Math.min(end,boundary):boundary;}
+        const last=Number.isFinite(end)?Math.max(top,end-(window.innerHeight||700)):NaN;
+        const target=Number.isFinite(last)?Math.min(top+(detailPasses-1)*700,last):top+(detailPasses-1)*700;
+        scrollPending=Number.isFinite(last)&&target<last;
+        window.scrollTo(0,target);
+      }}catch{/* No layout in background samples. */}
     }
-    return {active,nodes:[...nodes],frames};
+    return {active,scrollPending,nodes:[...nodes],frames};
   }
   function snapshot(pageGoods){
     const goodsId=new URL(location.href).searchParams.get('id')||'';
@@ -188,21 +212,20 @@
     if(!sku.rows.length)sku.rows=domSkus();
     const galleryImages=images(item.images||item.pics||root.images);
     if(!galleryImages.length)galleryImages.push(...domImages(gallerySelector));
-    const detailImages=[...new Set([...images(root.detail?.images||root.detailImages),...images(area.nodes.filter(n=>n.tagName==='IMG').map(n=>n.getAttribute('data-src')||n.getAttribute('data-ks-lazyload')||n.getAttribute('data-lazyload')||n.getAttribute('data-lazy-src')||n.getAttribute('data-original')||n.currentSrc||n.getAttribute('src')))])];
+    const detailImages=[...new Set([...images(root.detail?.images||root.detailImages),...images(area.nodes.filter(n=>n.tagName==='IMG').map(descriptionPicture))])];
     const descriptionUrls=[...new Set([root.detail?.descUrl,root.descInfo?.pcDescUrl,root.descInfo?.h5DescUrl,item.pcDescUrl,item.h5DescUrl,root.descUrl,
       ...area.frames.map(n=>n.getAttribute('src')||n.getAttribute('data-src')||n.getAttribute('data-lazy-src'))].map(documentUrl).filter(Boolean))];
     const params=attributes(root);
-    const desc=[...new Set(area.nodes.filter(n=>/^(P|SPAN|DIV)$/.test(n.tagName)&&!n.children.length).map(words).filter(v=>v&&!detailLabel({textContent:v})&&!/^(?:加载中|加载更多|展开详情)$/.test(v)))].join('\n').slice(0,20000);
     const video=typeof root.video==='object'?root.video?.url||root.video?.videoUrl||root.video?.playUrl:root.video;
     const videoUrl=https(video)||[...document.querySelectorAll('video,video source')].filter(n=>present(n)&&productNode(n)).map(n=>https(n.currentSrc||n.getAttribute('src'))).find(Boolean)||'';
-    const signature=JSON.stringify([detailImages,desc]);
+    const signature=JSON.stringify(detailImages);
     detailStable=signature===detailSignature?detailStable+1:1;detailSignature=signature;
-    const detailLoading=area.active&&(detailPasses<7||detailStable<3);
-    const detailPending=((descriptionUrls.length>0||area.active)&&!detailImages.length&&!desc)||detailLoading;
+    const detailLoading=area.active&&(detailPasses<7||detailStable<3||area.scrollPending);
+    const detailPending=!detailImages.length||detailLoading;
     const detail={title,price:price(root.skuCore?.sku2info?.['0']?.price||item.price),galleryImages,detailImages,
-      descriptionText:value(item.description||root.description)||desc,category:value(item.categoryName||root.categoryName),attributes:params,
+      descriptionText:'',category:value(item.categoryName||root.categoryName),attributes:params,
       videoUrl,certificateImages:images(root.certificateImages),sizeChartImages:images(root.sizeChartImages),specNames:sku.names,skus:sku.rows,
-      detailStatus:sku.complete&&!detailPending?'done':'partial',detailNote:sku.complete&&!detailPending?'':'部分字段尚未提供或未加载完成；未虚构 SKU、库存或规格'};
+      detailStatus:sku.complete&&!detailPending?'done':'partial',detailNote:!detailImages.length?'未读到图文详情图片，链接及其他已采集字段已保留':sku.complete&&!detailPending?'':'部分字段尚未提供或未加载完成；未虚构 SKU、库存或规格'};
     return {url:location.href,goodsId,blocked:false,reason:'',ready:Boolean(title&&(galleryImages.length||params.length||sku.rows.length||detailImages.length)),
       detailPending,detailLoading,skuPending:!sku.complete,descriptionUrls,source:candidates.length?'json':'dom',detail};
   }

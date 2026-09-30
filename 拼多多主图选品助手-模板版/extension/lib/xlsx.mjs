@@ -166,7 +166,7 @@ export function productRows(item, fallbackNumber = 0) {
     : '';
   const common = [
     cellText(item.title), 'CNY', gallery, cellText(item.url), cellText(item.platform) || '拼多多', id,
-    cellText(item.descriptionText), joinedValues(item.detailImages), cellText(item.category),
+    '', joinedValues(item.detailImages), cellText(item.category),
     attributes, cellText(item.videoUrl), joinedValues(item.certificateImages), joinedValues(item.sizeChartImages)
   ];
   const skus = Array.isArray(item.skus) && item.skus.length ? item.skus : [fallbackSku(item)];

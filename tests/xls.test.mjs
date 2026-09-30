@@ -49,6 +49,7 @@ test('BIFF8 reader recovers three SKU rows and leaves repeated product fields bl
   assert.equal(sheet['!ref'], 'A1:V12');
   assert.equal(sheet.D10.v, 'https://img.example/1.jpg，https://img.example/2.jpg');
   assert.equal(sheet.I10.v, 'https://img.example/detail1.jpg，https://img.example/detail2.jpg');
+  assert.equal(sheet.H10?.v ?? '', '');
   assert.equal(sheet.K10.v, '材质:网面；鞋底:橡胶');
   assert.equal(sheet.Q10.v, 'red-40');
   assert.equal(sheet.R10.v, '20.99');

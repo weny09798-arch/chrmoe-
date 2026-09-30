@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {readFile} from 'node:fs/promises';
+import {parseHTML} from 'linkedom';
 import {readLiveTaobao} from '../extension/lib/taobao-page.mjs';
 import {browserPorts,descriptionDocumentUrl} from '../extension/lib/browser.mjs';
 import {enqueueKeyword} from '../extension/lib/core.mjs';
@@ -100,5 +102,39 @@ test('pending description continues loading after the first image without losing
   try{
     const data=await browserPorts({save:async()=>{},update(){},detailPollWait:async()=>{}}).enrich({id:'123',site:'taobao',cents:850});
     assert.deepEqual(data.detailImages,['https://img.alicdn.com/a.jpg','https://img.alicdn.com/b.jpg']);assert.equal(data.skus[0].id,'s1');assert.equal(count,3);
+  }finally{globalThis.chrome=prior;}
+});
+
+test('long description scrolling is not cut off by stable upper images before later pictures appear',async()=>{
+  const prior=globalThis.chrome;let count=0;
+  globalThis.chrome={tabs:{create:async()=>({id:7}),get:async()=>({id:7,status:'complete'}),remove:async()=>{},sendMessage:async()=>{
+    count++;return{goodsId:'123',ready:true,skuPending:false,detailPending:count<19,detailLoading:count<19,descriptionUrls:[],detail:{title:'玻璃水杯',galleryImages:['https://img.alicdn.com/main.jpg'],detailImages:count<19?['https://img.alicdn.com/top.jpg']:['https://img.alicdn.com/top.jpg','https://img.alicdn.com/bottom.jpg'],skus:[{id:'s1',specs:['大号'],price:'2.90'}]}};
+  }},scripting:{executeScript:async()=>[{result:null}]}};
+  try{const result=await browserPorts({save:async()=>{},update(){},detailPollWait:async()=>{}}).enrich({id:'123',site:'taobao',cents:290});
+    assert.deepEqual(result.detailImages,['https://img.alicdn.com/top.jpg','https://img.alicdn.com/bottom.jpg']);assert.equal(count,19);
+  }finally{globalThis.chrome=prior;}
+});
+
+test('the real reader and polling retain later pictures in a heading-only description layout',async()=>{
+  const {window,document}=parseHTML('<html><body><h1>水杯</h1><section id="text-images"><div class="DescriptionHeader"><h2>图文详情</h2><img src="//img.alicdn.com/top.jpg"></div></section></body></html>');
+  window.scrollY=0;window.innerHeight=700;
+  window.Element.prototype.getBoundingClientRect=()=>({width:300,height:300,top:1000-window.scrollY});
+  document.querySelector('h2').getBoundingClientRect=()=>({width:300,height:50,top:1000-window.scrollY});
+  // Linkedom reverses nested heading/later sibling order; model the browser's FOLLOWING bit.
+  document.querySelector('h2').compareDocumentPosition=function(node){const order=[...document.querySelectorAll('*')];return node===this?0:order.indexOf(node)>order.indexOf(this)?4:2;};
+  document.querySelector('#text-images').getBoundingClientRect=()=>({width:800,height:12000,top:1000-window.scrollY});
+  window.scrollTo=(_x,y)=>{window.scrollY=y;if(y>=9000&&!document.querySelector('#bottom'))document.querySelector('#text-images').insertAdjacentHTML('beforeend','<img id="bottom" data-src="//img.alicdn.com/bottom.jpg">');};
+  let handler,polls=0;
+  const context=vm.createContext({window,document,location:new URL('https://item.taobao.com/item.htm?id=123'),URL,
+    getComputedStyle:node=>({display:node.hidden?'none':'block',visibility:'visible'}),chrome:{runtime:{onMessage:{addListener:fn=>{handler=fn;}}}}});
+  vm.runInContext(await readFile(new URL('../extension/detail-taobao.js',import.meta.url),'utf8'),context);
+  const root={item:{itemId:'123',title:'水杯',images:['//img.alicdn.com/main.jpg']},skuBase:{props:[],skus:[]},skuCore:{sku2info:{'0':{price:{priceText:'8.50'},quantity:8}}}};
+  const prior=globalThis.chrome;
+  globalThis.chrome={tabs:{create:async()=>({id:7}),get:async()=>({id:7,status:'complete'}),remove:async()=>{},sendMessage:async(_id,message)=>{
+    polls++;return new Promise(resolve=>handler({...message,pageGoods:{roots:[root]}},{},resolve));
+  }},scripting:{executeScript:async()=>[{result:null}]}};
+  try{const result=await browserPorts({save:async()=>{},update(){},detailPollWait:async()=>{}}).enrich({id:'123',site:'taobao',cents:850});
+    assert.deepEqual(Array.from(result.detailImages),['https://img.alicdn.com/top.jpg','https://img.alicdn.com/bottom.jpg']);
+    assert.equal(result.detailStatus,'done');assert.ok(polls>=15&&polls<=40);assert.equal(result.descriptionText,'');
   }finally{globalThis.chrome=prior;}
 });

@@ -52,7 +52,7 @@ test('Tmall 图文详情 opens its tab and collects the heading section without 
       document.querySelector('button').addEventListener('click',()=>{document.querySelector('#text-images').hidden=false;});
     });
   assert.deepEqual(Array.from(result.detail.detailImages),['https://img.alicdn.com/promotion.jpg','https://img.alicdn.com/plate-long.jpg']);
-  assert.match(result.detail.descriptionText,/食品接触级/);
+  assert.equal(result.detail.descriptionText,'');
 });
 
 test('visible 图文详情 without images is still pending instead of accepting gallery and SKU as completion',async()=>{
@@ -112,7 +112,48 @@ test('DOM sections collect lazy description images and parameters but leave unav
   assert.deepEqual(Array.from(result.detail.galleryImages),['https://img.alicdn.com/main.jpg']);
   assert.deepEqual(Array.from(result.detail.detailImages),['https://img.alicdn.com/long.jpg']);
   assert.deepEqual(Array.from(result.detail.attributes,a=>[a.name,a.value]),[['材质','棉'],['产地','浙江']]);
-  assert.match(result.detail.descriptionText,/柔软棉布/); assert.equal(result.detail.detailStatus,'partial');
+  assert.equal(result.detail.descriptionText,''); assert.equal(result.detail.detailStatus,'partial');
+});
+
+test('the item-page wrapper and navigation label do not turn gallery, SKU or toolbar content into detail images',async()=>{
+  const result=await snapshot(`<main class="ItemDetailPage"><nav><button>图文详情</button></nav><h1>冰川纹玻璃杯</h1><div class="ItemGallery"><img src="//img.alicdn.com/main.jpg"></div><div class="sku-row" data-sku-id="a"><span data-spec-value>大号</span><span>¥2.90</span><img src="//img.alicdn.com/sku.jpg"></div><span>已售1万+ 用户评价 联系客服</span></main>`,null,undefined,()=>({passes:10}));
+  assert.deepEqual(Array.from(result.detail.detailImages),[]);assert.equal(result.detail.descriptionText,'');assert.equal(result.detailPending,true);
+  assert.equal(result.detail.skus[0].image,'https://img.alicdn.com/sku.jpg');assert.equal(result.detail.galleryImages[0],'https://img.alicdn.com/main.jpg');
+});
+
+test('description text alone never declares the missing description pictures loaded',async()=>{
+  const data=structuredClone(payload);delete data.detail;
+  const result=await snapshot('<h1>玻璃水杯</h1><section id="description"><h2>图文详情</h2><span>已售1万+ 很多人好评</span></section>',{roots:[data]},undefined,()=>({passes:10}));
+  assert.equal(result.detailPending,true);assert.equal(result.detail.detailStatus,'partial');assert.equal(result.detail.descriptionText,'');
+});
+
+test('complete SKU and gallery fields do not hide an unrecognized description section',async()=>{
+  const data=structuredClone(payload);delete data.detail;
+  const result=await snapshot('<h1>玻璃杯</h1>',{roots:[data]});
+  assert.equal(result.skuPending,false);assert.equal(result.detailPending,true);assert.equal(result.detail.detailStatus,'partial');assert.match(result.detail.detailNote,/图文详情图片/);
+});
+
+test('description pictures use lazy srcset instead of retaining a placeholder',async()=>{
+  const result=await snapshot('<h1>水杯</h1><section id="description"><h2>图文详情</h2><img src="data:image/gif;base64,a" data-srcset="//img.alicdn.com/cup-long.jpg_400x400.jpg 400w, //img.alicdn.com/cup-long.jpg_1000x1000.jpg 1000w"></section>');
+  assert.deepEqual(Array.from(result.detail.detailImages),['https://img.alicdn.com/cup-long.jpg']);assert.equal(result.detail.descriptionText,'');
+});
+
+test('an explicit description root preserves seller content headings',async()=>{
+  const result=await snapshot('<h1>玻璃水杯</h1><section id="description"><h1>材质工艺</h1><img src="//img.alicdn.com/detail.jpg"></section>');
+  assert.deepEqual(Array.from(result.detail.detailImages),['https://img.alicdn.com/detail.jpg']);
+});
+
+test('a tall description scrolls beyond the former 4200px cap to load its later pictures',async()=>{
+  const result=await snapshot('<h1>玻璃水杯</h1><section id="description"><h2>图文详情</h2><div class="DescriptionHeader"><img src="//img.alicdn.com/top.jpg"></div></section>',null,undefined,(window,document)=>{
+    window.scrollY=0;window.innerHeight=700;
+    document.querySelector('h2').getBoundingClientRect=()=>({width:300,height:50,top:1000-window.scrollY});
+    document.querySelector('#description').getBoundingClientRect=()=>({width:800,height:12000,top:1000-window.scrollY,bottom:13000-window.scrollY});
+    document.querySelector('.DescriptionHeader').getBoundingClientRect=()=>({width:800,height:300,top:1000-window.scrollY,bottom:1300-window.scrollY});
+    window.scrollTo=(_x,y)=>{window.scrollY=y;if(y>=10000&&!document.querySelector('#bottom'))document.querySelector('#description').insertAdjacentHTML('beforeend','<img id="bottom" data-src="//img.alicdn.com/bottom.jpg">');};
+    return {passes:22};
+  });
+  assert.deepEqual(Array.from(result.detail.detailImages),['https://img.alicdn.com/top.jpg','https://img.alicdn.com/bottom.jpg']);
+  assert.equal(result.detailLoading,false);assert.equal(result.detail.descriptionText,'');
 });
 
 test('verification blocks even when initialization data is present',async()=>{
@@ -137,7 +178,7 @@ test('visible item login overlay preserves blocked status',async()=>{
 test('declared single-SKU product retains an explicit base price without inventing options',async()=>{
   const data={item:{itemId:'123',title:'相机包',images:['//img.alicdn.com/main.jpg']},skuBase:{props:[],skus:[]},skuCore:{sku2info:{'0':{price:{priceText:'8.50'},quantity:0}}}};
   const result=await snapshot('',{roots:[data]});
-  assert.equal(result.skuPending,false); assert.equal(result.detail.detailStatus,'done');
+  assert.equal(result.skuPending,false); assert.equal(result.detail.detailStatus,'partial');
   assert.equal(result.detail.price,'8.50'); assert.equal(result.detail.skus[0].stock,'0');
   assert.equal(result.detail.skus[0].specs.length,0);
 });

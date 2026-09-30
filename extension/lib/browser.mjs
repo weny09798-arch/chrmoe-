@@ -342,7 +342,7 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
           // A matching top-level JSON product root is the reader's explicit readiness signal.
           // Responses from older reader versions did not include this field and remain compatible.
           const detailWait = docUrls.length ? 30 : 15;
-          const waitingForDetail = ['1688','taobao'].includes(site.id) && snapshot.detailPending && stableCount < detailWait;
+          const waitingForDetail = ['1688','taobao'].includes(site.id) && snapshot.detailPending && (snapshot.detailLoading ? i < detailPollLimit - 1 : stableCount < detailWait);
           const waitingForSku = ['1688','taobao'].includes(site.id) && snapshot.skuPending && stableCount < (site.id === 'taobao' ? 20 : 12);
           if (!waitingForDetail && !waitingForSku && ((snapshot.ready !== false && hasReadyDetail(detail)) || stableCount >= 8)) return normalizeDetail(best, item);
         }

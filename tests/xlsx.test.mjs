@@ -103,7 +103,7 @@ test('expands one product into three actual SKU rows with common fields only on 
   };
   const expected = [
     ['PDD7788', '运动鞋', 'CNY', 'https://img.example/1.jpg，https://img.example/2.jpg', item.url, '拼多多', '7788',
-      '轻便透气', 'https://img.example/detail1.jpg，https://img.example/detail2.jpg', '运动鞋', '材质:网面；鞋底:橡胶',
+      '', 'https://img.example/detail1.jpg，https://img.example/detail2.jpg', '运动鞋', '材质:网面；鞋底:橡胶',
       'https://video.example/demo.mp4', 'https://img.example/cert.jpg', 'https://img.example/size.jpg',
       '红色', '40', 'red-40', '20.99', 'https://img.example/red.jpg', '8', '0.7', '30x20x10'],
     ['PDD7788', ...Array(13).fill(''), '红色', '41', 'red-41', '21.99', 'https://img.example/red41.jpg', '3', '', ''],
@@ -119,6 +119,17 @@ test('expands one product into three actual SKU rows with common fields only on 
   assert.match(xml, /<c r="D10" t="inlineStr"><is><t>https:\/\/img\.example\/1\.jpg，https:\/\/img\.example\/2\.jpg<\/t><\/is><\/c>/);
   assert.match(xml, /<c r="Q12" t="inlineStr"><is><t>blue-40<\/t><\/is><\/c>/);
   assert.match(xml, /<c r="R12" t="inlineStr"><is><t>19\.99<\/t><\/is><\/c>/);
+});
+
+test('old persisted descriptions are blank on export for every source without changing template columns',()=>{
+  for(const [site,platform] of [['pdd','拼多多'],['1688','1688'],['taobao','淘宝']]){
+    const item={id:'123',site,platform,title:'玻璃水杯',cents:290,descriptionText:'已售1万+ 用户评价 联系客服',detailImages:['https://img.alicdn.com/detail1.jpg','https://img.alicdn.com/detail2.jpg'],skus:[{id:'big',specs:['大号'],cents:290,stock:'8'},{id:'small',specs:['小号'],cents:190,stock:'10'}]};
+    const rows=taskSheets({jobs:[{keyword:'水杯',groups:[{best:item}]}]})[0].rows;
+    assert.equal(rows[8][7],'详情描述');assert.equal(rows[8][8],'详情图');assert.equal(rows[9].length,22);
+    assert.equal(rows[9][7],'');assert.equal(rows[10][7],'');assert.equal(rows[9][8],'https://img.alicdn.com/detail1.jpg，https://img.alicdn.com/detail2.jpg');
+    assert.equal(rows[9][14],'大号');assert.equal(rows[10][17],'1.90');
+    const xml=zipEntries(workbookBytes([{name:'模版',rows}])).get('xl/worksheets/sheet1.xml');assert.doesNotMatch(xml,/已售1万|联系客服/);
+  }
 });
 
 test('uses a specification-free fallback SKU and the search image when details have no SKU or gallery', () => {

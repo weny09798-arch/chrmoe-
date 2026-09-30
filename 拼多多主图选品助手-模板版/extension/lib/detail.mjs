@@ -121,7 +121,7 @@ export function normalizeDetail(raw = {}, fallback = {}) {
     title: rawTitle || text(fallback.title),
     image,
     galleryImages,
-    descriptionText: text(raw.descriptionText),
+    descriptionText: '',
     detailImages: urlList(raw.detailImages),
     category: text(raw.category),
     attributes,
