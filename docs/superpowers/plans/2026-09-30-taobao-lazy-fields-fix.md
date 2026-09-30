@@ -11,6 +11,8 @@
 - [x] TDD: browser preparation retries only incomplete matching cards, validates site/query/ID, preserves captcha and stop/pause, bounds waiting and reports disappearance.
 - [x] TDD: five consecutive incomplete post-retry cards stop with explicit adaptation note and collected goods retained. No claim of duplicate removal.
 - [x] Independent review and complete suite/module/diff checks; version 1.4.2 and synchronized delivery copies.
-- [ ] Commit isolated work, merge authorized main preserving local changes, verify merged tree and ZIP hashes, push authorized GitHub and archive only this worktree.
+- [x] Commit isolated work, merge authorized main preserving local changes, verify merged tree and ZIP hashes, push authorized GitHub and archive only this worktree.
 
 Verification: 216/216 local tests pass; module and diff checks pass. Price review findings were reproduced with failing tests then repaired, including decimal buyer counts and a separate second-price span. Lazy attributes and srcset are supported in this change; background-image support is outside this release scope. Live Taobao has not been verified.
+
+Release verification: main fast-forwarded to 0e78aab, 216/216 tests and module checks passed again. All nine pre-existing locally modified files retained their exact hashes. ZIP contains 30 entries matching source hashes; version 1.4.2. ZIP SHA256: 14D5C859C85B5AB7EC73D306D60B48359BF55D07864FFC453FA0696E3DE94666. Origin main verified at 0e78aab. Archive requested only for taobao-lazy-fields-fix.
