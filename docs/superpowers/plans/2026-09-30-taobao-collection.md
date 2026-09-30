@@ -35,8 +35,10 @@ Files: detail-taobao.js, lib/taobao-page.mjs, lib/browser.mjs, tests/detail-taob
 - [x] Update README with Taobao URL use and partial-field behavior; version 1.4.0.
 - [x] Independent code review, fix substantive issues with red/green regression tests.
 - [x] Run `npm test`, `npm run check`, `git diff --check`; synchronize changed delivery files, verify hashes and all ZIP entries.
-- [ ] Commit isolated work, fast-forward main preserving existing changes, verify merged tree, push authorized GitHub repository, archive this worktree only.
+- [x] Commit isolated work, fast-forward main preserving existing changes, verify merged tree, push authorized GitHub repository, archive this worktree only.
 
 ## Verification record
 
 2026-09-30: Full suite 181 passed, zero failures; extension asset/module check passed; diff whitespace check passed. Independent review issues were fixed with regressions for SKU dimension order, incomplete schema and recommendation descendants. Delivery source files matched by SHA-256. Live Taobao access was blocked by the development browser safety policy; no live account validation is claimed.
+
+Release: fast-forwarded main to 47a2f18 preserving unrelated local work; merged tree again passed all 181 tests and module/asset checks. The 1.4.0 ZIP contains 30 files verified against source by SHA-256. GitHub main was verified at the release commit. Only the Taobao managed worktree was archived with its recoverable snapshot.
