@@ -44,8 +44,10 @@ Files: manifest, README, synchronized delivery copies, this plan.
 
 - [x] Independent review; fix substantive issues with failing-to-passing regressions.
 - [x] Version 1.4.1; sync changed extension files and README; full tests, asset/module check and diff check.
-- [ ] Commit in isolated worktree, fast-forward main, recheck merged tree and preserve preexisting edits. Package ZIP and verify entry hashes; push authorized repo and archive only this worktree.
+- [x] Commit in isolated worktree, fast-forward main, recheck merged tree and preserve preexisting edits. Package ZIP and verify entry hashes; push authorized repo and archive only this worktree.
 
 ## Verification
 
 2026-09-30: 206 tests passed, zero failures; module/manifest and diff checks passed. Independent review found and verified fixes for nested foreign links, partial old-list removal, full-document page loading including the last page, coupon fallback, missing-image accounting and legacy unknown statistics. Real-reader + Runner + perceptual hash fixture with 50 listings and 8 repeated main images retained 42 groups. No live Taobao access was attempted. Changed delivery files matched source by SHA-256.
+
+Release verified: main fast-forwarded to fb86834 preserving preexisting local edits; merged suite 206/206 plus asset/module and whitespace checks passed. Version 1.4.1 ZIP has 30 source-identical files (SHA-256 checked). Authorized GitHub main verified at fb86834. Only the managed pagination-fix worktree was archived with recoverable state.
