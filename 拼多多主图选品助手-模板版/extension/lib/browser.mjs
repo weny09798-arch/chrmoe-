@@ -97,7 +97,11 @@ export function descriptionDocumentUrl(input) {
 }
 
 export function imageUrlsInDescription(text) {
-  const source = String(text || '').replace(/\\\//g, '/').replace(/\\u002[fF]/g, '/');
+  let source = String(text || '').replace(/\\\//g, '/').replace(/\\u002[fF]/g, '/').replace(/\\["']/g, '"');
+  source = source.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '').replace(/<!--[\s\S]*?-->/g, '');
+  if (/<(?:img|div|p|section)\b/i.test(source)) {
+    source = [...source.matchAll(/<img\b[^>]*>|(?:background(?:-image)?\s*:\s*[^;"']*url\([^)]*\))/gi)].map(m => m[0]).join('\n');
+  }
   const found = [];
   for (const match of source.matchAll(/(?:https?:)?\/\/[^"'\\\s<>]+\.(?:jpg|jpeg|png|webp)(?:\?[^"'\\\s<>]*)?/gi)) {
     let url = match[0].startsWith('//') ? `https:${match[0]}` : match[0];
@@ -107,9 +111,9 @@ export function imageUrlsInDescription(text) {
         parsed.pathname = parsed.pathname.replace(/(\.(?:jpg|jpeg|png|webp))(?:_[^/]*)?$/i, '$1');
         if (/x-oss-process|resize/i.test(parsed.search)) parsed.search = '';
         url = parsed.href;
-      }
+      } else continue;
     } catch { /* Keep the original address when it is not a URL. */ }
-    if (/^https:/.test(url) && !/tps-|\/tps\/|avatar|sprite|_20x20|_30x30|_50x50|1x1/i.test(url)) found.push(url);
+    if (/^https:/.test(url) && !/tps-|\/tps\/|avatar|sprite|_20x20|_30x30|_50x50|1x1|-rate(?:[_.])|22185873824_536529798\.jpg/i.test(url)) found.push(url.replace(/&amp;/g,'&'));
   }
   return [...new Set(found)].slice(0, 60);
 }
@@ -322,7 +326,10 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
           const detailOnly = fetchedDetailImages.filter(url => !reserved.has(url));
           if (detailOnly.length && snapshot.detail) {
             snapshot.detail.detailImages = [...new Set([...(snapshot.detail.detailImages || []),...detailOnly])].slice(0,60);
-            if (site.id === 'taobao' && !snapshot.skuPending) { snapshot.detail.detailStatus = 'done'; snapshot.detail.detailNote = ''; }
+            if (site.id === 'taobao' && !snapshot.detailLoading) {
+              snapshot.detailPending = false;
+              if (!snapshot.skuPending) { snapshot.detail.detailStatus = 'done'; snapshot.detail.detailNote = ''; }
+            }
           }
         }
         const detail = snapshot.detail;
@@ -335,7 +342,7 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
           // A matching top-level JSON product root is the reader's explicit readiness signal.
           // Responses from older reader versions did not include this field and remain compatible.
           const detailWait = docUrls.length ? 30 : 15;
-          const waitingForDetail = ['1688','taobao'].includes(site.id) && snapshot.detailPending && !(detail.detailImages || []).length && stableCount < detailWait;
+          const waitingForDetail = ['1688','taobao'].includes(site.id) && snapshot.detailPending && stableCount < detailWait;
           const waitingForSku = ['1688','taobao'].includes(site.id) && snapshot.skuPending && stableCount < (site.id === 'taobao' ? 20 : 12);
           if (!waitingForDetail && !waitingForSku && ((snapshot.ready !== false && hasReadyDetail(detail)) || stableCount >= 8)) return normalizeDetail(best, item);
         }

@@ -6,6 +6,7 @@ import { parseHTML } from 'linkedom';
 
 async function snapshot(html, offerId = '888', layout = {}) {
   const { window, document } = parseHTML(`<html><body>${html}</body></html>`);
+  layout.setup?.(window,document);
   const hidden = layout.hidden === true;
   const box = layout.box ?? 300;
   window.Element.prototype.getBoundingClientRect = () => ({ width: box, height: box, top: 0, left: 0 });
@@ -57,6 +58,26 @@ test('reads the current 1688 offer and ignores a side recommendation', async () 
   assert.equal(result.detail.skus[0].price, '12.80');
   assert.equal(result.detail.skus[0].stock, '8');
   assert.equal(result.detail.skus.some(sku => sku.id === 'other'), false);
+});
+
+test('content heading bounds 1688 descriptions while ignoring reviews, the confirmed cow and unrelated frames',async()=>{
+  const result=await snapshot(`<h1>紫光手电筒</h1><nav><a>商品详情</a></nav>
+    <section class="reviews"><img src="https://cbu01.alicdn.com/buyer.jpg"></section>
+    <h2>商品详情</h2><img src="https://cbu01.alicdn.com/img/ibank/2020/428/378/22185873824_536529798.jpg">
+    <img src="https://cbu01.alicdn.com/img/ibank/real-long.jpg"><img src="https://cbu01.alicdn.com/i2/O1CN01GUka98mSWgB2BxV2_!!4611686018427381191-0-rate.jpg">
+    <h2>店铺推荐</h2><img src="https://cbu01.alicdn.com/other.jpg">
+    <iframe id="feedback" src="https://feedback.1688.com/a"></iframe>
+    <iframe id="offer-desc" src="https://desc.alicdn.com/i8/offer.desc"></iframe>`, '888',{setup(_window,document){
+      const frames=document.querySelectorAll('iframe');
+      Object.defineProperty(frames[0],'contentDocument',{value:parseHTML('<img src="https://cbu01.alicdn.com/unrelated-frame.jpg">').document});
+      Object.defineProperty(frames[1],'contentDocument',{value:parseHTML('<img data-src="https://cbu01.alicdn.com/frame-long.jpg" src="data:image/gif;base64,a">').document});
+    }});
+  assert.deepEqual(Array.from(result.detail.detailImages),['https://cbu01.alicdn.com/img/ibank/real-long.jpg','https://cbu01.alicdn.com/frame-long.jpg']);
+});
+
+test('a deep description remains separate when the whole page has exactly one priced SKU',async()=>{
+  const result=await snapshot('<h1>紫光手电筒</h1><div class="sku-row"><img src="https://cbu01.alicdn.com/red.jpg"><span>红色</span><span>¥12.50</span><span>库存8件</span></div><h2>商品详情</h2>'+'<div>'.repeat(8)+'<img src="https://cbu01.alicdn.com/long.jpg">'+'</div>'.repeat(8));
+  assert.deepEqual(Array.from(result.detail.detailImages),['https://cbu01.alicdn.com/long.jpg']);assert.equal(result.detail.skus[0].image,'https://cbu01.alicdn.com/red.jpg');
 });
 
 test('a 1688 page without offer data keeps only the visible title and pictures', async () => {

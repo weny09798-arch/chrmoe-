@@ -91,3 +91,14 @@ test('Taobao waits for real SKU fields after a gallery-only response and retriev
     assert.equal(descriptionDocumentUrl('https://item.taobao.com/item.htm?id=123'),'');
   }finally{globalThis.chrome=prior;globalThis.fetch=priorFetch;}
 });
+
+test('pending description continues loading after the first image without losing completed SKU data',async()=>{
+  const prior=globalThis.chrome;let count=0;
+  globalThis.chrome={tabs:{create:async()=>({id:7}),get:async()=>({id:7,status:'complete'}),remove:async()=>{},
+    sendMessage:async()=>{count++;return{goodsId:'123',ready:true,skuPending:false,detailPending:count<3,descriptionUrls:[],detail:{title:'相机包',galleryImages:['https://img.alicdn.com/main.jpg'],detailImages:count<3?['https://img.alicdn.com/a.jpg']:['https://img.alicdn.com/a.jpg','https://img.alicdn.com/b.jpg'],skus:[{id:'s1',specs:['红'],price:'8.50'}]}};}},
+    scripting:{executeScript:async()=>[{result:null}]}};
+  try{
+    const data=await browserPorts({save:async()=>{},update(){},detailPollWait:async()=>{}}).enrich({id:'123',site:'taobao',cents:850});
+    assert.deepEqual(data.detailImages,['https://img.alicdn.com/a.jpg','https://img.alicdn.com/b.jpg']);assert.equal(data.skus[0].id,'s1');assert.equal(count,3);
+  }finally{globalThis.chrome=prior;}
+});

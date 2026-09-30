@@ -280,7 +280,8 @@
     return ordered.map((sku, index) => ({ ...sku, image: fullSize(strip[index] || sku.image) }));
   }
   function detailHeading() {
-    return [...document.querySelectorAll('h1,h2,h3,h4,div,span,a,li,button')].find(element => visible(element) && words(element).replace(/\s+/g, '') === '商品详情');
+    const headings = [...document.querySelectorAll('h1,h2,h3,h4,div,span,a,li,button')].filter(element => visible(element) && words(element).replace(/\s+/g, '') === '商品详情');
+    return headings.find(element => /^H[1-4]$/.test(element.tagName)) || headings.at(-1);
   }
   let detailRevealPasses = 0;
   function revealDetail(heading) {
@@ -322,7 +323,7 @@
     return [...new Set(urls)].slice(0, 5);
   }
   function keepDetailImage(url) {
-    if (!url || /tps-|\/icon|avatar|logo|sprite|_20x20|_30x30/i.test(url)) return false;
+    if (!url || /tps-|\/icon|avatar|logo|sprite|_20x20|_30x30|-rate(?:[_.])|22185873824_536529798\.jpg/i.test(url)) return false;
     try {
       const host = new URL(url).hostname;
       return host === 'alicdn.com' || host.endsWith('.alicdn.com');
@@ -336,7 +337,9 @@
     const push = image => {
       if (column?.root && (image === column.root || column.root.contains(image))) return;
       let node = image;
-      for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) if (singleSku(node)) return;
+      for (let depth=0; node?.nodeType === 1; depth++, node = node.parentElement) {
+        if ((depth<6 && singleSku(node)) || /review|feedback|rate-list|recommend|related|avatar|loading|placeholder/i.test(node.id+' '+node.className)) return;
+      }
       const url = pictureUrl(image);
       if (keepDetailImage(url)) found.push(url);
     };
@@ -354,6 +357,8 @@
       }
     }
     for (const frame of document.querySelectorAll('iframe')) {
+      const src = frame.getAttribute('src') || frame.getAttribute('data-src') || frame.getAttribute('data-lazy-src');
+      if (!descriptionDocumentUrl(src) || !/desc|icoss|1688offer|lazyload/i.test((src || '')+' '+frame.id+' '+frame.className)) continue;
       try {
         const doc = frame.contentDocument;
         if (!doc) continue;
@@ -412,7 +417,7 @@
     const descriptionUrls = [...new Set([...(Array.isArray(live?.detailUrls) ? live.detailUrls : []), live?.detailUrl, ...descriptionSources()].map(descriptionDocumentUrl).filter(Boolean))].slice(0, 5);
     const column = thumbColumn();
     const reserved = new Set([...(column?.before || []), ...(column?.after || []), ...skus.map(sku => sku.image)].map(fullSize).filter(Boolean));
-    const detailImages = [...new Set([...media(root.detailImages || root.descImages), ...detailImagesFromDom()])].filter(url => !reserved.has(fullSize(url)));
+    const detailImages = [...new Set([...media(root.detailImages || root.descImages), ...detailImagesFromDom()])].filter(url => keepDetailImage(url) && !reserved.has(fullSize(url)));
     const detailImageSet = new Set(detailImages);
     const galleryImages = [...new Set([...(gallery.length ? gallery : domGallery.filter(image => !skuImages.has(image) && !detailImageSet.has(image))), ...gallery])];
     const videoUrl = httpsUrl(live?.videoUrl || root.videoUrl || root.video?.videoUrl || root.video?.playUrl) || videoFromDom();

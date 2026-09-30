@@ -13,14 +13,17 @@ const payload={item:{itemId:'123',title:'纯棉相机收纳包',images:['//img.a
   props:{groupProps:[{'基本信息':[{'材质':'棉'},{'产地':'浙江'}]}]},
   detail:{descUrl:'https://desc.alicdn.com/i3/123.html',images:['//img.alicdn.com/long.jpg']},video:{url:'https://cloud.video.taobao.com/a.mp4'}};
 
-async function snapshot(html='',pageGoods=null,href='https://item.taobao.com/item.htm?id=123'){
+async function snapshot(html='',pageGoods=null,href='https://item.taobao.com/item.htm?id=123',setup=()=>{}){
   const {window,document}=parseHTML(`<html><body>${html}</body></html>`); let handler;
   window.Element.prototype.getBoundingClientRect=()=>({width:300,height:300});
+  const options=setup(window,document)||{};
   const context=vm.createContext({window,document,location:new URL(href),URL,console,
     getComputedStyle: node=>({display:node.hidden?'none':'block',visibility:'visible'}),
     chrome:{runtime:{onMessage:{addListener:fn=>{handler=fn;}}}}});
   vm.runInContext(await readFile(new URL('../extension/detail-taobao.js',import.meta.url),'utf8'),context);
-  return new Promise(resolve=>handler({type:'PDD_DETAIL_SNAPSHOT',pageGoods},{},resolve));
+  let result;
+  for(let pass=0;pass<(options.passes||1);pass++)result=await new Promise(resolve=>handler({type:'PDD_DETAIL_SNAPSHOT',pageGoods},{},resolve));
+  return result;
 }
 
 test('matching bootstrap maps each SKU ID to its real price, stock and named specifications',async()=>{
@@ -40,6 +43,51 @@ test('matching bootstrap maps each SKU ID to its real price, stock and named spe
   assert.equal(rows.length,2); assert.equal(rows[0][5],'淘宝');
   assert.equal(rows[0][0],'TB123');
   assert.deepEqual(rows.map(r=>[r[14],r[15],r[16],r[17]]),[['红色','S','s1','12.80'],['蓝色','M','s2','15.60']]);
+});
+
+test('Tmall 图文详情 opens its tab and collects the heading section without recommendations or reviews',async()=>{
+  const result=await snapshot(`<h1>儿童不锈钢餐盘</h1><nav><button>图文详情</button></nav>
+    <section hidden id="text-images"><h2>图文详情</h2><img data-src="//img.alicdn.com/promotion.jpg"><p>食品接触级不锈钢</p><img src="//img.alicdn.com/plate-long.jpg"></section>
+    <section class="Reviews"><img src="//img.alicdn.com/review.jpg"></section><h2>本店推荐</h2><img src="//img.alicdn.com/other.jpg">`,null,'https://detail.tmall.com/item.htm?id=123',(_window,document)=>{
+      document.querySelector('button').addEventListener('click',()=>{document.querySelector('#text-images').hidden=false;});
+    });
+  assert.deepEqual(Array.from(result.detail.detailImages),['https://img.alicdn.com/promotion.jpg','https://img.alicdn.com/plate-long.jpg']);
+  assert.match(result.detail.descriptionText,/食品接触级/);
+});
+
+test('visible 图文详情 without images is still pending instead of accepting gallery and SKU as completion',async()=>{
+  const data=structuredClone(payload);delete data.detail;
+  const result=await snapshot('<h1>相机包</h1><button>图文详情</button><section id="description"><h2>图文详情</h2><span>加载中</span></section>',{roots:[data]});
+  assert.equal(result.detailPending,true);assert.equal(result.detail.detailStatus,'partial');
+});
+
+test('description frames use lazy sources and exclude unrelated visible frame images',async()=>{
+  const result=await snapshot('<h1>相机包</h1><iframe id="desc-frame" data-src="//desc.alicdn.com/123.html"></iframe><iframe id="review-frame" src="//feedback.taobao.com/a"></iframe>',null,undefined,(_window,document)=>{
+    const frames=document.querySelectorAll('iframe');
+    Object.defineProperty(frames[0],'contentDocument',{value:parseHTML('<img data-src="//img.alicdn.com/long-frame.jpg" src="data:image/gif;base64,a">').document});
+    Object.defineProperty(frames[1],'contentDocument',{value:parseHTML('<img src="//img.alicdn.com/unrelated.jpg">').document});
+  });
+  assert.deepEqual(Array.from(result.detail.detailImages),['https://img.alicdn.com/long-frame.jpg']);
+  assert.deepEqual(Array.from(result.descriptionUrls),['https://desc.alicdn.com/123.html']);
+});
+
+test('a description frame identified only by data-lazy-src supplies both images and its document URL',async()=>{
+  const result=await snapshot('<h1>相机包</h1><iframe id="frame" data-lazy-src="https://desc.alicdn.com/123.html"></iframe>',null,undefined,(_window,document)=>{
+    Object.defineProperty(document.querySelector('iframe'),'contentDocument',{value:parseHTML('<img src="//img.alicdn.com/frame-long.jpg">').document});
+  });
+  assert.deepEqual(Array.from(result.detail.detailImages),['https://img.alicdn.com/frame-long.jpg']);
+  assert.deepEqual(Array.from(result.descriptionUrls),['https://desc.alicdn.com/123.html']);
+});
+
+test('description polling scrolls through later lazy blocks and finishes only after images stabilize',async()=>{
+  const result=await snapshot('<h1>相机包</h1><section id="description"><h2>图文详情</h2><img src="//img.alicdn.com/top.jpg"></section>',null,undefined,(window,document)=>{
+    window.scrollY=0;
+    document.querySelector('h2').getBoundingClientRect=()=>({width:300,height:50,top:1000-window.scrollY});
+    window.scrollTo=(_x,y)=>{window.scrollY=y;if(y>=5200&&!document.querySelector('#bottom'))document.querySelector('#description').insertAdjacentHTML('beforeend','<img id="bottom" data-src="//img.alicdn.com/bottom.jpg">');};
+    return {passes:10};
+  });
+  assert.deepEqual(Array.from(result.detail.detailImages),['https://img.alicdn.com/top.jpg','https://img.alicdn.com/bottom.jpg']);
+  assert.equal(result.detailLoading,false);assert.equal(result.detailPending,false);
 });
 
 test('apiStack contains current SKU prices without mixing another item initialization',async()=>{

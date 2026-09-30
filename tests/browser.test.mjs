@@ -23,6 +23,13 @@ test('a 1688 description document yields the long detail images', () => {
   assert.equal(descriptionDocumentUrl('https://itemcdn.tmall.com/desc/icoss123'), 'https://itemcdn.tmall.com/desc/icoss123');
   assert.equal(descriptionDocumentUrl('https://detail.1688.com/offer/888.html'), '');
 });
+
+test('description extraction excludes the confirmed cow, review uploads, telemetry and script resources',()=>{
+  const body='<img src="https://cbu01.alicdn.com/img/ibank/2020/428/378/22185873824_536529798.jpg"><img src="https://cbu01.alicdn.com/i2/O1CN01a-0-rate.jpg">'+
+    '<img data-src="//cbu01.alicdn.com/img/ibank/real-long.jpg"><img src="https://arms-retcode.aliyuncs.com/r.png?">'+
+    '<script>const asset="https://img.alicdn.com/unrelated-app.png";</script><img src="//img.alicdn.com/store-banner.png">';
+  assert.deepEqual(imageUrlsInDescription(body),['https://cbu01.alicdn.com/img/ibank/real-long.jpg','https://img.alicdn.com/store-banner.png']);
+});
 test('search URL encodes a keyword as one query value',()=>{
   const value=searchUrl('相机 & 充电器?#');
   const url=new URL(value);
