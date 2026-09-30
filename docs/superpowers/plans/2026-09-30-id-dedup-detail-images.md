@@ -25,8 +25,10 @@
 ### Task 3: UI, review, release
 - [x] Update manager text/manifest to ID dedup, detail images and ID-only deletion; no same-image merge claim. Version 1.5.0; README explains behavior change and old task retry.
 - [x] Full `npm test`, `npm run check`, `git diff --check`; synchronize tracked delivery copies and verify hashes. Request independent reviewer; repair substantive issues with failing tests.
-- [ ] Commit, fast-forward main, reverify merged tests/local-file preservation, create verified 30-entry ZIP, push authorized GitHub main, archive only this managed worktree.
+- [x] Commit, fast-forward main, reverify merged tests/local-file preservation, create verified 30-entry ZIP, push authorized GitHub main, archive only this managed worktree.
 
 Review scope extension: real PDD and 1688 content adapters also gated on images. Added failing DOM samples before removal of those gates; PDD now finds independent ID/link cards and never turns empty src into /null. No-image nested result scrolling uses the first card rather than a first image. Real adapters -> Runner -> detail normalization -> template export retains 13 IDs for each source in a controlled fixture. Opening errors racing with manual Stop preserve stopped job state.
 
 Verification before integration: 228/228 full tests pass; module/manifest check and whitespace check pass; source/delivery hashes match. Independent read-only reviewer rechecked the repaired adapters and ran 70 relevant tests, with no remaining concrete finding. Actual live-site layout is unverified; no bypass of prior site-access denial was attempted.
+
+Release evidence: main fast-forwarded to 6ebbdff; merged suite 228/228 and module checks pass. Six unrelated pre-existing files remain byte-identical; original nine tracked files were backed up before integration. 1.5.0 ZIP has 30 entries, every entry SHA-256 matches its source, all delivery files match after newline normalization. ZIP SHA-256: 907142F933CA1A2BE399C13C291E5074FE002269A8F826D692686B1D57A99A03. GitHub origin/main verified at the feature commit. Native archive request queued only for id-dedup-detail-images; pdd-rawdata-fix remains untouched.
