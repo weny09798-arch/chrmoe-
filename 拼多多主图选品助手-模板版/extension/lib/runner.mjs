@@ -4,8 +4,9 @@ import { siteForJob } from './sites.mjs';
 const finished = status => ['done', 'short', 'error', 'stopped'].includes(status);
 export class Runner {
   constructor(task, ports) { this.task = task; this.ports = ports; this.intent = ''; this.running = false; }
-  pause() { this.intent = 'paused'; }
-  stop() { this.intent = 'stopped'; }
+  pause() { if (this.intent !== 'stopped') this.intent = 'paused'; this.refillPause = false; }
+  pauseForRefill() { if (!this.intent) { this.intent = 'paused'; this.refillPause = true; } }
+  stop() { this.intent = 'stopped'; this.refillPause = false; }
   async checkpoint() {
     for (const job of this.task.jobs) job.detailDone = countDetails(job);
     await this.ports.save(this.task); this.ports.update(this.task);
@@ -26,7 +27,8 @@ export class Runner {
           if (error.blocked) {
             // A user stop/pause that races with a verification response wins.
             // The current detail item was already reset to pending by enrich().
-            if (this.intent) break;
+            if (this.intent && !this.refillPause) break;
+            this.intent = ''; this.refillPause = false;
             this.task.status = 'blocked'; job.status = 'blocked'; job.note = error.message;
             this.task.permissionOrigin = error.permissionOrigin || ''; await this.checkpoint(); return;
           }
@@ -53,6 +55,7 @@ export class Runner {
     const limit = outputLimit(job);
     while (!this.intent && job.scanned < SCAN_LIMIT && selected(job).length < limit) {
       const page = await this.ports.read(job);
+      if (page.blocked && this.refillPause) throw Object.assign(new Error(page.reason || '请处理登录或验证码后继续'), { blocked: true });
       if (this.intent) return;
       if (page.blocked) throw Object.assign(new Error(page.reason || '请处理登录或验证码后继续'), { blocked: true });
       const fresh = page.cards.filter(c => !job.seen.includes(c.key));
@@ -75,8 +78,9 @@ export class Runner {
           const site = siteForJob(job);
           candidate = { ...resolved, cents, fingerprint, collectedAt: new Date().toISOString(), site: site.id, platform: site.label };
         } catch (error) {
-          if (this.intent) return;
+          if (this.intent && !this.refillPause) return;
           if (error.blocked || error.fatal) throw error;
+          if (this.intent) return;
           problem = error.message;
         }
         if (candidate) addCandidate(job, candidate);

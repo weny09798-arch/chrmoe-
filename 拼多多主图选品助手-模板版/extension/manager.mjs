@@ -3,6 +3,8 @@ import { Runner } from './lib/runner.mjs';
 import { browserPorts, closeTaskDetailTab } from './lib/browser.mjs';
 import { taskSheets, workbookBytes } from './lib/xlsx.mjs';
 import { resolveSite } from './lib/sites.mjs';
+import { productImage, removeProduct, prepareRefill } from './lib/products.mjs';
+import { createRefillScheduler } from './lib/refill.mjs';
 
 const $ = id => document.getElementById(id);
 const installed = Boolean(globalThis.chrome?.runtime?.id);
@@ -12,6 +14,37 @@ const storage = installed ? chrome.storage.local : {
 };
 let keywords = [], task = null, runner = null, busy = false, lockedOut = false, clearing = false, pendingResume = null, activeRun = null, exporting = false;
 let keywordWrites = Promise.resolve(), taskWrites = Promise.resolve();
+let refillAuto = false, refillWaiting = false;
+const refillScheduler = createRefillScheduler({
+  settle: async () => { if (activeRun) await activeRun.catch(() => {}); },
+  flush: async isCurrent => {
+    if (!isCurrent() || clearing || lockedOut || busy || !task) return;
+    const auto = refillAuto && task.status !== 'blocked';
+    prepareRequestedRefills(!auto);
+    if (auto) task.status = 'pending';
+    await saveTask(task);
+    if (!isCurrent() || clearing) return;
+    refillAuto = false; refillWaiting = false; renderTask();
+    if (auto && canAutoRun()) void execute();
+  },
+  onError: error => {
+    refillAuto = false; refillWaiting = false;
+    if (task && !clearing) {
+      task.status = 'paused';
+      for (const job of task.jobs) if (job.status === 'pending') job.status = 'paused';
+    }
+    notice(`补搜准备失败：${error.message}，当前结果仍可导出，请点击继续。`, 'error'); renderTask();
+  }
+});
+function prepareRequestedRefills(hold = false) {
+  for (const job of task?.jobs || []) if (prepareRefill(job) && hold) {
+    job.status = task.status === 'blocked' ? 'blocked' : 'paused';
+    if (task.status === 'stopped') task.status = 'paused';
+  }
+}
+function cancelRefill() {
+  refillScheduler.cancel(); refillAuto = false; refillWaiting = false;
+}
 function notice(message, type = '') { $('notice').textContent = message; $('notice').className = `notice ${type}`; $('notice').hidden = !message; }
 function element(tag, value, className = '') { const el = document.createElement(tag); el.textContent = value; el.className = className; return el; }
 function persistKeywords() {
@@ -68,11 +101,11 @@ function renderTask() {
     : (task?.status === 'error' ? '部分任务失败，已保留采集结果；请查看每行说明。' : '每个名称收集到设定数量即切换；最多扫描 200 条。');
   $('add-button').disabled = lockedOut || clearing;
   $('clear-all').disabled = lockedOut || clearing || (!keywords.length && !task);
-  $('pause').disabled = !busy || Boolean(runner?.intent); $('pause').hidden = Boolean(resumable);
+  $('pause').disabled = !(busy || refillWaiting) || (Boolean(runner?.intent) && !refillWaiting); $('pause').hidden = Boolean(resumable);
   $('resume').hidden = !resumable;
   $('resume').disabled = lockedOut || !installed;
   $('resume').textContent = task?.permissionOrigin ? '授权图片并继续' : '继续';
-  $('stop').disabled = lockedOut || !(busy || resumable);
+  $('stop').disabled = lockedOut || !(busy || resumable || refillWaiting);
   $('show-tab').hidden = !Number.isInteger(task?.detailTabId) && !Number.isInteger(task?.tabId);
   $('export').disabled = lockedOut || !task || exporting;
   $('results-empty').hidden = Boolean(jobs.length); $('result-table-wrap').hidden = !jobs.length;
@@ -110,8 +143,33 @@ function renderLinks() {
     a.href = item.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; linkCell.append(a);
     const status = DETAIL_LABEL[item.detailStatus] || '等待';
     const note = item.detailNote || (item.detailStatus === 'done' ? '详情字段已采集' : '—');
-    row.append(element('td', job.keyword), element('td', item.title), element('td', `¥${(item.cents / 100).toFixed(2)}`),
-      element('td', status), element('td', note, 'note'), linkCell); return row;
+    const imageCell = document.createElement('td'), imageUrl = productImage(item);
+    imageCell.className = 'product-preview-cell';
+    const placeholder = () => imageCell.replaceChildren(element('span', '暂无图片', 'product-image-empty'));
+    if (imageUrl) {
+      const img = document.createElement('img');
+      img.alt = item.title || '商品主图'; img.className = 'product-preview';
+      img.width = 72; img.height = 72; img.loading = 'lazy'; img.referrerPolicy = 'no-referrer';
+      img.addEventListener('error', placeholder, { once: true }); img.src = imageUrl; imageCell.append(img);
+    } else placeholder();
+    const action = document.createElement('td'), remove = element('button', '×', 'remove-product');
+    remove.type = 'button'; remove.dataset.removeProduct = item.id;
+    remove.title = `删除 ${item.title}，自动补齐`; remove.setAttribute('aria-label', `删除 ${item.title}`);
+    remove.disabled = lockedOut || clearing;
+    remove.addEventListener('click', () => {
+      if (lockedOut || clearing || !task?.jobs.includes(job) || !removeProduct(job, item.id)) return;
+      const mayRestart = busy ? Boolean(runner && (!runner.intent || refillAuto)) : !['paused', 'blocked', 'stopped'].includes(task.status);
+      refillAuto ||= mayRestart;
+      refillWaiting = true;
+      runner?.pauseForRefill();
+      renderTask(); renderLinks();
+      notice(refillAuto ? '已删除商品，稍后自动补齐；连续删除会合并处理。' : '已删除商品；处理当前提示后点击“继续”补齐。');
+      void saveTask(task).catch(error => notice(`删除保存失败：${error.message}`, 'error'));
+      refillScheduler.schedule();
+    });
+    action.append(remove);
+    row.append(element('td', job.keyword), imageCell, element('td', item.title), element('td', `¥${(item.cents / 100).toFixed(2)}`),
+      element('td', status), element('td', note, 'note'), linkCell, action); return row;
   })));
 }
 function saveTask(current) {
@@ -120,9 +178,10 @@ function saveTask(current) {
   return taskWrites;
 }
 function canAutoRun() {
-  return installed && !lockedOut && !clearing && !busy && task?.jobs.some(job => job.status === 'pending') && !['paused', 'blocked'].includes(task.status);
+  return installed && !lockedOut && !clearing && !busy && !refillWaiting && task?.jobs.some(job => job.status === 'pending') && !['paused', 'blocked'].includes(task.status);
 }
 async function execute() {
+  cancelRefill(); prepareRequestedRefills();
   busy = true;
   runner = new Runner(task, browserPorts({ save: saveTask, update: renderTask }));
   renderTask(); notice('');
@@ -205,6 +264,7 @@ $('add-form').addEventListener('submit', async event => {
 $('clear-all').addEventListener('click', async () => {
   if (lockedOut || clearing || (!keywords.length && !task)) return;
   clearing = true;
+  cancelRefill();
   runner?.stop();
   if (pendingResume) { pendingResume.cancelled = true; pendingResume = null; }
   notice('正在停止搜索并清空本机数据…'); renderKeywords(); renderTask();
@@ -219,7 +279,14 @@ $('clear-all').addEventListener('click', async () => {
   } catch (error) { notice(`清空失败：${error.message}`, 'error'); }
   finally { clearing = false; renderKeywords(); renderTask(); }
 });
-$('pause').addEventListener('click', () => { runner?.pause(); notice('正在暂停，当前页面操作完成后会保存进度。'); renderTask(); });
+$('pause').addEventListener('click', async () => {
+  cancelRefill(); runner?.pause();
+  if (!busy && task) {
+    task.status = 'paused'; prepareRequestedRefills(true);
+    try { await saveTask(task); } catch (error) { notice(error.message, 'error'); }
+  }
+  notice('正在暂停，当前页面操作完成后会保存进度。'); renderTask();
+});
 $('resume').addEventListener('click', async () => {
   if (!task || busy || lockedOut) return;
   const current = task, request = { cancelled: false };
@@ -242,6 +309,7 @@ $('resume').addEventListener('click', async () => {
   }
 });
 $('stop').addEventListener('click', async () => {
+  cancelRefill();
   if (pendingResume) {
     const request = pendingResume, current = task;
     request.cancelled = true;

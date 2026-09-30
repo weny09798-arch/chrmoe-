@@ -444,7 +444,8 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
       if (!tab) {
         tab = await chrome.tabs.create({ url: target, active: false });
         tabId = tab.id; task.tabId = tabId;
-      } else if (!site.isSearch(tab.url || '', job.keyword)) await chrome.tabs.update(tabId, { url: target });
+      } else if (job.restartSearch || !site.isSearch(tab.url || '', job.keyword)) await chrome.tabs.update(tabId, { url: target });
+      job.restartSearch = false;
       await save(task); await wait(900); await ready();
     },
     read, hash, resolve, enrich, close: closeDetail, wait, save, update,

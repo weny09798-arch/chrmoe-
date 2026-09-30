@@ -3,6 +3,20 @@ import assert from 'node:assert/strict';
 import { browserPorts, descriptionDocumentUrl, imageUrlsInDescription, productId, searchUrl } from '../extension/lib/browser.mjs';
 import { createTask } from '../extension/lib/core.mjs';
 
+test('refill reloads the same search page before replaying historical results', async () => {
+  const previous = globalThis.chrome; const task = createTask(['相机']); const job = task.jobs[0];
+  task.tabId = 42; job.restartSearch = true; const navigations = [];
+  globalThis.chrome = { tabs: {
+    get: async id => ({ id, status: 'complete', url: searchUrl('相机') }),
+    update: async (id, options) => { navigations.push([id, options.url]); return { id }; }
+  } };
+  try {
+    await browserPorts({ save: async () => {}, update() {} }).open(job, task);
+    assert.deepEqual(navigations, [[42, 'https://mobile.pinduoduo.com/search_result.html?search_key=%E7%9B%B8%E6%9C%BA']]);
+    assert.equal(job.restartSearch, false);
+  } finally { globalThis.chrome = previous; }
+});
+
 test('a 1688 description document yields the long detail images', () => {
   const html = String.raw`var desc='<img src="https:\/\/cbu01.alicdn.com\/img\/ibank\/detail-long.jpg"><img src="https://cbu01.alicdn.com/tps/icon.png">';`;
   assert.deepEqual(imageUrlsInDescription(html), ['https://cbu01.alicdn.com/img/ibank/detail-long.jpg']);

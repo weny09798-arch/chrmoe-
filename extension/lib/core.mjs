@@ -1,4 +1,5 @@
 import { similar } from './fingerprint.mjs';
+import { candidateExcluded, prepareRefill } from './products.mjs';
 
 export const SCAN_LIMIT = 200;
 export const OUTPUT_LIMIT = 20;
@@ -101,6 +102,7 @@ export function retryJob(task, index) {
   task.jobs[index] = createJob(previous.keyword, previous.site || 'pdd', {
     limit: previous.limit, priceMin: previous.priceMin, priceMax: previous.priceMax
   });
+  task.jobs[index].exclusions = previous.exclusions || [];
   if (['done', 'error', 'stopped'].includes(task.status)) task.status = 'pending';
   return task.jobs[index];
 }
@@ -121,6 +123,7 @@ export function countDetails(job) { return selected(job).filter(detailFinished).
 
 export function addCandidate(job, candidate) {
   if (!candidate.id || !candidate.fingerprint || !Number.isSafeInteger(candidate.cents) || candidate.cents <= 0) return false;
+  if (candidateExcluded(job, candidate)) return false;
   // Keep the original group representative stable: replacing it with each winner can cause similarity drift.
   let group = job.groups.find(g => g.ids.includes(candidate.id));
   if (!group) group = job.groups.find(g => g.image === candidate.image || similar(g.fingerprint, candidate.fingerprint));
@@ -128,7 +131,7 @@ export function addCandidate(job, candidate) {
     job.groups.push({ ids: [candidate.id], image: candidate.image, fingerprint: candidate.fingerprint, best: candidate });
   } else {
     if (!group.ids.includes(candidate.id)) group.ids.push(candidate.id);
-    if (candidate.cents < group.best.cents) group.best = candidate;
+    if (!group.retained && candidate.cents < group.best.cents) group.best = candidate;
   }
   return true;
 }
@@ -137,6 +140,7 @@ export function recoverTask(task) {
   if (!task || task.version !== 1 || !Array.isArray(task.jobs)) return null;
   if (['running', 'pending', 'blocked'].includes(task.status)) task.status = 'paused';
   for (const job of task.jobs) {
+    if (prepareRefill(job)) { job.status = 'paused'; task.status = 'paused'; }
     if (['running', 'blocked'].includes(job.status)) job.status = 'paused';
     for (const group of job.groups || []) {
       const item = group.best;
