@@ -35,8 +35,10 @@ test('deleting a winner removes its whole image group and prevents IDs and simil
 });
 test('refill preserves history, details, filters and target while renewing the scan budget', () => {
   const { job } = fixture(); job.priceMin = 500; job.priceMax = 5000;
+  job.merged=8;job.excluded=2;job.skipReasons={'价格未识别':3};
   products.removeProduct(job, '2'); products.prepareRefill(job);
   assert.equal(job.scanned, 0); assert.deepEqual(job.seen, ['1', '2', '3']);
+  assert.equal(job.merged,0);assert.equal(job.excluded,0);assert.deepEqual(job.skipReasons,{});
   assert.equal(job.limit, 2); assert.equal(job.priceMin, 500); assert.equal(job.priceMax, 5000);
   assert.equal(job.phase, 'search'); assert.equal(job.status, 'pending'); assert.equal(job.refillRequested, false);
   assert.equal(job.groups[0].best.detailStatus, 'done');

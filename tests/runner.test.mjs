@@ -30,6 +30,14 @@ test('stalled loading is an error rather than claimed end of results',async()=>{
   const task=createTask(['相机']);await new Runner(task,ports([{cards:[],end:false}])).run();
   assert.equal(task.jobs[0].status,'error');assert.match(task.jobs[0].note,/加载|识别/);
 });
+
+test('stalled refill with retained goods does not claim no product was recognized',async()=>{
+  const task=createTask(['相机']);const job=task.jobs[0];
+  job.groups=[{ids:['saved'],best:{id:'saved',title:'相机',cents:3000},retained:true}];
+  await new Runner(task,ports([{cards:[],end:false}])).run();
+  assert.equal(job.status,'error');assert.match(job.note,/已保留当前结果/);
+  assert.doesNotMatch(job.note,/未识别到商品结果/);
+});
 test('resume passes previously scanned cards while the list advances',async()=>{
   const task=createTask(['相机']); const job=task.jobs[0];
   job.seen=Array.from({length:100},(_,i)=>String(i+1));job.scanned=100;task.status='paused';job.status='paused';

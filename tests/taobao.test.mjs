@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import vm from 'node:vm';
-import {readFile} from 'node:fs/promises';
-import {parseHTML} from 'linkedom';
+import {taobaoPage as page,taobaoCard as card} from './helpers/taobao-page.mjs';
 import {resolveSite, siteForJob} from '../extension/lib/sites.mjs';
 import {enqueueKeyword, retryJob} from '../extension/lib/core.mjs';
 
@@ -21,20 +19,8 @@ test('Taobao source, exact item hosts and search keyword persist through retry',
   assert.equal(resolveSite('https://taobao.com.attacker.example/').supported,false);
   const task=enqueueKeyword(null,'相机','taobao',{limit:2}); retryJob(task,0);
   assert.equal(siteForJob(task.jobs[0]).id,'taobao'); assert.equal(task.jobs[0].limit,2);
+  assert.equal(task.jobs[0].restartSearch,true);
 });
-
-async function page(html, href='https://s.taobao.com/search?q=相机') {
-  const {window,document}=parseHTML(`<html><body>${html}</body></html>`);
-  document.documentElement.scrollTop=0;
-  Object.defineProperties(document.documentElement,{clientHeight:{value:600},scrollHeight:{value:600}});
-  let handler; const location=new URL(href);
-  const context=vm.createContext({window,document,location,URL,TextDecoder,Uint8Array,console,setTimeout,
-    getComputedStyle: node=>({display:node.hidden?'none':'block',visibility:'visible',overflowY:'visible'}),
-    chrome:{runtime:{onMessage:{addListener:fn=>{handler=fn;}}}}});
-  vm.runInContext(await readFile(new URL('../extension/content-taobao.js',import.meta.url),'utf8'),context);
-  return {document,send: message=>new Promise(resolve=>handler(message,{},resolve))};
-}
-const card=(id,title='高清数码相机',host='item.taobao.com')=>`<a href="https://${host}/item.htm?id=${id}"><img src="//img.alicdn.com/item-${id}.jpg"><div class="Title--title--x">${title}</div><div class="Price--priceText--x"><span>¥</span><span>12</span><span>.80</span></div><span>2000+人付款</span><span>退货包运费</span></a>`;
 
 test('search cards keep split current price and canonical Taobao/Tmall links',async()=>{
   const f=await page(card('123')+card('456','专业数码相机','detail.tmall.com'));
@@ -74,4 +60,100 @@ test('an explicit disabled last-page control at bottom confirms the search end',
 test('a thousands-separated actual sale price is not confused with sales counts',async()=>{
   const f=await page(card('123').replace('<span>12</span><span>.80</span>','<span>1,299</span><span>.00</span>'));
   assert.equal((await f.send({type:'PDD_SNAPSHOT'})).cards[0].priceText,'¥1299.00');
+});
+
+test('main image selection uses displayed size instead of an unlabelled promotion badge',async()=>{
+  const f=await page(card('123').replace('<img src=', '<img src="//img.alicdn.com/shared-campaign.jpg"><img src='));
+  const images=f.document.querySelectorAll('img');
+  images[0].getBoundingClientRect=()=>({width:96,height:18});
+  images[1].getBoundingClientRect=()=>({width:280,height:280});
+  assert.equal((await f.send({type:'PDD_SNAPSHOT'})).cards[0].image,'https://img.alicdn.com/item-123.jpg');
+});
+
+test('sale price keeps an integer amount with a promotion suffix and separate coupon savings',async()=>{
+  const f=await page(card('123').replace('<span>12</span><span>.80</span>','<span class="Price--priceInt">13</span><span>优惠后</span>').replace('<span>2000+人付款</span>','<div class="Price--promotion">超级立减12% 淘金币抵1.68元</div><span>2000+人付款</span>'));
+  assert.equal((await f.send({type:'PDD_SNAPSHOT'})).cards[0].priceText,'¥13.00');
+});
+
+test('a decimal discount in a price-labelled node never replaces the sale amount',async()=>{
+  const f=await page(card('123').replace('<span>12</span><span>.80</span>','<span class="Price--priceInt">13</span><span>优惠后</span>').replace('</a>','<div class="Price--coupon">1.68</div></a>'));
+  assert.equal((await f.send({type:'PDD_SNAPSHOT'})).cards[0].priceText,'¥13.00');
+});
+
+test('div pagination next control is clicked at the bottom with its nested label',async()=>{
+  const f=await page(card('123')+'<div class="Pagination--root"><div class="Pagination--prevNext"><span>下一页</span><svg></svg></div><span>1/100</span></div>');
+  let clicks=0;f.document.querySelector('.Pagination--prevNext').click=()=>{clicks++;};
+  await f.send({type:'PDD_SCROLL'});
+  assert.equal(clicks,1);
+});
+
+test('disabled div ancestor ends pagination and never clicks its nested next label',async()=>{
+  const f=await page(card('123')+'<div class="Pagination"><div class="next disabled"><span>下一页</span></div><span>100/100</span></div>');
+  let clicks=0;f.document.querySelector('.next').click=()=>{clicks++;};
+  assert.equal((await f.send({type:'PDD_SNAPSHOT'})).end,true);
+  await f.send({type:'PDD_SCROLL'});assert.equal(clicks,0);
+});
+
+test('page transition is pending for stale or empty results and ends only after the new list arrives',async()=>{
+  const f=await page(card('123')+'<div class="Pagination"><button>下一页</button></div>');
+  let clicks=0;f.document.querySelector('button').click=()=>{clicks++;f.location.search='?q=相机&page=2';};
+  await f.send({type:'PDD_SCROLL'});
+  assert.equal((await f.send({type:'PDD_SNAPSHOT'})).paginationPending,true);
+  await f.send({type:'PDD_SCROLL'});assert.equal(clicks,1);
+  f.document.querySelector('a').remove();
+  assert.equal((await f.send({type:'PDD_SNAPSHOT'})).paginationPending,true);
+  f.document.body.insertAdjacentHTML('afterbegin',card('456'));
+  f.document.documentElement.scrollTop=900;
+  const loaded=await f.send({type:'PDD_SNAPSHOT'});
+  assert.equal(loaded.paginationPending,false);assert.equal(loaded.cards[0].id,'456');
+  assert.equal(loaded.position,0);
+});
+
+test('pagination timeout reports its real failure without an automatic click loop',async()=>{
+  const f=await page(card('123')+'<div class="Pagination"><button>下一页</button></div>');
+  let clicks=0;f.document.querySelector('button').click=()=>{clicks++;};
+  await f.send({type:'PDD_SCROLL'});f.advance(25001);
+  const data=await f.send({type:'PDD_SNAPSHOT'});
+  assert.match(data.paginationError,/翻页/);
+  await f.send({type:'PDD_SCROLL'});assert.equal(clicks,1);
+});
+
+test('pagination never clicks an unrelated next button or an external link',async()=>{
+  const f=await page(card('123')+'<button>下一页</button><div class="Pagination"><a href="https://example.com/search?q=相机">下一页</a></div>');
+  let clicks=0;for(const n of f.document.querySelectorAll('button,a'))n.click=()=>{clicks++;};
+  await f.send({type:'PDD_SCROLL'});assert.equal(clicks,0);
+});
+
+test('an external next link cannot bypass host validation through its nested span',async()=>{
+  const f=await page(card('123')+'<div class="Pagination"><a href="https://example.com/search?q=相机"><span>下一页</span></a></div>');
+  let clicks=0;for(const n of f.document.querySelectorAll('a,span'))n.click=()=>{clicks++;};
+  await f.send({type:'PDD_SCROLL'});assert.equal(clicks,0);
+});
+
+test('a standalone span or role button next control remains supported in a pager',async()=>{
+  for(const tag of ['span','div role="button"']) {
+    const close=tag.startsWith('div')?'div':'span';
+    const f=await page(card('123')+`<div class="Pagination"><${tag} class="go-next">下一页</${close}><span>1/100</span></div>`);
+    let clicks=0;f.document.querySelector('.go-next').click=()=>{clicks++;};
+    await f.send({type:'PDD_SCROLL'});assert.equal(clicks,1);
+  }
+});
+
+test('removing or hiding a subset of old cards is not proof that the next page loaded',async()=>{
+  const f=await page(card('123')+card('456')+'<div class="Pagination"><button>下一页</button></div>');
+  let clicks=0;f.document.querySelector('button').click=()=>{clicks++;};
+  await f.send({type:'PDD_SCROLL'});f.document.querySelector('a').remove();
+  assert.equal((await f.send({type:'PDD_SNAPSHOT'})).paginationPending,true);
+  await f.send({type:'PDD_SCROLL'});assert.equal(clicks,1);
+});
+
+test('a currency-marked coupon is not substituted when the real sale price is unavailable',async()=>{
+  const f=await page(card('123').replace('<span>12</span><span>.80</span>','<span>不明</span>').replace('</a>','<div class="Price--coupon"><span>¥1.68</span></div></a>'));
+  assert.equal((await f.send({type:'PDD_SNAPSHOT'})).cards[0].priceText,'');
+});
+
+test('an empty page with a next control is never skipped before its first goods load',async()=>{
+  const f=await page('<div class="Pagination"><button>下一页</button></div>');
+  let clicks=0;f.document.querySelector('button').click=()=>{clicks++;};
+  await f.send({type:'PDD_SCROLL'});assert.equal(clicks,0);
 });

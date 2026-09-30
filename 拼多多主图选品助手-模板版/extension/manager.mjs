@@ -77,6 +77,13 @@ function detailCounts(items) {
     errors: items.filter(item => item.detailStatus === 'error').length
   };
 }
+function scanSummary(job) {
+  if (job.merged == null && !job.skipReasons) return '';
+  const reasons=Object.entries(job.skipReasons || {}).map(([name,count])=>`${name} ${count}`).join('、');
+  const start=job.statsStart ? `此前 ${job.statsStart} 条未记录分类；以下为恢复后的统计：` : '';
+  const skips=Math.max(0,(job.skipped || 0)-(job.statsStartSkipped || 0));
+  return `${start}同图合并 ${job.merged || 0} 条 · 识别跳过 ${skips} 条${reasons ? `（${reasons}）` : ''}${job.excluded ? ` · 已删除同类排除 ${job.excluded} 条` : ''}`;
+}
 function renderTask() {
   const jobs = task?.jobs || [];
   const done = jobs.filter(j => ['done', 'short', 'error', 'stopped'].includes(j.status)).length;
@@ -97,7 +104,7 @@ function renderTask() {
   $('current-detail').textContent = active
     ? active.phase === 'detail'
       ? `正在补全详情 ${active.detailDone || 0} / ${activeItems.length} · 完整 ${activeDetails.complete} · 部分 ${activeDetails.partial} · 失败 ${activeDetails.errors}`
-      : `已扫描 ${active.scanned} / 200 条 · ${active.groups.length} 组主图 · 保留 ${activeItems.length} / ${outputLimit(active)} 条${active.note ? ` · ${active.note}` : ''}`
+      : `已扫描 ${active.scanned} / 200 条 · ${active.groups.length} 组主图 · 保留 ${activeItems.length} / ${outputLimit(active)} 条${active.note ? ` · ${active.note}` : ''}${scanSummary(active) ? ` · ${scanSummary(active)}` : ''}`
     : (task?.status === 'error' ? '部分任务失败，已保留采集结果；请查看每行说明。' : '每个名称收集到设定数量即切换；最多扫描 200 条。');
   $('add-button').disabled = lockedOut || clearing;
   $('clear-all').disabled = lockedOut || clearing || (!keywords.length && !task);
@@ -129,7 +136,7 @@ function renderTask() {
     const detailSummary = counts.complete || counts.partial || counts.errors
       ? `详情完整 ${counts.complete} 个 · 部分 ${counts.partial} 个 · 失败 ${counts.errors} 个`
       : '';
-    const explanation = job.note || (job.skipped ? `已跳过 ${job.skipped} 条` : (['done', 'short', 'error', 'stopped'].includes(job.status) ? detailSummary || '—' : '—'));
+    const explanation = [job.note || (['done', 'short', 'error', 'stopped'].includes(job.status) ? detailSummary : ''),scanSummary(job)].filter(Boolean).join('；') || '—';
     row.append(element('td', job.keyword), status, element('td', String(job.scanned)), element('td', `${items.length}/${outputLimit(job)}`), element('td', explanation, 'note'), action);
     return row;
   }));

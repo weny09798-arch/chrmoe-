@@ -34,6 +34,9 @@ export function removeProduct(job, id) {
 export function prepareRefill(job) {
   if (!job.refillRequested) return false;
   job.scanned = 0; job.skipped = 0; job.lastSkip = ''; job.searchStatus = '';
+  job.merged = 0; job.excluded = 0; job.skipReasons = {};
+  job.statsStart = 0; job.statsStartSkipped = 0;
+  delete job.paginationFromKeys;
   job.phase = 'search'; job.status = 'pending'; job.refillRequested = false;
   job.restartSearch = true;
   for (const group of job.groups) group.retained = true;

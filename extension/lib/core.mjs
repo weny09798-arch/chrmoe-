@@ -103,6 +103,7 @@ export function retryJob(task, index) {
     limit: previous.limit, priceMin: previous.priceMin, priceMax: previous.priceMax
   });
   task.jobs[index].exclusions = previous.exclusions || [];
+  task.jobs[index].restartSearch = true;
   if (['done', 'error', 'stopped'].includes(task.status)) task.status = 'pending';
   return task.jobs[index];
 }

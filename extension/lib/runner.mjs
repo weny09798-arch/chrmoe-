@@ -49,28 +49,47 @@ export class Runner {
     }
   }
   async collect(job) {
-    let stalled = 0, noCardProgress = 0, previousSnapshot = '';
+    let stalled = 0, noCardProgress = 0, previousSnapshot = '', paginationWaits = 0;
     const processedKeys = new Set(job.seen), replayedKeys = new Set();
     const noCardProgressLimit = Math.min(60, Math.max(8, job.scrolls + 8));
     const limit = outputLimit(job);
+    let awaitingPage = Array.isArray(job.paginationFromKeys) ? job.paginationFromKeys : null;
+    if (job.merged == null && !job.skipReasons) { job.statsStart = job.scanned || 0; job.statsStartSkipped = job.skipped || 0; }
+    job.merged ??= 0; job.excluded ??= 0; job.skipReasons ||= {};
     while (!this.intent && job.scanned < SCAN_LIMIT && selected(job).length < limit) {
       const page = await this.ports.read(job);
       if (page.blocked && this.refillPause) throw Object.assign(new Error(page.reason || '请处理登录或验证码后继续'), { blocked: true });
       if (this.intent) return;
       if (page.blocked) throw Object.assign(new Error(page.reason || '请处理登录或验证码后继续'), { blocked: true });
+      if (page.paginationError) throw new Error(page.paginationError);
+      if (page.paginationPending || awaitingPage && !page.noResults && !page.cards.some(c=>!awaitingPage.includes(c.key))) {
+        if (++paginationWaits > 20) throw new Error('淘宝翻页等待超时，已保留当前结果；请检查采集页后重新搜索');
+        job.note = '正在翻到下一页，等待新商品加载';
+        await this.checkpoint(); await this.ports.wait(1300); continue;
+      }
+      if (paginationWaits || awaitingPage) { stalled = 0; noCardProgress = 0; previousSnapshot = ''; job.note = ''; }
+      paginationWaits = 0;
+      awaitingPage = null; delete job.paginationFromKeys;
       const fresh = page.cards.filter(c => !job.seen.includes(c.key));
-      const snapshot = JSON.stringify([page.position ?? null, page.cards.map(c => c.key)]);
+      const snapshot = JSON.stringify([page.url ?? '', page.position ?? null, page.cards.map(c => c.key)]);
       let navigated = false;
       for (const raw of fresh) {
         if (this.intent || job.scanned >= SCAN_LIMIT || selected(job).length >= limit) break;
-        let candidate, problem = '';
+        let candidate, problem = '', skipReason = '其他原因';
         try {
+          skipReason = '名称未识别';
           if (!validProductTitle(raw.title, job.keyword)) throw new Error('商品名称与搜索名称无关联，或仅识别到平台标签');
+          skipReason = '价格未识别';
           const cents = parsePrice(raw.priceText);
           if (cents === null) throw new Error('展示价格无法明确识别');
+          skipReason = '价格不在区间';
           if (!priceAllowed(cents, job)) throw new Error('展示价格不在设定区间内');
+          skipReason = '主图未识别';
+          if (!raw.image) throw new Error('未识别到商品主图，已跳过');
+          skipReason = '主图读取失败';
           const fingerprint = await this.ports.hash(raw.image);
           if (this.intent) return;
+          skipReason = '链接未识别';
           const resolved = raw.id ? raw : await this.ports.resolve(raw, page, job);
           if (this.intent) return;
           navigated ||= Boolean(resolved.navigated);
@@ -83,8 +102,14 @@ export class Runner {
           if (this.intent) return;
           problem = error.message;
         }
-        if (candidate) addCandidate(job, candidate);
-        else { job.skipped++; job.lastSkip = problem; }
+        if (candidate) {
+          const count = job.groups.length;
+          if (!addCandidate(job, candidate)) job.excluded = (job.excluded || 0) + 1;
+          else if (job.groups.length === count) job.merged = (job.merged || 0) + 1;
+        } else {
+          job.skipped++; job.lastSkip = problem;
+          job.skipReasons ||= {}; job.skipReasons[skipReason] = (job.skipReasons[skipReason] || 0) + 1;
+        }
         job.seen.push(raw.key); processedKeys.add(raw.key); job.scanned++;
         await this.checkpoint();
         // A detail-page visit replaces the DOM; reread before using other card descriptors.
@@ -101,10 +126,16 @@ export class Runner {
         }
         stalled = snapshot === previousSnapshot ? stalled + 1 : 0;
         noCardProgress = newlyReplayed ? 0 : noCardProgress + 1;
-        if (stalled >= 8 || noCardProgress >= noCardProgressLimit) throw new Error(job.scanned ? '列表加载停滞，未确认到达末尾；已保留当前结果' : '未识别到商品结果，请确认搜索页可用；可能需要适配当前页面');
+        if (stalled >= 8 || noCardProgress >= noCardProgressLimit) throw new Error(job.scanned || selected(job).length ? '列表加载停滞，未确认到达末尾；已保留当前结果' : '未识别到商品结果，请确认搜索页可用；可能需要适配当前页面');
       }
       previousSnapshot = snapshot;
-      if (!navigated) { await this.ports.scroll(); job.scrolls++; }
+      if (!navigated) {
+        const scrolling = await this.ports.scroll(); job.scrolls++;
+        if (scrolling?.paginationPending) {
+          awaitingPage = page.cards.map(c=>c.key); job.paginationFromKeys = awaitingPage;
+          await this.checkpoint();
+        }
+      }
       await this.ports.wait(1300);
     }
     if (this.intent) return;

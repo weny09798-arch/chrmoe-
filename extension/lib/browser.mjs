@@ -453,6 +453,6 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
       await save(task); await wait(900); await ready();
     },
     read, hash, resolve, enrich, close: closeDetail, wait, save, update,
-    async scroll() { await message({ type: 'PDD_SCROLL' }); }
+    async scroll() { return message({ type: 'PDD_SCROLL' }); }
   };
 }

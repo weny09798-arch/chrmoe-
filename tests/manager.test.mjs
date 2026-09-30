@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { parseHTML } from 'linkedom';
 import { createTask } from '../extension/lib/core.mjs';
+import {Runner} from '../extension/lib/runner.mjs';
 
 const html = await readFile(new URL('../extension/manager.html', import.meta.url), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -129,6 +130,27 @@ async function managerFixture(configureTask = () => {}) {
   const click = id => document.getElementById(id).dispatchEvent(new window.Event('click'));
   return { document, saved, click, decidePermission, removedTabs, activatedTabs, get tabCreates() { return tabCreates; }, get permissionRequests() { return permissionRequests; } };
 }
+
+test('collection explanation distinguishes merged images from rejected names and prices',async()=>{
+  const f=await managerFixture(task=>{
+    const job=task.jobs[0];job.scanned=50;job.merged=8;job.skipped=3;
+    job.skipReasons={'名称未识别':1,'价格未识别':2};job.note='列表加载停滞，已保留当前结果';
+  });
+  const note=f.document.querySelector('#result-rows .note').textContent;
+  assert.match(note,/同图合并 8/);assert.match(note,/识别跳过 3/);
+  assert.match(note,/名称未识别 1/);assert.match(note,/价格未识别 2/);
+  assert.match(note,/已保留当前结果/);
+});
+
+test('resuming a legacy task labels the missing prior statistics and only counts new rejects',async()=>{
+  const f=await managerFixture(task=>{
+    task.status='paused';task.jobs[0].scanned=50;task.jobs[0].skipped=3;
+  });
+  await new Runner(f.saved.task,{save:async()=>{},update(){},open:async()=>{},close:async()=>{},read:async()=>({cards:[],end:true})}).run();
+  await import(`../extension/manager.mjs?case=${Math.random()}`);await tick();
+  const note=f.document.querySelector('#result-rows .note').textContent;
+  assert.match(note,/此前 50 条未记录分类/);assert.match(note,/恢复后的统计/);assert.match(note,/识别跳过 0 条/);
+});
 
 test('resume locks task immediately and stop cancels a pending permission grant', async () => {
   const fixture = await managerFixture();
