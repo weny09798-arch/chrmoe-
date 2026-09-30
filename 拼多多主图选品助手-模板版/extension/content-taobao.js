@@ -36,7 +36,8 @@
     for(const img of card.querySelectorAll('img')) {
       if(!shown(img)) continue;
       const src=img.currentSrc||img.getAttribute('src')||'';
-      const lazy=img.getAttribute('data-src')||img.getAttribute('data-lazy-src')||img.getAttribute('data-original');
+      const srcset=img.getAttribute('srcset')||img.closest('picture')?.querySelector('source[srcset]')?.getAttribute('srcset');
+      const lazy=img.getAttribute('data-src')||img.getAttribute('data-lazy-src')||img.getAttribute('data-original')||img.getAttribute('data-ks-lazyload')||img.getAttribute('data-lazyload')||srcset?.split(',').at(-1)?.trim().split(/\s+/)[0];
       const raw=!src||/^(?:data:)|placeholder|blank|1x1|tps-/.test(src)?lazy:src;
       if(!raw) continue;
       try {
@@ -63,9 +64,13 @@
     const excluded='del,s,[class*="original"],[class*="Original"],[class*="oldPrice"],[class*="coupon"],[class*="Coupon"],[class*="discount"],[class*="Discount"],[class*="promotion"],[class*="Promotion"]';
     const nodes=[...card.querySelectorAll('[class*="price"],[class*="Price"],[data-price]')].filter(shown);
     const current=nodes.filter(n=>!n.closest(excluded));
-    const marked=current.map(n=>text(n).replace(/\s+/g,'').replace(/(\d),(?=\d{3}(?:,|\.|起|补贴后|优惠后|首单价|$))/g,'$1')).filter(v=>/^(?:券后|到手价|售价)?[¥￥]?\d+(?:\.\d{1,2})?(?:起|补贴后|优惠后|首单价|券后|到手价)?$/.test(v));
+    const marked=current.map(n=>text(n).replace(/\s+/g,'').replace(/(\d),(?=\d{3}(?:,|\.|起|补贴后|优惠后|首单价|$))/g,'$1'))
+      .map(v=>v.replace(/((?:补贴后|优惠后|首单价|券后|到手价))\d+(?:\.\d+)?[万千]?\+?人(?:付款|收货)$/,'$1'))
+      .filter(v=>/^(?:券后|到手价|售价)?[¥￥]?\d+(?:\.\d{1,2})?(?:起|补贴后|优惠后|首单价|券后|到手价)?$/.test(v));
     const withMark=marked.filter(v=>/[¥￥]/.test(v));
     const values=(withMark.length?withMark:marked.filter(v=>v.includes('.'))).map(v=>v.match(/\d+(?:\.\d{1,2})?/)?.[0]);
+    // An unreadable currency-marked sale region must not yield a lone child amount.
+    if(!values.length&&current.some(n=>/[¥￥]/.test(text(n))))return '';
     if(!values.length) for(const n of card.querySelectorAll('*')) if(!n.children.length && shown(n) && !n.closest(excluded)) {
       const v=text(n).replace(/\s+/g,''); if(/^[¥￥]\d+(?:\.\d{1,2})?(?:起)?$/.test(v)) values.push(v.match(/\d+(?:\.\d{1,2})?/)[0]);
     }
@@ -149,6 +154,10 @@
           } else scroll.scrollTop=next;
         }
         respond({ok:true,...pagination(cards(),noResults())});
+      } else if(message.type==='PDD_PREPARE_CARD') {
+        const anchor=[...document.querySelectorAll(selector)].find(n=>productUrl(n.getAttribute('href'))?.id===message.key&&shown(n));
+        if(!anchor)respond({ok:false});
+        else {container(anchor).scrollIntoView?.({block:'center',behavior:'instant'});respond({ok:true});}
       } else if(message.type==='PDD_OPEN_CARD') {
         const anchor=[...document.querySelectorAll(selector)].find(n=>productUrl(n.getAttribute('href'))?.id===message.key&&shown(n));
         if(!anchor) respond({error:'商品卡片已变化，请重试'});

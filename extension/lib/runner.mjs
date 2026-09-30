@@ -49,7 +49,7 @@ export class Runner {
     }
   }
   async collect(job) {
-    let stalled = 0, noCardProgress = 0, previousSnapshot = '', paginationWaits = 0;
+    let stalled = 0, noCardProgress = 0, previousSnapshot = '', paginationWaits = 0, extractionFailures = 0;
     const processedKeys = new Set(job.seen), replayedKeys = new Set();
     const noCardProgressLimit = Math.min(60, Math.max(8, job.scrolls + 8));
     const limit = outputLimit(job);
@@ -73,10 +73,15 @@ export class Runner {
       const fresh = page.cards.filter(c => !job.seen.includes(c.key));
       const snapshot = JSON.stringify([page.url ?? '', page.position ?? null, page.cards.map(c => c.key)]);
       let navigated = false;
-      for (const raw of fresh) {
+      for (let raw of fresh) {
         if (this.intent || job.scanned >= SCAN_LIMIT || selected(job).length >= limit) break;
         let candidate, problem = '', skipReason = '其他原因';
         try {
+          if (job.site === 'taobao' && this.ports.prepareCard) {
+            skipReason = '页面商品变化';
+            raw = await this.ports.prepareCard(raw,job,()=>Boolean(this.intent));
+            if (this.intent) return;
+          }
           skipReason = '名称未识别';
           if (!validProductTitle(raw.title, job.keyword)) throw new Error('商品名称与搜索名称无关联，或仅识别到平台标签');
           skipReason = '价格未识别';
@@ -112,6 +117,8 @@ export class Runner {
         }
         job.seen.push(raw.key); processedKeys.add(raw.key); job.scanned++;
         await this.checkpoint();
+        extractionFailures = !candidate && ['名称未识别','价格未识别','主图未识别','页面商品变化'].includes(skipReason) ? extractionFailures + 1 : 0;
+        if (job.site === 'taobao' && extractionFailures >= 5) throw new Error('连续 5 条商品在加载重读后仍无法识别，已停止本名称并保留结果；当前淘宝页面需要进一步适配');
         // A detail-page visit replaces the DOM; reread before using other card descriptors.
         if (navigated) break;
       }

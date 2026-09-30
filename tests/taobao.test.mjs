@@ -157,3 +157,38 @@ test('an empty page with a next control is never skipped before its first goods 
   let clicks=0;f.document.querySelector('button').click=()=>{clicks++;};
   await f.send({type:'PDD_SCROLL'});assert.equal(clicks,0);
 });
+
+test('prepare card scrolls just that product into view without clicking goods or pagination',{timeout:100},async()=>{
+  const f=await page(card('1')+card('2'));let scrolls=0,clicks=0;
+  const a=f.document.querySelectorAll('a');
+  a[0].scrollIntoView=()=>{throw new Error('Wrong card scrolled');};a[1].scrollIntoView=()=>{scrolls++;};
+  for(const el of a)el.click=()=>{clicks++;};
+  const response=await f.send({type:'PDD_PREPARE_CARD',key:'2'});
+  assert.equal(response.ok,true);assert.equal(scrolls,1);assert.equal(clicks,0);
+});
+
+test('large lazy product image accepts data-ks-lazyload and source srcset without choosing a badge',async()=>{
+  for(const image of ['<img data-ks-lazyload="//img.alicdn.com/main-1.jpg" src="data:image/gif;base64,blank">','<picture><source srcset="//img.alicdn.com/main-1.jpg 600w"><img src="data:image/gif;base64,blank"></picture>']) {
+    const f=await page(card('1').replace('<img src="//img.alicdn.com/item-1.jpg">',image));
+    assert.equal((await f.send({type:'PDD_SNAPSHOT'})).cards[0].image,'https://img.alicdn.com/main-1.jpg');
+  }
+});
+
+test('split currency and digits in a price region ignore following buyer counts',async()=>{
+  const f=await page(card('1').replace('<span>12</span><span>.80</span>','<span>58</span><span>.31</span><span>补贴后</span><span>600+人付款</span>'));
+  assert.equal((await f.send({type:'PDD_SNAPSHOT'})).cards[0].priceText,'¥58.31');
+});
+
+test('a decimal buyer count is removed only at the end of a labelled sale price',async()=>{
+  for(const count of ['1.2万人付款','2.5千+人收货']) {
+    const f=await page(card('1').replace('<span>12</span><span>.80</span>',`<span>58</span><span>.31</span><span>补贴后</span><span>${count}</span>`));
+    assert.equal((await f.send({type:'PDD_SNAPSHOT'})).cards[0].priceText,'¥58.31');
+  }
+});
+
+test('buyer count never conceals an additional non-original price in the same region',async()=>{
+  for(const suffix of ['<span>补贴后600+人付款¥68.31</span>','<span>补贴后</span><span>600+人付款</span><span>¥68.31</span>','<span>-</span><span>68.31</span>']) {
+    const f=await page(card('1').replace('<span>12</span><span>.80</span>',`<span>58</span><span>.31</span>${suffix}`));
+    assert.equal((await f.send({type:'PDD_SNAPSHOT'})).cards[0].priceText,'');
+  }
+});

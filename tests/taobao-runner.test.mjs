@@ -17,6 +17,32 @@ const pagePorts=f=>({save:async()=>{},update(){},open:async()=>{},close:async()=
   wait:async ms=>f.advance(ms),hash:async url=>sampleHash(url.match(/item-(\d+)/)[1]),
   enrich:async()=>({descriptionText:'商品详情',detailStatus:'done'})});
 
+test('incomplete Taobao cards are prepared before validation and never permanently rejected while loading',async()=>{
+  const task=enqueueKeyword(null,'相机','taobao',{limit:1});let preparations=0;
+  const raw={id:'1',key:'1',title:'相机',image:'',priceText:'',url:'https://item.taobao.com/item.htm?id=1'};
+  await new Runner(task,{...pagePorts({}),read:async()=>({cards:[raw],end:true}),prepareCard:async c=>{
+    preparations++;return {...c,image:'https://img.alicdn.com/item-1.jpg',priceText:'¥13'};
+  }}).run();
+  assert.equal(preparations,1);assert.equal(task.jobs[0].skipped,0);assert.equal(selected(task.jobs[0]).length,1);
+});
+
+test('pause during Taobao card preparation does not consume a card or scan budget',async()=>{
+  const task=enqueueKeyword(null,'相机','taobao',{limit:1});let runner;
+  const raw={id:'1',key:'1',title:'相机',image:'',priceText:'¥13',url:'https://item.taobao.com/item.htm?id=1'};
+  runner=new Runner(task,{...pagePorts({}),read:async()=>({cards:[raw],end:true}),prepareCard:async c=>{runner.pause();return c;}});
+  await runner.run();assert.equal(task.status,'paused');assert.equal(task.jobs[0].scanned,0);assert.deepEqual(task.jobs[0].seen,[]);
+});
+
+test('systematic extraction failure stops after five post-retry failures rather than skipping one hundred goods',async()=>{
+  const task=enqueueKeyword(null,'相机','taobao',{limit:13});let attempts=0;
+  const raw=id=>({id,key:id,title:'相机',image:'',priceText:'¥13',url:`https://item.taobao.com/item.htm?id=${id}`});
+  const good={...raw('1'),image:'https://img.alicdn.com/item-1.jpg'};
+  await new Runner(task,{...pagePorts({}),read:async()=>({cards:[good,...Array.from({length:103},(_,i)=>raw(String(i+2)))],end:false}),prepareCard:async c=>{if(!c.image)attempts++;return c;}}).run();
+  assert.equal(task.jobs[0].status,'error');assert.equal(attempts,5);assert.equal(task.jobs[0].scanned,6);
+  assert.deepEqual(selected(task.jobs[0]).map(x=>x.id),['1']);
+  assert.match(task.jobs[0].note,/连续.*5.*识别/);
+});
+
 test('Taobao collection retains Tmall source and shares the limit, exclusions and template export',async()=>{
   const task=enqueueKeyword(null,'相机','taobao',{limit:2,priceMin:500,priceMax:1500});const job=task.jobs[0];let reads=0;
   const card=(id,host='item.taobao.com')=>({id,key:id,title:'相机包',priceText:'¥8.50',image:`https://img.alicdn.com/${id}.jpg`,url:`https://${host}/item.htm?id=${id}`});

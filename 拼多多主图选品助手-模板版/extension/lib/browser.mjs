@@ -1,5 +1,6 @@
 import { fingerprint } from './fingerprint.mjs';
 import { normalizeDetail } from './detail.mjs';
+import {parsePrice,validProductTitle} from './core.mjs';
 import { allowedImageHost, siteById, siteForJob } from './sites.mjs';
 import { readLiveTaobao } from './taobao-page.mjs';
 
@@ -215,7 +216,7 @@ async function descriptionImages(detailUrl) {
   } catch { return []; }
 }
 
-export function browserPorts({ save, update, detailPollLimit = 40, detailPollWait = wait }) {
+export function browserPorts({ save, update, detailPollLimit = 40, detailPollWait = wait, cardPollWait = wait }) {
   let tabId, task, detailTabId, currentJob;
   const imageCache = new Map();
   async function closeDetail({ preserveBlocked = false } = {}) {
@@ -401,6 +402,29 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
       return value;
     } finally { bitmap.close(); }
   }
+  async function prepareCard(card,job,cancelled=()=>false) {
+    const complete=c=>c?.image&&validProductTitle(c.title,job.keyword)&&parsePrice(c.priceText)!==null;
+    if(siteForJob(job).id!=='taobao'||complete(card)||cancelled())return card;
+    currentJob=job;
+    const before=await read(job);
+    if(before.blocked)throw blocked(before.reason);
+    const initial=before.cards.find(c=>c.key===card.key&&c.id===card.id);
+    if(complete(initial))return initial;
+    if(cancelled())return card;
+    await message({type:'PDD_PREPARE_CARD',key:card.key});
+    let latest=initial;
+    for(let i=0;i<12;i++) {
+      if(cancelled())return card;
+      if(i)await cardPollWait(500);
+      if(cancelled())return card;
+      const page=await read(job);
+      if(page.blocked)throw blocked(page.reason);
+      latest=page.cards.find(c=>c.key===card.key&&c.id===card.id);
+      if(complete(latest))return latest;
+    }
+    if(!latest)throw new Error('待采集商品已离开列表，未使用旧快照');
+    return latest;
+  }
   async function resolve(card, page, job) {
     currentJob = job;
     const site = siteForJob(job);
@@ -452,7 +476,7 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
       job.restartSearch = false;
       await save(task); await wait(900); await ready();
     },
-    read, hash, resolve, enrich, close: closeDetail, wait, save, update,
+    read, prepareCard, hash, resolve, enrich, close: closeDetail, wait, save, update,
     async scroll() { return message({ type: 'PDD_SCROLL' }); }
   };
 }

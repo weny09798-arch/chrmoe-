@@ -6,9 +6,11 @@
 
 **Verification boundary:** Live Taobao access was safety-blocked earlier; no alternative browser/API access. Local samples cannot prove this exact page is fixed. If extraction still fails, report that limitation plainly.
 
-- [ ] TDD: Runner invokes preparation before validating/marking seen; an initially empty image/price becomes available after preparation; pause during preparation saves no processed key.
-- [ ] TDD: content scrolls the requested ID only, supports current image lazy attributes, srcset/background, and split price in a labelled price region with sale note/count; excludes badges/coupons and ambiguous ranges/multiple prices.
-- [ ] TDD: browser preparation retries only incomplete matching cards, validates site/query/ID, preserves captcha and stop/pause, bounds waiting and reports disappearance.
-- [ ] TDD: five consecutive incomplete post-retry cards stop with explicit adaptation note and collected goods retained. No claim of duplicate removal.
-- [ ] Independent review and complete suite/module/diff checks; version 1.4.2 and synchronized delivery copies.
+- [x] TDD: Runner invokes preparation before validating/marking seen; an initially empty image/price becomes available after preparation; pause during preparation saves no processed key.
+- [x] TDD: content scrolls the requested ID only, supports current image lazy attributes and srcset, and split price in a labelled price region with sale note/count; excludes badges/coupons and ambiguous ranges/multiple prices.
+- [x] TDD: browser preparation retries only incomplete matching cards, validates site/query/ID, preserves captcha and stop/pause, bounds waiting and reports disappearance.
+- [x] TDD: five consecutive incomplete post-retry cards stop with explicit adaptation note and collected goods retained. No claim of duplicate removal.
+- [x] Independent review and complete suite/module/diff checks; version 1.4.2 and synchronized delivery copies.
 - [ ] Commit isolated work, merge authorized main preserving local changes, verify merged tree and ZIP hashes, push authorized GitHub and archive only this worktree.
+
+Verification: 216/216 local tests pass; module and diff checks pass. Price review findings were reproduced with failing tests then repaired, including decimal buyer counts and a separate second-price span. Lazy attributes and srcset are supported in this change; background-image support is outside this release scope. Live Taobao has not been verified.

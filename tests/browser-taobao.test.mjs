@@ -5,6 +5,43 @@ import {readLiveTaobao} from '../extension/lib/taobao-page.mjs';
 import {browserPorts,descriptionDocumentUrl} from '../extension/lib/browser.mjs';
 import {enqueueKeyword} from '../extension/lib/core.mjs';
 
+test('card preparation scrolls once and rereads delayed image and price with a bounded retry',async()=>{
+  const previous=globalThis.chrome;let polls=0,scrolls=0,waits=0;
+  const raw={id:'123',key:'123',title:'相机',image:'',priceText:'',url:'https://item.taobao.com/item.htm?id=123'};
+  const task=enqueueKeyword(null,'相机','taobao');task.tabId=7;
+  globalThis.chrome={tabs:{get:async()=>({id:7,status:'complete',url:'https://s.taobao.com/search?q=相机'}),sendMessage:async(_id,message)=>{
+    if(message.type==='PDD_PREPARE_CARD'){scrolls++;return{ok:true};}
+    polls++;return{url:'https://s.taobao.com/search?q=相机',cards:[polls<4?raw:{...raw,image:'https://img.alicdn.com/a.jpg',priceText:'¥13'}]};
+  }},scripting:{executeScript:async()=>[]}};
+  try{
+    const ports=browserPorts({save:async()=>{},update(){},cardPollWait:async()=>{waits++;}});
+    await ports.open(task.jobs[0],task);
+    const result=await ports.prepareCard(raw,task.jobs[0]);
+    assert.equal(result.image,'https://img.alicdn.com/a.jpg');assert.equal(result.priceText,'¥13');
+    assert.equal(scrolls,1);assert.equal(polls,4);assert.equal(waits,2);
+    const complete=await ports.prepareCard(result,task.jobs[0]);assert.equal(complete.id,'123');assert.equal(scrolls,1);
+  }finally{globalThis.chrome=previous;}
+});
+
+test('card preparation stops on verification, cancellation, or a changed product ID',async()=>{
+  const previous=globalThis.chrome;
+  for(const mode of ['blocked','cancelled','foreign']) {
+    const raw={id:'123',key:'123',title:'相机',image:'',priceText:'',url:'https://item.taobao.com/item.htm?id=123'};
+    const task=enqueueKeyword(null,'相机','taobao');task.tabId=7;let reads=0,cancelled=false;
+    globalThis.chrome={tabs:{get:async()=>({id:7,status:'complete',url:'https://s.taobao.com/search?q=相机'}),sendMessage:async(_id,message)=>{
+      if(message.type==='PDD_PREPARE_CARD')return{ok:true};
+      reads++;return mode==='blocked'?{blocked:true,reason:'请完成验证码',cards:[]}:{url:'https://s.taobao.com/search?q=相机',cards:[mode==='foreign'?{...raw,id:'999',image:'https://img.alicdn.com/other.jpg',priceText:'¥1'}:raw]};
+    }},scripting:{executeScript:async()=>[]}};
+    try {
+      const ports=browserPorts({save:async()=>{},update(){},cardPollWait:async()=>{cancelled=true;}});
+      await ports.open(task.jobs[0],task);
+      if(mode==='blocked')await assert.rejects(ports.prepareCard(raw,task.jobs[0]),error=>error.blocked&&/验证码/.test(error.message));
+      else if(mode==='foreign') {await assert.rejects(ports.prepareCard(raw,task.jobs[0]),/离开列表/);assert.ok(reads<=13);}
+      else {const result=await ports.prepareCard(raw,task.jobs[0],()=>cancelled);assert.equal(result.image,'');assert.ok(reads<=2);}
+    }finally{globalThis.chrome=previous;}
+  }
+});
+
 test('page world snapshot includes current product data and excludes unrelated account roots',()=>{
   const context=vm.createContext({location:{href:'https://item.taobao.com/item.htm?id=123'},URL,
     __ICE_APP_CONTEXT__:{appData:{loaderData:{home:{data:{item:{itemId:'123',title:'相机包',images:['//img.alicdn.com/a.jpg'],sellerSecret:'private'},skuBase:{props:[],skus:[]},skuCore:{sku2info:{'0':{price:{priceText:'8.5'},quantity:3,accountSecret:'private'}}},user:{name:'private'}}}}}},

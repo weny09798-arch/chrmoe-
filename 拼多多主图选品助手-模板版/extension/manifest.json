@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "拼多多 · 主图选品助手",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "按采集网址在拼多多、1688 或淘宝搜索，按主图去重保留同图最低展示价，按设定数量采集商品详情和 SKU 并导出 Excel。",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "scripting", "downloads"],
