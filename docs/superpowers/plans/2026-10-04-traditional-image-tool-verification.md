@@ -25,3 +25,7 @@ Five `Snipaste_2026-10-03_*.jpg` examples completed in one serial local batch; o
 Clear text on simple backgrounds is suitable. Decorative outlines/photo backgrounds were retained rather than erased after early output inspection showed residue. Small packaging text and OCR errors remain limitations. Replacement uses system fonts and cannot reproduce all artwork. Dictionary conversion can be contextually imperfect; reports allow source/target inspection. No claim of complete image conversion or production-quality fidelity.
 
 The program binds only to loopback. Its application code makes no remote API calls; OCR receives decoded local pixels, models/dictionaries are packaged, and output is PNG plus JSON. Software package excludes the user's sample photos; examples are copied separately for the user's local inspection.
+
+## Delivery
+
+Portable delivery contains345 files, with SHA256 inventory; every archive entry was read and matched its source hash. ZIP is101.4MiB. Copied executable passed the same real HTTP/OCR smoke test from the user-visible delivery folder. Source merged to main and pushed; existing dirty extension files' SHA256 hashes remained unchanged. This task's managed worktree was archived after preserving the software, sample previews and verification logs. The previous pdd-rawdata-fix worktree was left untouched.

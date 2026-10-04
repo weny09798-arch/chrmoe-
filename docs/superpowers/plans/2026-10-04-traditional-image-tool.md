@@ -36,6 +36,6 @@ Files: `image-translator/README.md`, `image-translator/build.ps1`, packaging not
 - [x] Run5user images with real OCR, inspect outputs, record missed/lowconfidence/smalltext, save sample comparison. Confirm network not used by runtime.
 - [x] Build Windows x64 onedir executable including RapidOCR models/configs and OpenCC dictionary/data; test clean package subprocess upload/output path workflow.
 - [x] Independent review fixes red/green; full new Python suite and existing247Node checks. Preserve dirty-main file hashes.
-- [ ] Commit, fast-forward main, push authorized repository. Copy portable folder to user-visible workspace; ZIP verify entries/hashes; archive only this worktree after preserving build artifacts.
+- [x] Commit, fast-forward main, push authorized repository. Copy portable folder to user-visible workspace; ZIP verify entries/hashes; archive only this worktree after preserving build artifacts.
 
 Self-review: no placeholder dependencies, no remote-key gate, no unapproved public deployment. Batch app is separate from the existing Chrome extension.
