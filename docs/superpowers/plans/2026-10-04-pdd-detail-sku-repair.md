@@ -21,12 +21,12 @@
 - [x] RED/GREEN: scoped galleries/details exclude service icons, avatars, recommendations; support lazy and later images, preserve all real gallery data.
 - [x] RED/GREEN: current product SKU readiness, safe specification opening and delayed data, no checkout confirmation clicks; no invented combinations/prices.
 - [x] RED/GREEN: mobile.yangkeduo.com links/search redirects and permissions; slower bounded Pinduoduo poll/search cadence and preserved block behavior.
-- [ ] Independent review, full suite/check, delivery mirror sync, release package and authorized repository push. Preserve prior tag 1.2 and archive only this worktree.
+- [x] Independent review, full suite/check, delivery mirror sync, release package and authorized repository push. Preserve prior tag 1.2 and archive only this worktree.
 
 ## Verification evidence
 - Baseline: 247 tests pass; final: 264 tests pass, npm run check and git diff --check pass.
 - Live product 672673135904: five attribute pairs, sixteen detail images; White/160 option visibly changes price from 0.67 to 0.99. Only the specification dialog was opened; confirmation/payment was never clicked.
 - Added sanitized product DOM sample; tests exercise lazy images, recommendation boundaries, sequential/delayed SKU prices, unchanged-price termination and hidden/foreign dialogs.
 - Independent review found four initial issues plus foreign-dialog attribution; all have regression coverage and were closed by final review.
-- Delivery mirror has the same thirty extension files; ZIP has thirty files plus README. Push and worktree cleanup are the remaining delivery steps.
+- Delivery mirror has the same thirty extension files; ZIP has thirty files plus README. Implementation commit c2a76c4 was pushed and matched remote main; tag 1.2 still resolves to fbd43a4. Only this managed worktree was archived after its test logs and ZIP were preserved in the main workspace.
 - Full installed-extension collection has not been run in the user's Chrome. DOM-only fallback is intentionally partial when a price update cannot be verified; it stops rather than reusing an old price. Unavailable SKU IDs/stock remain blank.
