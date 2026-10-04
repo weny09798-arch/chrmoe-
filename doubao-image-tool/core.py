@@ -23,6 +23,7 @@ class QueueService:
         self.factory = browser_factory
         self.state_dir = Path(state_dir).resolve(); self.state_dir.mkdir(parents=True, exist_ok=True)
         self.cv = threading.Condition(threading.RLock()); self.closed = False; self.browser = None
+        self.open_requested = False; self.browser_message = ""; self.browser_busy = False
         self.job = None
         path = self.state_dir / 'job.json'
         if path.exists():
@@ -69,7 +70,24 @@ class QueueService:
     def snapshot(self, job_id=None):
         with self.cv:
             if job_id and (not self.job or job_id != self.job['id']): raise KeyError(job_id)
-            return copy.deepcopy(self.job) if self.job else {'id': None, 'status': 'idle', 'items': [], 'message': ''}
+            state = copy.deepcopy(self.job) if self.job else {'id': None, 'status': 'idle', 'items': [], 'message': ''}
+            state.update(browser_stage=getattr(self.browser, 'stage', '尚未开启'), browser_message=self.browser_message, browser_busy=self.browser_busy)
+            return state
+
+    def open_browser(self):
+        with self.cv:
+            self._check_storage()
+            if self.closed: raise RuntimeError("服务已关闭，请重新启动")
+            self.open_requested = True; self.browser_busy = True; self.browser_message = "正在打开 Chrome"; self.cv.notify_all()
+
+    def _open(self):
+        if self.browser is None:
+            browser = self.factory()
+            try: browser.open()
+            except Exception:
+                browser.close()
+                raise
+            with self.cv: self.browser = browser
 
     def action(self, command, index=None):
         with self.cv:
@@ -104,8 +122,18 @@ class QueueService:
         try:
             while True:
                 with self.cv:
-                    self.cv.wait_for(lambda: self.closed or (self.job and self.job['status'] == 'running'))
+                    self.cv.wait_for(lambda: self.closed or self.open_requested or (self.job and self.job['status'] == 'running'))
                     if self.closed: return
+                    if self.open_requested:
+                        self.open_requested = False
+                        self.cv.release()
+                        try:
+                            self._open()
+                            message = "Chrome 已打开，请在独立窗口登录豆包"
+                        except Exception as exc: message = str(exc)
+                        finally: self.cv.acquire()
+                        self.browser_message = message; self.browser_busy = False
+                        continue
                     item = next((i for i in self.job['items'] if i['status'] != 'completed'), None)
                     if item is None:
                         self.job['status'] = 'completed'; self.job['message'] = '圖片已生成並儲存；請人工確認繁體字和文案。'; self._persist(); continue
