@@ -31,7 +31,6 @@ def select_result(candidates: list[dict], baseline: set[str]) -> dict | None:
 
 def select_fullsize(images: list[dict], identity: str) -> str:
     eligible = [image for image in images if _identity(image.get('src', '')) == identity and _loaded(image)
-                and max(image['natural_width'], image['natural_height']) >= 1024
                 and 'cgen' in image['src']]
     # Dimensions alone cannot distinguish a large cthumb from the original media.
     if not eligible:
@@ -92,7 +91,15 @@ class DoubaoBrowser:
         chooser.value.set_files(str(path))
         # Confirm the exact staged file and absence of upload progress, without submitting.
         main.get_by_text(path.name, exact=True).first.wait_for(state='visible', timeout=30000)
-        self.page.wait_for_function('''() => !Array.from(document.querySelectorAll('main [role="progressbar"], main [data-testid*="upload"]')).some(e => e.getAttribute('aria-busy') === 'true' || e.getAttribute('role') === 'progressbar')''', timeout=30000)
+        self.page.wait_for_function('''filename => {
+            const main = document.querySelector('main');
+            const visible = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+            const label = Array.from(main.querySelectorAll('*')).find(e => visible(e) && e.textContent.trim() === filename && !Array.from(e.children).some(c => c.textContent.trim() === filename));
+            const staged = label && label.parentElement;
+            const loaded = staged && Array.from(staged.querySelectorAll('img')).some(i => i.complete && i.naturalWidth > 0);
+            const progress = Array.from(main.querySelectorAll('[role="progressbar"], [aria-busy="true"], [aria-label="upload progress percent"], [aria-description="upload progress percent"]')).some(visible);
+            return loaded && !progress;
+        }''', arg=path.name, timeout=15000)
         self._signals()
         self.stage = '檢查提示詞'
         composer.fill(prompt)
@@ -146,7 +153,7 @@ class DoubaoBrowser:
                 if _identity(image['src']) == identity:
                     candidates.nth(index).locator('..').click(); break
             else: raise NeedsUser('下載：生成圖片已不在畫面，請檢查 Chrome。')
-        self.page.wait_for_function('''identity => Array.from(document.images).some(i => i.complete && i.naturalWidth > 0 && Math.max(i.naturalWidth,i.naturalHeight)>=1024 && (i.currentSrc||i.src).includes('/rc_gen_image/'+identity) && (i.currentSrc||i.src).includes('cgen'))''', arg=identity, timeout=15000)
+        self.page.wait_for_function('''identity => Array.from(document.images).some(i => i.complete && i.naturalWidth > 0 && i.naturalHeight > 0 && (i.currentSrc||i.src).includes('/rc_gen_image/'+identity) && (i.currentSrc||i.src).includes('cgen'))''', arg=identity, timeout=15000)
         src = select_fullsize(self.page.locator('img').evaluate_all(IMAGE_OBSERVATION), identity)
         data = None
         button = self.page.get_by_test_id('edit_image_download_button')
@@ -160,7 +167,7 @@ class DoubaoBrowser:
                 # Exact URL observed in the live DOM, never assembled from a thumbnail.
                 data = None
         if data is None:
-            response = self.context.request.get(src, timeout=30000)
+            response = self.context.request.get(src, timeout=10000)
             if not response.ok: raise NeedsUser('下載：完整尺寸圖片取得失敗，重試會繼續使用同一結果。')
             data = response.body()
         with Image.open(io.BytesIO(data)) as image:

@@ -28,6 +28,10 @@ def test_fullsize_uses_actual_observed_matching_url():
 def test_fullsize_rejects_thumbnail_and_unloaded_image():
     with pytest.raises(NeedsUser): select_fullsize([candidate()], A)
 
+def test_loaded_small_cgen_is_fullsize_while_cthumb_is_not():
+    full = candidate(); full.update(src=f'https://example.test/rc_gen_image/{A}.jpeg?cgen=observed', natural_width=512, natural_height=512)
+    assert select_fullsize([candidate(), full], A) == full['src']
+
 def test_send_error_is_uncertain_and_keeps_pending(tmp_path):
     adapter = DoubaoBrowser(tmp_path)
     adapter._prepare = lambda path, prompt: set()
