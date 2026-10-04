@@ -163,7 +163,8 @@ class DoubaoBrowser:
             self.profile_dir.mkdir(parents=True, exist_ok=True)
             self.playwright = sync_playwright().start()
             self.context = self.playwright.chromium.launch_persistent_context(
-                str(self.profile_dir), channel='chrome', headless=False, accept_downloads=True)
+                str(self.profile_dir), channel='chrome', headless=False, accept_downloads=True,
+                chromium_sandbox=True)
             self.context.set_default_timeout(10000)
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             self.page.goto('https://www.doubao.com/chat', wait_until='domcontentloaded')
@@ -242,7 +243,7 @@ class DoubaoBrowser:
         reset_deadline = time.monotonic() + 5
         while composer.inner_text().strip() or main.get_by_test_id('attachment-image-card').filter(visible=True).count():
             if time.monotonic() >= reset_deadline:
-                raise NeedsUser('新對話：輸入框或附件未清空，尚未發送；請檢查 Chrome。')
+                raise self._mode_failure('新對話：輸入框或附件未清空，尚未發送；請檢查 Chrome。')
             self.page.wait_for_timeout(250)
         self.stage = '上傳圖片'
         upload = main.get_by_test_id('upload_file_button').filter(visible=True)

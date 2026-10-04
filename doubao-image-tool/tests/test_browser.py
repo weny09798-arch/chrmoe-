@@ -361,6 +361,49 @@ def test_preview_opens_actual_unique_visible_matched_image_not_picture_parent(tm
         assert opened == [1 if variant == 'hidden-copy' else 0]
     assert adapter.pending['identity'] == A
 
+def test_visible_chrome_launch_enables_os_sandbox(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    launches = []
+    class Page:
+        def goto(self, url, **kwargs): assert url == 'https://www.doubao.com/chat'
+    class Context:
+        pages = [Page()]
+        def set_default_timeout(self, value): pass
+    class Chromium:
+        def launch_persistent_context(self, path, **kwargs):
+            launches.append(kwargs); return Context()
+    class Playwright:
+        chromium = Chromium()
+        def start(self): return self
+    monkeypatch.setitem(sys.modules, 'playwright.sync_api', SimpleNamespace(sync_playwright=lambda: Playwright()))
+    DoubaoBrowser(tmp_path).open()
+    assert launches[0]['chromium_sandbox'] is True
+    assert launches[0]['headless'] is False
+    assert launches[0]['channel'] == 'chrome'
+
+def test_stale_draft_reset_pause_includes_mode_structure_without_deleting_draft(tmp_path, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr('browser.time.monotonic', lambda: clock[0])
+    class Node:
+        def filter(self, **kwargs): return self
+        def count(self): return 1
+        def click(self, **kwargs): pass
+        def inner_text(self): return 'existing unsent draft'
+        def get_by_test_id(self, name): return self
+    class Page:
+        def get_by_role(self, role): return Node()
+        def wait_for_timeout(self, delay): clock[0] += delay / 1000
+    adapter = DoubaoBrowser(tmp_path); adapter.page = Page()
+    adapter._signals = lambda: None
+    adapter._wait_composer = lambda main: Node()
+    adapter._mode_diagnostics = lambda: {'chat_input_count': 1, 'public_controls': []}
+    with pytest.raises(NeedsUser) as paused: adapter.submit(tmp_path / 'a.png', 'prompt')
+    assert '"chat_input_count":1' in str(paused.value)
+    assert 'existing unsent draft' not in str(paused.value)
+    assert adapter.pending is None
+    assert 5 <= clock[0] <= 5.25
+
 def test_cancel_gate_prevents_actual_adapter_click(tmp_path):
     from contextlib import contextmanager
     adapter=DoubaoBrowser(tmp_path);adapter._prepare=lambda path,prompt:set()
