@@ -206,3 +206,48 @@ def test_redo_rejects_old_inflight_submit_and_save(tmp_path, monkeypatch, stage)
         if stage == 'save':
             assert Path(state['items'][0]['result']['output_path']).name == 'a_繁體_1.png'
     finally: release.set(); service.close()
+
+@pytest.mark.parametrize('error', [NeedsUser('login expired'), OSError('download failed')])
+def test_late_poll_error_cannot_clear_terminal_storage_failure(tmp_path, monkeypatch, error):
+    entered = threading.Event(); release = threading.Event()
+    class BarrierCloud(Cloud):
+        def poll(self):
+            entered.set(); assert release.wait(3); raise error
+    cloud = BarrierCloud(); service = QueueService(lambda: cloud, tmp_path/'state')
+    try:
+        service.start([('a.png', png())], tmp_path/'out', 'convert'); assert entered.wait(3)
+        original = Path.write_text
+        failed = []
+        def fail_once(path, *args, **kwargs):
+            if path.name == 'job.json.tmp' and not failed:
+                failed.append(True); raise OSError('one-shot disk failure')
+            return original(path, *args, **kwargs)
+        monkeypatch.setattr(Path, 'write_text', fail_once)
+        with pytest.raises(RuntimeError, match='one-shot disk failure'): service.action('stop')
+        release.set(); service.worker.join(1)
+        assert service.snapshot()['status'] == 'storage-error'
+        assert 'one-shot disk failure' in service.snapshot()['message']
+        with pytest.raises(RuntimeError): service.action('continue')
+    finally: release.set(); service.close()
+
+def test_late_poll_success_cannot_change_terminal_item_phase(tmp_path, monkeypatch):
+    entered = threading.Event(); release = threading.Event()
+    class BarrierCloud(Cloud):
+        def poll(self):
+            entered.set(); assert release.wait(3); return png()
+    cloud = BarrierCloud(); service = QueueService(lambda: cloud, tmp_path/'state')
+    try:
+        service.start([('a.png', png())], tmp_path/'out', 'convert'); assert entered.wait(3)
+        original = Path.write_text
+        failed = []
+        def fail_once(path, *args, **kwargs):
+            if path.name == 'job.json.tmp' and not failed:
+                failed.append(True); raise OSError('one-shot disk failure')
+            return original(path, *args, **kwargs)
+        monkeypatch.setattr(Path, 'write_text', fail_once)
+        with pytest.raises(RuntimeError): service.action('stop')
+        release.set(); service.worker.join(1)
+        assert service.snapshot()['status'] == 'storage-error'
+        assert service.snapshot()['items'][0]['phase'] == 'pending'
+        assert not list((tmp_path/'state').glob('*/*.result'))
+    finally: release.set(); service.close()

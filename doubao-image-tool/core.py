@@ -34,11 +34,14 @@ class QueueService:
             self._persist()
         self.worker = threading.Thread(target=self._run, name='doubao-browser', daemon=True); self.worker.start()
 
+    def _check_storage(self):
+        if self.job and self.job['status'] == 'storage-error':
+            raise StorageFailure(self.job['message'])
+
     def _persist(self):
         if self.job is None:
             return
-        if self.job['status'] == 'storage-error':
-            raise StorageFailure(self.job['message'])
+        self._check_storage()
         temp = self.state_dir / 'job.json.tmp'
         try:
             temp.write_text(json.dumps(self.job, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -93,6 +96,7 @@ class QueueService:
             self._persist(); self.cv.notify_all()
 
     def _pause(self, item, message):
+        self._check_storage()
         item['status'] = 'paused'; item['message'] = message
         self.job['status'] = 'paused'; self.job['message'] = message; self._persist()
 
@@ -124,6 +128,7 @@ class QueueService:
                             item['phase'] = 'submitting'; item['status'] = 'running'; self._persist()
                         self.browser.submit(Path(item['input_path']), self.job['prompt'])
                         with self.cv:
+                            self._check_storage()
                             if item.get('revision', 0) != revision:
                                 continue
                             item['phase'] = 'pending'
@@ -133,6 +138,7 @@ class QueueService:
                         if self.browser is None: raise SubmissionUncertain('重新啟動後請檢查並明確重試')
                         data = self.browser.poll()
                         with self.cv:
+                            self._check_storage()
                             if item.get('revision', 0) != revision:
                                 continue
                             if data is not None:
@@ -145,6 +151,7 @@ class QueueService:
                     elif phase == 'saving':
                         result = save_result(self.job['output_dir'], item['name'], Path(item['cached_path']).read_bytes(), self.job['prompt'])
                         with self.cv:
+                            self._check_storage()
                             if item.get('revision', 0) != revision:
                                 continue
                             item['result'] = result
@@ -158,18 +165,21 @@ class QueueService:
                     raise
                 except NeedsUser as exc:
                     with self.cv:
+                        self._check_storage()
                         if item.get('revision', 0) != revision:
                             continue
                         if item['phase'] == 'submitting': item['phase'] = 'ready'
                         self._pause(item, str(exc))
                 except SubmissionUncertain as exc:
                     with self.cv:
+                        self._check_storage()
                         if item.get('revision', 0) != revision:
                             continue
                         item['phase'] = 'uncertain'
                         self._pause(item, str(exc))
                 except Exception as exc:
                     with self.cv:
+                        self._check_storage()
                         if item.get('revision', 0) != revision:
                             continue
                         if item['phase'] == 'submitting': item['phase'] = 'uncertain'
