@@ -107,12 +107,26 @@ class DoubaoBrowser:
     def _image_mode_ready(self, main):
         badge = any(node.is_visible() and node.inner_text().strip() == '图像生成'
                     for node in main.get_by_test_id('skill_input_exit_button').all())
-        model = main.get_by_test_id('chat_input').get_by_role(
+        toolbar = main.get_by_test_id('chat_input')
+        model = toolbar.get_by_role(
             'button', name=re.compile(r'^模型\s+Seedream 5\.0 Flash$'))
-        return badge and model.count() == 1 and model.is_visible()
+        if badge and model.count() == 1 and model.is_visible():
+            self._mode_diagnostic = ''
+            return True
+        missing = []
+        for name in ('图片模式', '模型', '比例'):
+            control = toolbar.get_by_role('button', name=name, exact=True).filter(visible=True)
+            if control.count() == 0:
+                control = toolbar.get_by_text(name, exact=True).filter(visible=True)
+            if control.count() != 1: missing.append(name)
+        entered = badge or getattr(self, '_entered_image_mode', False)
+        self._mode_diagnostic = ('未確認圖像生成；' if not entered else '') + '缺少唯一可見工具列：' + '、'.join(missing)
+        return entered and not missing
 
     def _prepare(self, path, prompt):
         self.stage = '登入與新對話'
+        self._entered_image_mode = False
+        self._mode_diagnostic = ''
         self._signals()
         main = self.page.get_by_role('main')
         create = main.get_by_test_id('create_conversation_button').filter(visible=True)
@@ -145,10 +159,11 @@ class DoubaoBrowser:
         self.stage = '確認圖像生成模式'
         if not self._image_mode_ready(main):
             main.get_by_role('button', name='图像生成', exact=True).click(timeout=5000)
+            self._entered_image_mode = True
         mode_deadline = time.monotonic() + 5
         while not self._image_mode_ready(main):
             if time.monotonic() >= mode_deadline:
-                raise NeedsUser('模式：尚未確認圖像生成與 Seedream 5.0 Flash，請檢查 Chrome。')
+                raise NeedsUser(f'模式：{self._mode_diagnostic}；請檢查 Chrome。')
             self.page.wait_for_timeout(250)
         composer = self._wait_composer(main)
         self._wait_attachment(main, path)
@@ -161,7 +176,7 @@ class DoubaoBrowser:
         if normalize_breaks(composer.inner_text()) != normalize_breaks(prompt):
             raise NeedsUser('輸入：提示詞未完整寫入，請檢查 Chrome。')
         if not self._image_mode_ready(main):
-            raise NeedsUser('模式：圖像生成模式已變更，尚未發送；請檢查 Chrome。')
+            raise NeedsUser(f'模式：圖像生成工具列已變更，尚未發送；{self._mode_diagnostic}；請檢查 Chrome。')
         send = main.get_by_test_id('chat_input_send_button')
         if not send.is_visible() or not send.is_enabled():
             raise NeedsUser('上傳：發送按鈕尚未就緒，請檢查圖片上傳。')
@@ -172,7 +187,8 @@ class DoubaoBrowser:
             baseline = self._prepare(Path(path), prompt)
         except NeedsUser: raise
         except Exception:
-            raise NeedsUser(f'{self.stage}：操作未就緒，尚未發送；請檢查 Chrome 後繼續。') from None
+            detail = getattr(self, '_mode_diagnostic', '') if self.stage == '確認圖像生成模式' else ''
+            raise NeedsUser(f'{self.stage}：操作未就緒，尚未發送；{detail}；請檢查 Chrome 後繼續。') from None
         with send_gate():
             self.pending = {'baseline': baseline, 'identity': None}
             self.stage = '提交'
