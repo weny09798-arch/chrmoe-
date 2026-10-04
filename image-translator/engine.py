@@ -95,6 +95,8 @@ def _coordinates(box, size):
 def _replace(crop, text, font_path):
     """Return local pixels, or a reason when a safe foreground cannot be found."""
     height, width = crop.shape[:2]
+    if crop.shape[2] == 4 and np.ptp(crop[:, :, 3]) != 0:
+        return None, 'transparent_text'
     rgb = crop[:, :, :3].copy()
     border = np.concatenate((rgb[0], rgb[-1], rgb[:, 0], rgb[:, -1]))
     background = np.median(border, axis=0)
@@ -103,6 +105,12 @@ def _replace(crop, text, font_path):
     peak = float(np.percentile(distance, 95))
     if peak < 25:
         return None, 'no_clear_foreground'
+    # OCR boxes may touch strokes. Exclude high-contrast ink from the border
+    # check, while still detecting texture and secondary outline colours.
+    border_distance = np.linalg.norm(border.astype(float) - background, axis=1)
+    background_samples = border_distance[border_distance < max(40, peak * .65)]
+    if len(background_samples) < len(border) * .2 or np.percentile(background_samples, 90) > 55:
+        return None, 'complex_background'
     foreground = distance > max(24, peak * .42)
     if not foreground.any() or foreground.mean() > .65:
         return None, 'complex_background'

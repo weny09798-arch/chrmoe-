@@ -1,0 +1,4 @@
+__pycache__/
+.pytest_cache/
+繁体图片输出/
+*.spec

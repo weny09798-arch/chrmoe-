@@ -15,7 +15,7 @@ FONT = r'C:\Windows\Fonts\msjh.ttc'
 
 def sample(mode='RGB'):
     image = Image.new(mode, (400, 100), (255, 255, 255, 123) if mode == 'RGBA' else 'white')
-    ImageDraw.Draw(image).text((24, 24), '减少细菌滋生', font=ImageFont.truetype(FONT, 36), fill=(210, 20, 30))
+    ImageDraw.Draw(image).text((24, 24), '减少细菌滋生', font=ImageFont.truetype(FONT, 36), fill=(210, 20, 30, 123) if mode == 'RGBA' else (210, 20, 30))
     return image
 
 
@@ -81,6 +81,36 @@ def test_conversion_modes(mode, target):
 def test_invalid_conversion_mode_rejected():
     with pytest.raises(ValueError):
         translate_regions(sample(), [], mode='invalid')
+
+
+def test_transparent_glyphs_are_kept_intact_instead_of_corrupted():
+    image = Image.new('RGBA',(400,100),(255,255,255,0))
+    ImageDraw.Draw(image).text((24,24),'减少细菌滋生',font=ImageFont.truetype(FONT,36),fill=(210,20,30,255))
+    result, report = translate_regions(image,[Region((20,20,260,72),'减少细菌滋生',.99)])
+    assert result.tobytes() == image.tobytes()
+    assert report['regions'][0]['reason'] == 'transparent_text'
+    assert report['skipped'] == 1
+
+
+def test_text_over_texture_is_skipped_without_erasing_background():
+    random = np.random.default_rng(7)
+    image = Image.fromarray(random.integers(100,230,size=(100,400,3),dtype=np.uint8))
+    ImageDraw.Draw(image).text((24,24),'减少细菌滋生',font=ImageFont.truetype(FONT,36),fill='black')
+    result,report = translate_regions(image,[Region((20,20,260,72),'减少细菌滋生',.99)])
+    assert result.tobytes() == image.tobytes()
+    assert report['regions'][0]['reason'] == 'complex_background'
+
+
+def test_gently_shaded_background_is_not_mistaken_for_photo_texture():
+    pixels=np.zeros((100,400,3),dtype=np.uint8)
+    pixels[:,:,0]=220
+    pixels[:,:,1]=np.arange(100,dtype=np.uint8)[:,None]*2
+    pixels[:,:,2]=20
+    image=Image.fromarray(pixels)
+    ImageDraw.Draw(image).text((24,24),'减少细菌滋生',font=ImageFont.truetype(FONT,36),fill='white')
+    result,report=translate_regions(image,[Region((20,20,260,72),'减少细菌滋生',.99)])
+    assert report['changed']==1
+    assert result.tobytes()!=image.tobytes()
 
 
 @pytest.mark.parametrize('format', ['PNG', 'JPEG', 'WEBP'])

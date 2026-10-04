@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="local-token" content="{{ token }}">
+  <title>图片繁体转换</title><link rel="stylesheet" href="/assets/style.css">
+  <script defer src="/assets/app.js"></script>
+</head>
+<body><main>
+  <header><div><span class="eyebrow">本地处理 · 无需 API 密钥</span><h1>图片繁体转换</h1><p>识别图片中的简体文字，转换为繁体后保存新图片。</p></div><button id="exit" class="quiet">退出工具</button></header>
+  <section class="panel">
+    <div id="drop" class="drop"><strong>选择或拖入图片</strong><p>JPG、PNG、WebP · 每批最多 20 张 · 总大小不超过 80MB</p><label class="button" for="files">选择图片</label><input id="files" type="file" accept="image/png,image/jpeg,image/webp" multiple></div>
+    <div id="selected" class="selected"></div>
+    <div class="settings"><label class="path">保存到文件夹<input id="output" value="{{ output_default }}" placeholder="例如 D:\图片输出" spellcheck="false"></label><label>繁体类型<select id="mode"><option value="s2t">通用繁体</option><option value="s2tw">台湾繁体</option><option value="s2hk">香港繁体</option></select></label></div>
+    <p class="hint">请输入这台电脑上的完整路径，文件夹不存在时会自动创建。原图保留，重名结果会自动编号。</p>
+    <div class="actions"><button id="start" class="primary" disabled>转换并保存</button><span id="count">尚未选择图片</span></div>
+  </section>
+  <section class="notice">适合清晰文字和简单背景。花字、小字、倾斜文字或复杂背景可能跳过；替换字体会与原图不同，请先查看对比再使用。</section>
+  <section id="progress-panel" class="panel" hidden><div class="progress-title"><strong id="status">等待开始</strong><span id="fraction">0 / 0</span></div><progress id="progress" max="1" value="0"></progress><p id="current" class="hint"></p></section>
+  <p id="error" role="alert" hidden></p>
+  <section id="results" aria-live="polite"></section>
+  <footer>图片与识别结果在本机处理。把整个工具文件夹交给别人，他们在自己的电脑启动即可使用。</footer>
+</main></body></html>
