@@ -106,7 +106,7 @@ class QueueService:
                 if any(i['status'] == 'needs-review' or i['phase'] == 'uncertain' for i in self.job['items']): return
                 for i in self.job['items']:
                     if i['status'] == 'paused': i['status'] = 'queued'; i.pop('started', None)
-                self.job['status'] = 'running'
+                self.job['status'] = 'running'; self.job['message'] = ''
             elif command in {'retry', 'redo'}:
                 if index is None or not 0 <= index < len(self.job['items']): raise ValueError('請選擇有效圖片')
                 item = self.job['items'][index]
@@ -116,7 +116,7 @@ class QueueService:
                     item['phase'] = 'ready'
                     item.pop('cached_path', None)
                 item['status'] = 'queued'; item['message'] = ''; item.pop('started', None)
-                self.job['status'] = 'running'
+                self.job['status'] = 'running'; self.job['message'] = ''
             else: raise ValueError('未知操作')
             self._persist(); self.cv.notify_all()
 

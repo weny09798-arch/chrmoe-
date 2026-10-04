@@ -298,3 +298,17 @@ def test_restart_keeps_known_unsent_items_queued_but_submitted_needs_review(tmp_
         service.action('retry',0);wait(service,lambda s:s['status']=='completed')
         assert len(cloud.sends)==2
     finally:service.close()
+
+@pytest.mark.parametrize('command', ['continue','retry'])
+def test_accepted_resume_clears_stale_job_error(tmp_path,command):
+    cloud=Cloud();service=QueueService(lambda:cloud,tmp_path/'state')
+    try:
+        service.start([('a.png',png())],tmp_path/'out','convert')
+        wait(service,lambda s:s['items'][0]['phase']=='pending')
+        service.action('stop')
+        with service.cv:
+            service.job['message']='旧的上传错误'
+            service.job['items'][0]['message']='旧的上传错误'
+        service.action(command,0 if command=='retry' else None)
+        assert service.snapshot()['message']=='', 'Accepted resume should remove old job error'
+    finally:service.close()
