@@ -36,10 +36,19 @@ def save_result(output_dir, name, data, prompt):
         metadata = {'output_path': str(path), 'record_path': str(record), 'prompt': prompt,
                     'time': datetime.now(timezone.utc).isoformat(), 'status': 'completed', 'review_needed': True}
         try:
-            with record.open('x', encoding='utf-8') as handle: json.dump(metadata, handle, ensure_ascii=False, indent=2)
+            handle = record.open('x', encoding='utf-8')
+        except FileExistsError:
+            path.unlink(missing_ok=True)
+            continue
         except Exception:
             path.unlink(missing_ok=True)
-            if record.exists(): continue
+            raise
+        try:
+            with handle:
+                json.dump(metadata, handle, ensure_ascii=False, indent=2)
+        except Exception:
+            path.unlink(missing_ok=True)
+            record.unlink(missing_ok=True)
             raise
         return metadata
     raise OSError('無法建立唯一結果檔名')

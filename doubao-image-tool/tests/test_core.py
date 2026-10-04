@@ -140,3 +140,69 @@ def test_open_failure_closes_browser_on_worker(tmp_path):
         wait(service, lambda s: s['status'] == 'paused')
     finally: service.close()
     assert cloud.closed
+
+def test_redo_rejects_old_inflight_poll_result(tmp_path):
+    entered = threading.Event(); release = threading.Event()
+    class BarrierCloud(Cloud):
+        def poll(self):
+            if len(self.sends) == 1:
+                entered.set(); assert release.wait(3)
+            return png()
+    cloud = BarrierCloud(); service = QueueService(lambda: cloud, tmp_path/'state')
+    try:
+        service.start([('a.png', png())], tmp_path/'out', 'convert')
+        assert entered.wait(3)
+        service.action('stop'); service.action('redo', 0); release.set()
+        wait(service, lambda s: s['status'] == 'completed')
+        assert len(cloud.sends) == 2
+    finally: release.set(); service.close()
+
+def test_persistence_failure_is_visible_and_rejects_actions(tmp_path, monkeypatch):
+    entered = threading.Event(); release = threading.Event()
+    class BarrierCloud(Cloud):
+        def poll(self):
+            entered.set(); assert release.wait(3); return png()
+    cloud = BarrierCloud(); service = QueueService(lambda: cloud, tmp_path/'state')
+    try:
+        service.start([('a.png', png())], tmp_path/'out', 'convert'); assert entered.wait(3)
+        original = Path.write_text
+        def failing_write(path, *args, **kwargs):
+            if path.name == 'job.json.tmp': raise OSError('disk full')
+            return original(path, *args, **kwargs)
+        monkeypatch.setattr(Path, 'write_text', failing_write); release.set()
+        wait(service, lambda s: s['status'] == 'storage-error')
+        assert 'disk full' in service.snapshot()['message']
+        with pytest.raises(RuntimeError): service.action('continue')
+        with pytest.raises(RuntimeError): service.action('redo', 0)
+    finally: release.set(); service.close()
+
+@pytest.mark.parametrize('stage', ['submit', 'save'])
+def test_redo_rejects_old_inflight_submit_and_save(tmp_path, monkeypatch, stage):
+    import core
+    entered = threading.Event(); release = threading.Event()
+    cloud = Cloud(); cloud.result = png()
+    if stage == 'submit':
+        original_submit = cloud.submit
+        def submit(path, prompt):
+            original_submit(path, prompt)
+            if len(cloud.sends) == 1:
+                entered.set(); assert release.wait(3)
+        cloud.submit = submit
+    else:
+        original_save = core.save_result
+        calls = []
+        def save(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                entered.set(); assert release.wait(3)
+            return original_save(*args, **kwargs)
+        monkeypatch.setattr(core, 'save_result', save)
+    service = QueueService(lambda: cloud, tmp_path/'state')
+    try:
+        service.start([('a.png', png())], tmp_path/'out', 'convert'); assert entered.wait(3)
+        service.action('stop'); service.action('redo', 0); release.set()
+        state = wait(service, lambda s: s['status'] == 'completed')
+        assert len(cloud.sends) == 2
+        if stage == 'save':
+            assert Path(state['items'][0]['result']['output_path']).name == 'a_繁體_1.png'
+    finally: release.set(); service.close()

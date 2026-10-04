@@ -25,3 +25,18 @@ def test_exclusive_output_is_png_and_original_unchanged(tmp_path):
 @pytest.mark.parametrize('files', [[], [('x.gif', b'bad')], [('x.png', b'x')]*21])
 def test_rejects_invalid_batch(files):
     with pytest.raises(ValueError): validate_inputs(files)
+
+def test_json_write_error_removes_owned_partial_files(tmp_path, monkeypatch):
+    import storage
+    original = storage.json.dump
+    calls = []
+    def fail_once(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            args[1].write('{partial')
+            raise OSError('disk full')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(storage.json, 'dump', fail_once)
+    with pytest.raises(OSError, match='disk full'):
+        save_result(tmp_path, 'a.png', png(), 'convert')
+    assert list(tmp_path.iterdir()) == []

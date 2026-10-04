@@ -12,6 +12,9 @@ class NeedsUser(Exception):
 class SubmissionUncertain(Exception):
     """Send may have reached the service; explicit retry is required."""
 
+class StorageFailure(RuntimeError):
+    """State could not be persisted; restart is required before more work."""
+
 class QueueService:
     generation_timeout = 8 * 60
     poll_interval = .1
@@ -32,10 +35,18 @@ class QueueService:
         self.worker = threading.Thread(target=self._run, name='doubao-browser', daemon=True); self.worker.start()
 
     def _persist(self):
-        if self.job is None: return
+        if self.job is None:
+            return
+        if self.job['status'] == 'storage-error':
+            raise StorageFailure(self.job['message'])
         temp = self.state_dir / 'job.json.tmp'
-        temp.write_text(json.dumps(self.job, ensure_ascii=False, indent=2), encoding='utf-8')
-        temp.replace(self.state_dir / 'job.json')
+        try:
+            temp.write_text(json.dumps(self.job, ensure_ascii=False, indent=2), encoding='utf-8')
+            temp.replace(self.state_dir / 'job.json')
+        except Exception as exc:
+            self.job['status'] = 'storage-error'
+            self.job['message'] = f'任務狀態儲存失敗，請修復儲存位置並重新啟動：{exc}'
+            raise StorageFailure(self.job['message']) from exc
 
     def start(self, files, output_dir, prompt):
         checked = validate_inputs(files)
@@ -60,6 +71,8 @@ class QueueService:
     def action(self, command, index=None):
         with self.cv:
             if not self.job: raise ValueError('沒有任務')
+            if self.closed or self.job['status'] == 'storage-error':
+                raise RuntimeError('服務已停止，請修復儲存位置並重新啟動')
             if command == 'stop': self.job['status'] = 'stopped'
             elif command == 'continue':
                 if any(i['status'] == 'needs-review' or i['phase'] == 'uncertain' for i in self.job['items']): return
@@ -71,7 +84,9 @@ class QueueService:
                 item = self.job['items'][index]
                 if self.job['status'] == 'running': raise ValueError('請先停止任務')
                 if command == 'redo' or item['status'] == 'needs-review' or item['phase'] not in {'saving', 'pending'}:
-                    item['phase'] = 'ready'; item.pop('cached_path', None)
+                    item['revision'] = item.get('revision', 0) + 1
+                    item['phase'] = 'ready'
+                    item.pop('cached_path', None)
                 item['status'] = 'queued'; item['message'] = ''; item.pop('started', None)
                 self.job['status'] = 'running'
             else: raise ValueError('未知操作')
@@ -93,6 +108,7 @@ class QueueService:
                     if item['status'] == 'needs-review':
                         self._pause(item, '請檢查 Chrome 後明確重試'); item['status'] = 'needs-review'; self._persist(); continue
                     phase = item['phase']
+                    revision = item.get('revision', 0)
                 try:
                     if phase == 'ready':
                         if self.browser is None:
@@ -103,15 +119,22 @@ class QueueService:
                                 raise
                             self.browser = browser
                         with self.cv:
-                            if self.closed or self.job['status'] != 'running': continue
+                            if self.closed or self.job['status'] != 'running' or item.get('revision', 0) != revision:
+                                continue
                             item['phase'] = 'submitting'; item['status'] = 'running'; self._persist()
                         self.browser.submit(Path(item['input_path']), self.job['prompt'])
                         with self.cv:
-                            item['phase'] = 'pending'; item['started'] = time.time(); self._persist()
+                            if item.get('revision', 0) != revision:
+                                continue
+                            item['phase'] = 'pending'
+                            item['started'] = time.time()
+                            self._persist()
                     elif phase == 'pending':
                         if self.browser is None: raise SubmissionUncertain('重新啟動後請檢查並明確重試')
                         data = self.browser.poll()
                         with self.cv:
+                            if item.get('revision', 0) != revision:
+                                continue
                             if data is not None:
                                 cached = Path(item['input_path']).with_suffix('.result'); cached.write_bytes(data)
                                 item['cached_path'] = str(cached); item['phase'] = 'saving'; self._persist()
@@ -122,19 +145,38 @@ class QueueService:
                     elif phase == 'saving':
                         result = save_result(self.job['output_dir'], item['name'], Path(item['cached_path']).read_bytes(), self.job['prompt'])
                         with self.cv:
-                            item['result'] = result; item['status'] = 'completed'; item['phase'] = 'done'; item['message'] = '已儲存，請人工檢查。'; self._persist()
+                            if item.get('revision', 0) != revision:
+                                continue
+                            item['result'] = result
+                            item['status'] = 'completed'
+                            item['phase'] = 'done'
+                            item['message'] = '已儲存，請人工檢查。'
+                            self._persist()
                     else:
                         with self.cv: self._pause(item, '提交狀態不確定；請明確重試。')
+                except StorageFailure:
+                    raise
                 except NeedsUser as exc:
                     with self.cv:
+                        if item.get('revision', 0) != revision:
+                            continue
                         if item['phase'] == 'submitting': item['phase'] = 'ready'
                         self._pause(item, str(exc))
                 except SubmissionUncertain as exc:
-                    with self.cv: item['phase'] = 'uncertain'; self._pause(item, str(exc))
+                    with self.cv:
+                        if item.get('revision', 0) != revision:
+                            continue
+                        item['phase'] = 'uncertain'
+                        self._pause(item, str(exc))
                 except Exception as exc:
                     with self.cv:
+                        if item.get('revision', 0) != revision:
+                            continue
                         if item['phase'] == 'submitting': item['phase'] = 'uncertain'
                         self._pause(item, f'{item["phase"]}：{exc}')
+        except StorageFailure:
+            # _persist already records terminal failure in memory; never persist it again.
+            pass
         finally:
             if self.browser is not None: self.browser.close()
 
