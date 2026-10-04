@@ -86,10 +86,21 @@ class DoubaoBrowser:
         self.stage = '登入與新對話'
         self._signals()
         main = self.page.get_by_role('main')
-        main.get_by_test_id('create_conversation_button').click()
+        create = main.get_by_test_id('create_conversation_button').filter(visible=True)
+        if create.count() == 0:
+            # Fresh /chat guidance shows the functional control in the sidebar.
+            create = self.page.get_by_test_id('create_conversation_button').filter(visible=True)
+        if create.count() != 1:
+            raise NeedsUser('新對話：無法唯一辨識可見的新對話按鈕，請檢查 Chrome。')
+        create.click(timeout=5000)
         composer = main.locator('[contenteditable="true"]').filter(visible=True)
         if composer.count() != 1:
             raise NeedsUser('輸入：無法唯一辨識輸入框，請先在 Chrome 完成登入。')
+        reset_deadline = time.monotonic() + 5
+        while composer.inner_text().strip() or main.get_by_test_id('attachment-image-card').filter(visible=True).count():
+            if time.monotonic() >= reset_deadline:
+                raise NeedsUser('新對話：輸入框或附件未清空，尚未發送；請檢查 Chrome。')
+            self.page.wait_for_timeout(250)
         self.stage = '上傳圖片'
         main.get_by_test_id('upload_file_button').click()
         with self.page.expect_file_chooser(timeout=10000) as chooser:

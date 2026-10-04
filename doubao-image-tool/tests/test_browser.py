@@ -125,42 +125,67 @@ def test_started_stalled_download_is_cancelled_without_waiting_and_can_retry(tmp
     adapter.context.request.fail = False; adapter._next_poll = 0
     assert adapter.poll() == image.getvalue()
 
-@pytest.mark.parametrize('failure', [None, 'filename', 'unloaded', 'progress', 'prompt', 'disabled', 'composer'])
+@pytest.mark.parametrize('failure', [None, 'guidance', 'ambiguous', 'stale-composer', 'stale-card', 'filename', 'unloaded', 'progress', 'prompt', 'disabled', 'composer'])
 def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tmp_path, failure):
     sends = []
+    uploaded = False
+    class Guidance(HTMLParser):
+        in_main = False
+        main_creates = 0
+        page_creates = 0
+        def handle_starttag(self, tag, attrs):
+            if tag == 'main': self.in_main = True
+            if dict(attrs).get('data-testid') == 'create_conversation_button':
+                self.page_creates += 1
+                if self.in_main: self.main_creates += 1
+        def handle_endtag(self, tag):
+            if tag == 'main': self.in_main = False
+    guidance = Guidance()
+    guidance.feed((Path(__file__).parent / 'fixtures' / 'doubao-guidance.html').read_text(encoding='utf-8'))
     class Node:
-        def __init__(self, name=''): self.name = name
+        def __init__(self, name=''):
+            self.name = name; self.text = 'old prompt' if failure == 'stale-composer' and name == 'composer' else ''
         @property
         def first(self): return self
         def filter(self, **kwargs): return self
-        def count(self): return 0 if failure == 'composer' else 1
-        def get_by_test_id(self, name): return Node(name)
+        def count(self):
+            if self.name == 'main-create' and failure in {'guidance', 'ambiguous'}: return guidance.main_creates
+            if self.name == 'create_conversation_button' and failure in {'guidance', 'ambiguous'}:
+                return 2 if failure == 'ambiguous' else guidance.page_creates
+            if self.name == 'attachment-image-card': return int(uploaded or failure == 'stale-card')
+            return 0 if failure == 'composer' and self.name == 'composer' else 1
+        def get_by_test_id(self, name):
+            return Node('main-create' if self.name == 'main' and name == 'create_conversation_button' else name)
         def get_by_text(self, text, **kwargs):
             raise TimeoutError('filename exists only as aria-label')
         def locator(self, selector): return Node('composer')
         def click(self, **kwargs):
+            if self.name == 'main-create' and failure == 'guidance': raise TimeoutError('main has no create control')
             if self.name == 'chat_input_send_button': sends.append('sent')
         def wait_for(self, **kwargs):
             if failure == 'filename': raise TimeoutError('filename absent')
         def is_visible(self): return True
         def is_enabled(self): return failure != 'disabled'
         def fill(self, text): self.text = text
-        def inner_text(self): return 'partial' if failure == 'prompt' else self.text
+        def inner_text(self): return 'partial' if failure == 'prompt' and self.text else self.text
         def all(self): return []
         def evaluate_all(self, script):
             if self.name == 'attachment-image-card':
+                if not uploaded: return []
                 return [{'label': 'wrong.png' if failure == 'filename' else 'a.png',
                          'visible': True, 'loaded': failure != 'unloaded', 'progress': failure == 'progress'}]
             return []
     class Chooser:
-        def set_files(self, path): assert Path(path).name == 'a.png'
+        def set_files(self, path):
+            nonlocal uploaded
+            assert Path(path).name == 'a.png'; uploaded = True
     class Event:
         value = Chooser()
         def __enter__(self): return self
         def __exit__(self, *args): pass
     class Page:
         def locator(self, selector): return Node()
-        def get_by_role(self, role): assert role == 'main'; return Node()
+        def get_by_role(self, role): assert role == 'main'; return Node('main')
         def get_by_test_id(self, name): return Node(name)
         def get_by_text(self, text, **kwargs): return Node()
         def expect_file_chooser(self, **kwargs): return Event()
@@ -169,7 +194,7 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
             assert arg == 'a.png'
             if failure in {'unloaded', 'progress'}: raise TimeoutError('upload readiness not satisfied')
     adapter = DoubaoBrowser(tmp_path); adapter.page = Page()
-    if failure is None:
+    if failure in {None, 'guidance'}:
         adapter.submit(tmp_path / 'a.png', 'exact prompt')
         assert sends == ['sent']
         assert adapter.pending is not None
