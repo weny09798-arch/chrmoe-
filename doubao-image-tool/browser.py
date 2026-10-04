@@ -119,7 +119,10 @@ class DoubaoBrowser:
         self._signals()
         self.stage = '檢查提示詞'
         composer.fill(prompt)
-        if composer.inner_text() != prompt:
+        # Rich text paragraphs render one logical break as multiple innerText
+        # newlines. Normalize only line-break runs; retain every other character.
+        normalize_breaks = lambda value: re.sub(r'\n+', '\n', value.replace('\r\n', '\n').replace('\r', '\n'))
+        if normalize_breaks(composer.inner_text()) != normalize_breaks(prompt):
             raise NeedsUser('輸入：提示詞未完整寫入，請檢查 Chrome。')
         send = main.get_by_test_id('chat_input_send_button')
         if not send.is_visible() or not send.is_enabled():

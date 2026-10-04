@@ -125,7 +125,7 @@ def test_started_stalled_download_is_cancelled_without_waiting_and_can_retry(tmp
     adapter.context.request.fail = False; adapter._next_poll = 0
     assert adapter.poll() == image.getvalue()
 
-@pytest.mark.parametrize('failure', [None, 'guidance', 'ambiguous', 'stale-composer', 'stale-card', 'filename', 'unloaded', 'progress', 'prompt', 'disabled', 'composer'])
+@pytest.mark.parametrize('failure', [None, 'guidance', 'paragraphs', 'dropped-line', 'changed-line', 'changed-space', 'ambiguous', 'stale-composer', 'stale-card', 'filename', 'unloaded', 'progress', 'prompt', 'disabled', 'composer'])
 def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tmp_path, failure):
     sends = []
     uploaded = False
@@ -167,7 +167,14 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
         def is_visible(self): return True
         def is_enabled(self): return failure != 'disabled'
         def fill(self, text): self.text = text
-        def inner_text(self): return 'partial' if failure == 'prompt' and self.text else self.text
+        def inner_text(self):
+            if not self.text: return ''
+            if failure == 'prompt': return 'partial'
+            if failure == 'paragraphs': return self.text.replace('\n', '\r\n\r\n')
+            if failure == 'dropped-line': return self.text.split('\n')[0]
+            if failure == 'changed-line': return self.text.replace('第二行', 'changed')
+            if failure == 'changed-space': return self.text.replace('  ', ' ')
+            return self.text
         def all(self): return []
         def evaluate_all(self, script):
             if self.name == 'attachment-image-card':
@@ -194,11 +201,12 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
             assert arg == 'a.png'
             if failure in {'unloaded', 'progress'}: raise TimeoutError('upload readiness not satisfied')
     adapter = DoubaoBrowser(tmp_path); adapter.page = Page()
-    if failure in {None, 'guidance'}:
-        adapter.submit(tmp_path / 'a.png', 'exact prompt')
+    prompt = 'line one  two\n第二行\nthird line'
+    if failure in {None, 'guidance', 'paragraphs'}:
+        adapter.submit(tmp_path / 'a.png', prompt)
         assert sends == ['sent']
         assert adapter.pending is not None
     else:
-        with pytest.raises(NeedsUser): adapter.submit(tmp_path / 'a.png', 'exact prompt')
+        with pytest.raises(NeedsUser): adapter.submit(tmp_path / 'a.png', prompt)
         assert not sends
         assert adapter.pending is None
