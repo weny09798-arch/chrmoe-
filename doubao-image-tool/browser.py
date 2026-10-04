@@ -153,7 +153,7 @@ class DoubaoBrowser:
                 if _identity(image['src']) == identity:
                     candidates.nth(index).locator('..').click(); break
             else: raise NeedsUser('下載：生成圖片已不在畫面，請檢查 Chrome。')
-        self.page.wait_for_function('''identity => Array.from(document.images).some(i => i.complete && i.naturalWidth > 0 && i.naturalHeight > 0 && (i.currentSrc||i.src).includes('/rc_gen_image/'+identity) && (i.currentSrc||i.src).includes('cgen'))''', arg=identity, timeout=15000)
+        self.page.wait_for_function('''identity => Array.from(document.images).some(i => i.complete && i.naturalWidth > 0 && i.naturalHeight > 0 && (i.currentSrc||i.src).includes('/rc_gen_image/'+identity) && (i.currentSrc||i.src).includes('cgen'))''', arg=identity, timeout=12000)
         src = select_fullsize(self.page.locator('img').evaluate_all(IMAGE_OBSERVATION), identity)
         data = None
         button = self.page.get_by_test_id('edit_image_download_button')
@@ -167,10 +167,11 @@ class DoubaoBrowser:
                 # Exact URL observed in the live DOM, never assembled from a thumbnail.
                 data = None
         if data is None:
-            response = self.context.request.get(src, timeout=10000)
+            response = self.context.request.get(src, timeout=8000)
             if not response.ok: raise NeedsUser('下載：完整尺寸圖片取得失敗，重試會繼續使用同一結果。')
             data = response.body()
         with Image.open(io.BytesIO(data)) as image:
             image.verify()
         if close.is_visible(): close.click(timeout=3000)
         return data
+
