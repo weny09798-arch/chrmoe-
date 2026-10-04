@@ -266,6 +266,10 @@ def test_mode_diagnostics_report_missing_scope_without_private_dom_fields(tmp_pa
                                   'nodes': [{'tag': 'div', 'role': 'button', 'testid': 'mode_picker',
                                              'ancestors': ['toolbar_outer', 'main_panel'], 'url': 'https://private.test/signed?token=secret'}]},
                                  {'label': 'my private prompt', 'count': 1, 'nodes': []}],
+                    'public_controls': [{'label': '模型', 'count': 1, 'visible_count': 1,
+                                         'nodes': [{'tag': 'button', 'role': 'button', 'testid': 'model_picker',
+                                                    'ancestors': ['portal_toolbar'], 'inside_main': False,
+                                                    'match': 'prefix', 'raw_text': '模型 private suffix'}]}],
                     'prompt': 'my private prompt', 'cookie': 'secret-cookie', 'url': 'https://private.test/signed'}
     class Page:
         def get_by_role(self, role): assert role == 'main'; return Main()
@@ -273,6 +277,8 @@ def test_mode_diagnostics_report_missing_scope_without_private_dom_fields(tmp_pa
     diagnostics = adapter._mode_diagnostics()
     assert diagnostics['chat_input_count'] == 0
     assert diagnostics['controls'][0]['nodes'][0]['ancestors'] == ['toolbar_outer', 'main_panel']
+    assert diagnostics['public_controls'][0]['nodes'][0]['inside_main'] is False
+    assert diagnostics['public_controls'][0]['nodes'][0]['match'] == 'prefix'
     text = json.dumps(diagnostics)
     visible_message = str(adapter._mode_failure('模式尚未就緒'))
     assert '"chat_input_count":0' in visible_message

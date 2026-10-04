@@ -52,12 +52,12 @@ class DoubaoBrowser:
         """Failure-only structural observations; never collect conversation text."""
         labels = ('图片模式', '模型', '比例', '图像生成', '模型 Seedream 5.0 Flash')
         try:
-            raw = self.page.get_by_role('main').evaluate('''main => {
+            raw = self.page.get_by_role('main').evaluate(r'''main => {
                 const labels = ['图片模式','模型','比例','图像生成','模型 Seedream 5.0 Flash'];
                 const visible = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
                 const ancestors = e => {
                     const result = [];
-                    for (let p=e.parentElement;p && main.contains(p);p=p.parentElement) {
+                    for (let p=e.parentElement;p && document.body.contains(p);p=p.parentElement) {
                         const id=p.getAttribute('data-testid'); if(id) result.push(id);
                         if(result.length>=6) break;
                     } return result;
@@ -71,6 +71,17 @@ class DoubaoBrowser:
                             nodes:nodes.filter(visible).slice(0,2).map(e=>({tag:e.tagName.toLowerCase(),
                                 role:e.getAttribute('role') || (e.tagName==='BUTTON'?'button':''),
                                 testid:e.getAttribute('data-testid') || '',ancestors:ancestors(e)}))};
+                    }),
+                    public_controls:labels.map(label => {
+                        const normalized = e => e.textContent.replace(/\s+/g,' ').trim();
+                        const matches = e => normalized(e).startsWith(label);
+                        const nodes=Array.from(document.body.querySelectorAll('*')).filter(e => visible(e) && matches(e) &&
+                            (e.tagName==='BUTTON' || e.getAttribute('role')==='button' || !Array.from(e.children).some(matches)));
+                        return {label,count:nodes.length,visible_count:nodes.length,
+                            nodes:nodes.slice(0,2).map(e=>({tag:e.tagName.toLowerCase(),
+                                role:e.getAttribute('role') || (e.tagName==='BUTTON'?'button':''),
+                                testid:e.getAttribute('data-testid') || '',ancestors:ancestors(e),
+                                inside_main:main.contains(e),match:normalized(e)===label?'exact':'prefix'}))};
                     })};
             }''')
             # Defense in depth: retain only expected keys, fixed mode labels and
@@ -79,16 +90,24 @@ class DoubaoBrowser:
                 return value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', value) else ''
             def ids(values): return [token(value) for value in values[:6] if token(value)] if isinstance(values, list) else []
             def number(value): return min(max(value, 0), 999) if type(value) is int else 0
-            controls = []
-            for control in raw.get('controls', [])[:10]:
-                if not isinstance(control, dict) or control.get('label') not in labels: continue
-                nodes = []
-                for node in control.get('nodes', [])[:2]:
-                    if isinstance(node, dict): nodes.append({key: token(node.get(key)) for key in ('tag', 'role', 'testid')} | {'ancestors': ids(node.get('ancestors', []))})
-                controls.append({'label': control['label'], 'count': number(control.get('count')),
-                                 'visible_count': number(control.get('visible_count')), 'nodes': nodes})
+            def clean_controls(values):
+                controls = []
+                for control in values[:10]:
+                    if not isinstance(control, dict) or control.get('label') not in labels: continue
+                    nodes = []
+                    for node in control.get('nodes', [])[:2]:
+                        if isinstance(node, dict):
+                            cleaned = {key: token(node.get(key)) for key in ('tag', 'role', 'testid')} | {'ancestors': ids(node.get('ancestors', []))}
+                            if type(node.get('inside_main')) is bool: cleaned['inside_main'] = node['inside_main']
+                            if node.get('match') in ('exact', 'prefix'): cleaned['match'] = node['match']
+                            nodes.append(cleaned)
+                    controls.append({'label': control['label'], 'count': number(control.get('count')),
+                                     'visible_count': number(control.get('visible_count')), 'nodes': nodes})
+                return controls
             return {'chat_input_count': number(raw.get('chat_input_count')),
-                    'editors': [ids(values) for values in raw.get('editors', [])[:2]], 'controls': controls}
+                    'editors': [ids(values) for values in raw.get('editors', [])[:2]],
+                    'controls': clean_controls(raw.get('controls', [])),
+                    'public_controls': clean_controls(raw.get('public_controls', []))}
         except Exception:
             return {'diagnostics': 'unavailable'}
 
