@@ -10,4 +10,5 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'THIRD_PARTY_NOTICES.md') -Desti
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '启动图片繁体转换.cmd') -Destination $toolFolder
 & $Python (Join-Path $PSScriptRoot 'collect_licenses.py') (Join-Path $toolFolder 'licenses')
 if ($LASTEXITCODE -ne 0) { throw 'License collection failed' }
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'notices') -Destination (Join-Path $toolFolder 'licenses/upstream') -Recurse
 Write-Output $toolFolder

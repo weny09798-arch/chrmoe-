@@ -39,4 +39,3 @@ Files: `image-translator/README.md`, `image-translator/build.ps1`, packaging not
 - [ ] Commit, fast-forward main, push authorized repository. Copy portable folder to user-visible workspace; ZIP verify entries/hashes; archive only this worktree after preserving build artifacts.
 
 Self-review: no placeholder dependencies, no remote-key gate, no unapproved public deployment. Batch app is separate from the existing Chrome extension.
-
