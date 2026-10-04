@@ -11,6 +11,7 @@ from core import NeedsUser, SubmissionUncertain
 
 RESULT_SELECTOR = '[data-testid="message_image_content"][data-finished="true"] [data-testid="mdbox_image"] img[alt="image"]'
 IMAGE_OBSERVATION = '''imgs => imgs.map(img => ({src:img.currentSrc || img.src,
+ visible:!!(img.offsetWidth || img.offsetHeight || img.getClientRects().length),
  complete:img.complete,natural_width:img.naturalWidth,natural_height:img.naturalHeight,
  finished:!!img.closest('[data-finished="true"]'),generated:!!img.closest('[data-testid="mdbox_image"]')}))'''
 ATTACHMENT_OBSERVATION = '''cards => {
@@ -311,10 +312,13 @@ class DoubaoBrowser:
         close = self.page.get_by_test_id('canvas_close_btn')
         if not close.is_visible():
             candidates = self.page.locator(RESULT_SELECTOR)
-            for index, image in enumerate(candidates.evaluate_all(IMAGE_OBSERVATION)):
-                if _identity(image['src']) == identity:
-                    candidates.nth(index).locator('..').click(); break
-            else: raise NeedsUser('下載：生成圖片已不在畫面，請檢查 Chrome。')
+            matches = [index for index, image in enumerate(candidates.evaluate_all(IMAGE_OBSERVATION))
+                       if _identity(image['src']) == identity and image.get('visible') and _loaded(image)]
+            if len(matches) != 1:
+                raise NeedsUser('下載：無法唯一辨識可見且已載入的同一生成圖片，請檢查 Chrome。')
+            # The observed PICTURE wrapper is not consistently actionable;
+            # click the actual matched IMG, which opens the image canvas.
+            candidates.nth(matches[0]).click(timeout=5000)
         self.stage = '下載：等待完整尺寸圖片'
         self.page.wait_for_function('''identity => Array.from(document.images).some(i => i.complete && i.naturalWidth > 0 && i.naturalHeight > 0 && (i.currentSrc||i.src).includes('/rc_gen_image/'+identity) && (i.currentSrc||i.src).includes('cgen'))''', arg=identity, timeout=12000)
         self.stage = '下載：讀取完整尺寸圖片位置'

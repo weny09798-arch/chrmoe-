@@ -303,6 +303,58 @@ def test_download_pause_identifies_failed_step_without_exposing_exception_url(tm
     for forbidden in ('https', 'private', 'secret', 'token', 'prompt'):
         assert forbidden not in message
 
+@pytest.mark.parametrize('variant', ['one', 'hidden-copy', 'ambiguous', 'only-hidden', 'unloaded', 'wrong-identity'])
+def test_preview_opens_actual_unique_visible_matched_image_not_picture_parent(tmp_path, variant):
+    import io
+    from PIL import Image
+    from browser import RESULT_SELECTOR
+    stream = io.BytesIO(); Image.new('RGB', (8, 8)).save(stream, format='PNG')
+    opened = []
+    observations = [dict(candidate(), visible=variant != 'only-hidden')]
+    if variant == 'unloaded': observations[0]['natural_width'] = 0
+    if variant == 'wrong-identity': observations[0]['src'] = candidate(B)['src']
+    if variant in {'hidden-copy', 'ambiguous'}:
+        observations.insert(0, dict(candidate(), visible=variant == 'ambiguous'))
+    class Parent:
+        def click(self, **kwargs): raise TimeoutError('PICTURE parent is not actionable')
+    class Thumbnail:
+        def __init__(self, index): self.index = index
+        def locator(self, selector): assert selector == '..'; return Parent()
+        def click(self, **kwargs):
+            assert kwargs['timeout'] <= 5000
+            assert observations[self.index]['visible']
+            opened.append(self.index)
+    class Images:
+        def evaluate_all(self, script): return observations
+        def nth(self, index): return Thumbnail(index)
+    class Fullsize:
+        def evaluate_all(self, script):
+            full = candidate(); full['src'] += '&cgen=observed'; return [full]
+    class Close:
+        def is_visible(self): return bool(opened)
+        def click(self, **kwargs): pass
+    class Download:
+        def is_visible(self): return False
+    class Page:
+        def get_by_test_id(self, name): return Close() if name == 'canvas_close_btn' else Download()
+        def locator(self, selector): return Images() if selector == RESULT_SELECTOR else Fullsize()
+        def wait_for_function(self, *args, **kwargs): assert opened
+    class Response:
+        ok = True
+        def body(self): return stream.getvalue()
+    class Request:
+        def get(self, src, **kwargs): assert opened; return Response()
+    class Context: request = Request()
+    adapter = DoubaoBrowser(tmp_path); adapter.page = Page(); adapter.context = Context()
+    adapter.pending = {'baseline': set(), 'identity': A}
+    if variant in {'ambiguous', 'only-hidden', 'unloaded', 'wrong-identity'}:
+        with pytest.raises(NeedsUser): adapter._download()
+        assert not opened
+    else:
+        assert adapter._download() == stream.getvalue()
+        assert opened == [1 if variant == 'hidden-copy' else 0]
+    assert adapter.pending['identity'] == A
+
 def test_cancel_gate_prevents_actual_adapter_click(tmp_path):
     from contextlib import contextmanager
     adapter=DoubaoBrowser(tmp_path);adapter._prepare=lambda path,prompt:set()
