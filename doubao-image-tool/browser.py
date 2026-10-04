@@ -1,6 +1,7 @@
 """Visible, standard Chrome DOM automation; no model API or session export."""
 from contextlib import nullcontext
 import io
+import json
 import re
 import time
 from pathlib import Path
@@ -46,6 +47,53 @@ def select_fullsize(images: list[dict], identity: str) -> str:
     return eligible[0]['src']
 
 class DoubaoBrowser:
+    def _mode_diagnostics(self):
+        """Failure-only structural observations; never collect conversation text."""
+        labels = ('图片模式', '模型', '比例', '图像生成', '模型 Seedream 5.0 Flash')
+        try:
+            raw = self.page.get_by_role('main').evaluate('''main => {
+                const labels = ['图片模式','模型','比例','图像生成','模型 Seedream 5.0 Flash'];
+                const visible = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+                const ancestors = e => {
+                    const result = [];
+                    for (let p=e.parentElement;p && main.contains(p);p=p.parentElement) {
+                        const id=p.getAttribute('data-testid'); if(id) result.push(id);
+                        if(result.length>=6) break;
+                    } return result;
+                };
+                return {chat_input_count:main.querySelectorAll('[data-testid="chat_input"]').length,
+                    editors:Array.from(main.querySelectorAll('[contenteditable="true"]')).filter(visible).slice(0,2).map(ancestors),
+                    controls:labels.map(label => {
+                        const nodes=Array.from(main.querySelectorAll('*')).filter(e => e.textContent.trim()===label &&
+                            (e.tagName==='BUTTON' || e.getAttribute('role')==='button' || !Array.from(e.children).some(c=>c.textContent.trim()===label)));
+                        return {label,count:nodes.length,visible_count:nodes.filter(visible).length,
+                            nodes:nodes.filter(visible).slice(0,2).map(e=>({tag:e.tagName.toLowerCase(),
+                                role:e.getAttribute('role') || (e.tagName==='BUTTON'?'button':''),
+                                testid:e.getAttribute('data-testid') || '',ancestors:ancestors(e)}))};
+                    })};
+            }''')
+            # Defense in depth: retain only expected keys, fixed mode labels and
+            # bounded structural tokens even if a DOM boundary returns extra data.
+            def token(value):
+                return value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', value) else ''
+            def ids(values): return [token(value) for value in values[:6] if token(value)] if isinstance(values, list) else []
+            def number(value): return min(max(value, 0), 999) if type(value) is int else 0
+            controls = []
+            for control in raw.get('controls', [])[:10]:
+                if not isinstance(control, dict) or control.get('label') not in labels: continue
+                nodes = []
+                for node in control.get('nodes', [])[:2]:
+                    if isinstance(node, dict): nodes.append({key: token(node.get(key)) for key in ('tag', 'role', 'testid')} | {'ancestors': ids(node.get('ancestors', []))})
+                controls.append({'label': control['label'], 'count': number(control.get('count')),
+                                 'visible_count': number(control.get('visible_count')), 'nodes': nodes})
+            return {'chat_input_count': number(raw.get('chat_input_count')),
+                    'editors': [ids(values) for values in raw.get('editors', [])[:2]], 'controls': controls}
+        except Exception:
+            return {'diagnostics': 'unavailable'}
+
+    def _mode_failure(self, message):
+        return NeedsUser(message + '；模式結構診斷：' + json.dumps(self._mode_diagnostics(), ensure_ascii=False, separators=(',', ':')))
+
     def __init__(self, profile_dir: Path, timeout_seconds=480):
         self.profile_dir = Path(profile_dir)
         self.timeout_seconds = timeout_seconds  # QueueService owns generation timeout.
@@ -163,7 +211,7 @@ class DoubaoBrowser:
         mode_deadline = time.monotonic() + 5
         while not self._image_mode_ready(main):
             if time.monotonic() >= mode_deadline:
-                raise NeedsUser(f'模式：{self._mode_diagnostic}；請檢查 Chrome。')
+                raise self._mode_failure(f'模式：{self._mode_diagnostic}；請檢查 Chrome。')
             self.page.wait_for_timeout(250)
         composer = self._wait_composer(main)
         self._wait_attachment(main, path)
@@ -176,7 +224,7 @@ class DoubaoBrowser:
         if normalize_breaks(composer.inner_text()) != normalize_breaks(prompt):
             raise NeedsUser('輸入：提示詞未完整寫入，請檢查 Chrome。')
         if not self._image_mode_ready(main):
-            raise NeedsUser(f'模式：圖像生成工具列已變更，尚未發送；{self._mode_diagnostic}；請檢查 Chrome。')
+            raise self._mode_failure(f'模式：圖像生成工具列已變更，尚未發送；{self._mode_diagnostic}；請檢查 Chrome。')
         send = main.get_by_test_id('chat_input_send_button')
         if not send.is_visible() or not send.is_enabled():
             raise NeedsUser('上傳：發送按鈕尚未就緒，請檢查圖片上傳。')
@@ -188,6 +236,8 @@ class DoubaoBrowser:
         except NeedsUser: raise
         except Exception:
             detail = getattr(self, '_mode_diagnostic', '') if self.stage == '確認圖像生成模式' else ''
+            if self.stage == '確認圖像生成模式':
+                raise self._mode_failure(f'{self.stage}：操作未就緒，尚未發送；{detail}；請檢查 Chrome 後繼續。') from None
             raise NeedsUser(f'{self.stage}：操作未就緒，尚未發送；{detail}；請檢查 Chrome 後繼續。') from None
         with send_gate():
             self.pending = {'baseline': baseline, 'identity': None}

@@ -257,6 +257,30 @@ def test_search_material_thumbnail_is_not_generated_output():
     material['src'] = 'https://example.test/ecom-shop-material/jpeg_m_41676237671e82e229043c75d0c7f837_sx_85007_www800-800~tplv-be4g95zd3a-448x448.jpeg'
     assert select_result([material], set()) is None
 
+def test_mode_diagnostics_report_missing_scope_without_private_dom_fields(tmp_path):
+    import json
+    class Main:
+        def evaluate(self, script):
+            return {'chat_input_count': 0, 'editors': [['toolbar_outer', 'main_panel']],
+                    'controls': [{'label': '图片模式', 'count': 1, 'visible_count': 1,
+                                  'nodes': [{'tag': 'div', 'role': 'button', 'testid': 'mode_picker',
+                                             'ancestors': ['toolbar_outer', 'main_panel'], 'url': 'https://private.test/signed?token=secret'}]},
+                                 {'label': 'my private prompt', 'count': 1, 'nodes': []}],
+                    'prompt': 'my private prompt', 'cookie': 'secret-cookie', 'url': 'https://private.test/signed'}
+    class Page:
+        def get_by_role(self, role): assert role == 'main'; return Main()
+    adapter = DoubaoBrowser(tmp_path); adapter.page = Page()
+    diagnostics = adapter._mode_diagnostics()
+    assert diagnostics['chat_input_count'] == 0
+    assert diagnostics['controls'][0]['nodes'][0]['ancestors'] == ['toolbar_outer', 'main_panel']
+    text = json.dumps(diagnostics)
+    visible_message = str(adapter._mode_failure('模式尚未就緒'))
+    assert '"chat_input_count":0' in visible_message
+    assert 'mode_picker' in visible_message
+    for forbidden in ('private', 'secret', 'cookie', 'prompt', 'https', 'token'):
+        assert forbidden not in text
+        assert forbidden not in visible_message
+
 def test_cancel_gate_prevents_actual_adapter_click(tmp_path):
     from contextlib import contextmanager
     adapter=DoubaoBrowser(tmp_path);adapter._prepare=lambda path,prompt:set()
