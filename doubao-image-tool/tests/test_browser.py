@@ -433,6 +433,53 @@ def test_failure_capture_is_only_unique_visible_input_and_bounded(tmp_path, scop
     assert 'signed' not in message
     if scope == 'unique': assert str(screenshot) in message
 
+@pytest.mark.parametrize('variant', ['slow', 'deadline-retry'])
+def test_slow_fullsize_readiness_spans_short_polls_without_resubmitting(tmp_path, monkeypatch, variant):
+    import io
+    from PIL import Image
+    clock = [0.0]
+    monkeypatch.setattr('browser.time.monotonic', lambda: clock[0])
+    stream = io.BytesIO(); Image.new('RGB', (8, 8)).save(stream, format='PNG')
+    calls = []
+    ready_at = [22 if variant == 'slow' else float('inf')]
+    class Node:
+        def __init__(self, name): self.name = name
+        def is_visible(self): return self.name == 'canvas_close_btn'
+        def click(self, **kwargs): assert self.name == 'canvas_close_btn'
+        def evaluate_all(self, script):
+            full = candidate(); full['src'] += '&cgen=observed'; return [full]
+    class Page:
+        def get_by_test_id(self, name): return Node(name)
+        def locator(self, selector): return Node(selector)
+        def wait_for_function(self, script, arg, timeout):
+            calls.append(timeout)
+            if clock[0] + timeout / 1000 < ready_at[0]:
+                clock[0] += timeout / 1000; raise TimeoutError('image still loading')
+            clock[0] = ready_at[0]
+    class Response:
+        ok = True
+        def body(self): return stream.getvalue()
+    class Request:
+        def get(self, *args, **kwargs): return Response()
+    class Context: request = Request()
+    adapter = DoubaoBrowser(tmp_path); adapter.page = Page(); adapter.context = Context(); adapter._signals = lambda: None
+    adapter.pending = {'baseline': set(), 'identity': A}
+    data = None
+    for _ in range(40):
+        try: data = adapter.poll()
+        except NeedsUser:
+            assert variant == 'deadline-retry'
+            assert 30 <= clock[0] <= 31
+            assert 'fullsize_deadline' not in adapter.pending
+            ready_at[0] = clock[0] + 2
+            adapter._next_poll = 0
+            variant = 'resuming'
+            continue
+        if data is not None: break
+    assert data == stream.getvalue()
+    assert max(calls) <= 1000
+    assert adapter.pending['identity'] == A
+
 def test_cancel_gate_prevents_actual_adapter_click(tmp_path):
     from contextlib import contextmanager
     adapter=DoubaoBrowser(tmp_path);adapter._prepare=lambda path,prompt:set()

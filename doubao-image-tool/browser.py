@@ -331,7 +331,7 @@ class DoubaoBrowser:
                 self.pending['identity'] = result['identity']
             self.stage = '下載圖片'
             data = self._download()
-            self.stage = '圖片已取得'
+            if data is not None: self.stage = '圖片已取得'
             return data
         except NeedsUser as exc:
             if self.stage.startswith('下載：'): raise self._download_failure(exc) from None
@@ -355,7 +355,15 @@ class DoubaoBrowser:
             # click the actual matched IMG, which opens the image canvas.
             candidates.nth(matches[0]).click(timeout=5000)
         self.stage = '下載：等待完整尺寸圖片'
-        self.page.wait_for_function('''identity => Array.from(document.images).some(i => i.complete && i.naturalWidth > 0 && i.naturalHeight > 0 && (i.currentSrc||i.src).includes('/rc_gen_image/'+identity) && (i.currentSrc||i.src).includes('cgen'))''', arg=identity, timeout=12000)
+        deadline = self.pending.setdefault('fullsize_deadline', time.monotonic() + 30)
+        try:
+            self.page.wait_for_function('''identity => Array.from(document.images).some(i => i.complete && i.naturalWidth > 0 && i.naturalHeight > 0 && (i.currentSrc||i.src).includes('/rc_gen_image/'+identity) && (i.currentSrc||i.src).includes('cgen'))''', arg=identity, timeout=1000)
+        except Exception as exc:
+            if type(exc).__name__ != 'TimeoutError': raise
+            if time.monotonic() < deadline: return None
+            self.pending.pop('fullsize_deadline', None)
+            raise NeedsUser('下載：完整尺寸圖片等待超過 30 秒，繼續會取得同一結果。') from None
+        self.pending.pop('fullsize_deadline', None)
         self.stage = '下載：讀取完整尺寸圖片位置'
         src = select_fullsize(self.page.locator('img').evaluate_all(IMAGE_OBSERVATION), identity)
         data = None
