@@ -94,6 +94,40 @@ class DoubaoBrowser:
     def _mode_failure(self, message):
         return NeedsUser(message + '；模式結構診斷：' + json.dumps(self._mode_diagnostics(), ensure_ascii=False, separators=(',', ':')))
 
+    def _download_diagnostics(self):
+        keys = ('close_count', 'close_visible', 'download_count', 'download_visible',
+                'result_count', 'result_visible', 'matched_count', 'matched_visible',
+                'loaded_cgen_count', 'loaded_cthumb_count', 'loaded_rcgen_count', 'loaded_blob_count')
+        try:
+            raw = self.page.locator('body').evaluate('''(body, identity) => {
+                const visible = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+                const loaded = i => i.complete && i.naturalWidth > 0 && i.naturalHeight > 0;
+                const source = i => i.currentSrc || i.src;
+                const result = Array.from(body.querySelectorAll('[data-testid="message_image_content"][data-finished="true"] [data-testid="mdbox_image"] img[alt="image"]'));
+                const matched = result.filter(i => source(i).includes('/rc_gen_image/'+identity));
+                const close = Array.from(body.querySelectorAll('[data-testid="canvas_close_btn"]'));
+                const download = Array.from(body.querySelectorAll('[data-testid="edit_image_download_button"]'));
+                const images = Array.from(body.querySelectorAll('img')).filter(loaded);
+                return {close_count:close.length,close_visible:close.filter(visible).length,
+                    download_count:download.length,download_visible:download.filter(visible).length,
+                    result_count:result.length,result_visible:result.filter(visible).length,
+                    matched_count:matched.length,matched_visible:matched.filter(visible).length,
+                    loaded_cgen_count:images.filter(i=>source(i).includes('cgen')).length,
+                    loaded_cthumb_count:images.filter(i=>source(i).includes('cthumb')).length,
+                    loaded_rcgen_count:images.filter(i=>source(i).includes('/rc_gen_image/')).length,
+                    loaded_blob_count:images.filter(i=>source(i).startsWith('blob:')).length};
+            }''', self.pending.get('identity'))
+            return {key: min(max(raw[key], 0), 999) for key in keys if type(raw.get(key)) is int}
+        except Exception:
+            return {'diagnostics': 'unavailable'}
+
+    def _download_failure(self, exc):
+        names = {'TimeoutError', 'Error', 'ValueError', 'TypeError', 'AttributeError', 'RuntimeError',
+                 'OSError', 'UnidentifiedImageError', 'DecompressionBombError', 'AssertionError', 'NeedsUser'}
+        name = type(exc).__name__ if type(exc).__name__ in names else 'Exception'
+        return NeedsUser(f'{self.stage}：{name}，請檢查 Chrome 後繼續取得同一結果；下載結構診斷：' +
+                         json.dumps(self._download_diagnostics(), ensure_ascii=False, separators=(',', ':')))
+
     def __init__(self, profile_dir: Path, timeout_seconds=480):
         self.profile_dir = Path(profile_dir)
         self.timeout_seconds = timeout_seconds  # QueueService owns generation timeout.
@@ -263,12 +297,16 @@ class DoubaoBrowser:
             data = self._download()
             self.stage = '圖片已取得'
             return data
-        except NeedsUser: raise
-        except Exception:
+        except NeedsUser as exc:
+            if self.stage.startswith('下載：'): raise self._download_failure(exc) from None
+            raise
+        except Exception as exc:
+            if self.stage.startswith('下載：'): raise self._download_failure(exc) from None
             raise NeedsUser(f'{self.stage}：讀取失敗，請檢查 Chrome 後繼續等待同一結果。') from None
 
     def _download(self):
         identity = self.pending['identity']
+        self.stage = '下載：開啟生成圖片預覽'
         # Open only the matched new result; keep existing canvas on a download retry.
         close = self.page.get_by_test_id('canvas_close_btn')
         if not close.is_visible():
@@ -277,11 +315,14 @@ class DoubaoBrowser:
                 if _identity(image['src']) == identity:
                     candidates.nth(index).locator('..').click(); break
             else: raise NeedsUser('下載：生成圖片已不在畫面，請檢查 Chrome。')
+        self.stage = '下載：等待完整尺寸圖片'
         self.page.wait_for_function('''identity => Array.from(document.images).some(i => i.complete && i.naturalWidth > 0 && i.naturalHeight > 0 && (i.currentSrc||i.src).includes('/rc_gen_image/'+identity) && (i.currentSrc||i.src).includes('cgen'))''', arg=identity, timeout=12000)
+        self.stage = '下載：讀取完整尺寸圖片位置'
         src = select_fullsize(self.page.locator('img').evaluate_all(IMAGE_OBSERVATION), identity)
         data = None
         button = self.page.get_by_test_id('edit_image_download_button')
         if button.is_visible():
+            self.stage = '下載：確認原生下載事件'
             try:
                 with self.page.expect_download(timeout=3000) as download:
                     button.click(timeout=3000)
@@ -293,11 +334,14 @@ class DoubaoBrowser:
                 # Exact URL observed in the live DOM, never assembled from a thumbnail.
                 data = None
         if data is None:
+            self.stage = '下載：取得已觀察的圖片資料'
             response = self.context.request.get(src, timeout=8000)
             if not response.ok: raise NeedsUser('下載：完整尺寸圖片取得失敗，重試會繼續使用同一結果。')
             data = response.body()
+        self.stage = '下載：驗證圖片資料'
         with Image.open(io.BytesIO(data)) as image:
             image.verify()
+        self.stage = '下載：關閉圖片預覽'
         if close.is_visible(): close.click(timeout=3000)
         return data
 

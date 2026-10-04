@@ -281,6 +281,28 @@ def test_mode_diagnostics_report_missing_scope_without_private_dom_fields(tmp_pa
         assert forbidden not in text
         assert forbidden not in visible_message
 
+def test_download_pause_identifies_failed_step_without_exposing_exception_url(tmp_path):
+    class Page:
+        def locator(self, selector): return self
+        def evaluate(self, script, identity):
+            assert identity == A
+            return {'close_count': 2, 'close_visible': 0, 'matched_count': 1,
+                    'matched_visible': 1, 'loaded_cgen_count': 0,
+                    'url': 'https://private.test/signed?token=secret', 'prompt': 'private words'}
+        def get_by_test_id(self, name):
+            raise RuntimeError('https://private.test/signed?token=secret')
+    adapter = DoubaoBrowser(tmp_path); adapter.page = Page(); adapter._signals = lambda: None
+    adapter.pending = {'baseline': set(), 'identity': A}
+    with pytest.raises(NeedsUser) as paused: adapter.poll()
+    message = str(paused.value)
+    assert '開啟生成圖片預覽' in message
+    assert 'RuntimeError' in message
+    assert '"close_count":2' in message
+    assert '"matched_visible":1' in message
+    assert adapter.pending['identity'] == A
+    for forbidden in ('https', 'private', 'secret', 'token', 'prompt'):
+        assert forbidden not in message
+
 def test_cancel_gate_prevents_actual_adapter_click(tmp_path):
     from contextlib import contextmanager
     adapter=DoubaoBrowser(tmp_path);adapter._prepare=lambda path,prompt:set()
