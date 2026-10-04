@@ -84,6 +84,7 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
 
     @app.post('/api/exit')
     def exit_app():
+        queue.request_close()
         shutdown = app.extensions.get('shutdown')
         if shutdown:
             import threading

@@ -93,3 +93,26 @@ def test_default_redesign_options_are_off(client):
     parser=Inputs();parser.feed(client.get('/').get_data(as_text=True))
     assert set(parser.inputs)=={'background','typography'}
     assert all('checked' not in attrs for attrs in parser.inputs.values())
+
+def test_exit_acknowledgement_cancels_unsent_preparation_before_server_shutdown(tmp_path):
+    import threading
+    entered,release=threading.Event(),threading.Event()
+    sends=[]
+    class Preparing(Browser):
+        def submit(self,path,prompt,send_gate):
+            entered.set();release.wait(2)
+            with send_gate(): sends.append(prompt)
+    app=create_app(Preparing,tmp_path/'state',tmp_path/'out','secret')
+    app.extensions['shutdown']=lambda:None
+    q=app.extensions['queue'];q.start([('a.png',png())],tmp_path/'out','convert')
+    assert entered.wait(1)
+    try:
+        with app.test_client() as c:
+            response=c.post('/api/exit',headers={'X-Tool-Token':'secret'},json={})
+            assert response.status_code==200
+            assert q.closed, 'Exit must cancel queue before acknowledging shutdown'
+        release.set();q.worker.join(2)
+        assert not q.worker.is_alive()
+        assert sends==[]
+        assert q.snapshot()['items'][0]['phase']=='ready'
+    finally:release.set();q.close()

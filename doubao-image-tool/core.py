@@ -240,7 +240,11 @@ class QueueService:
         finally:
             if self.browser is not None: self.browser.close()
 
-    def close(self):
+    def request_close(self):
+        """Cancel synchronously without joining or touching worker-owned browser objects."""
         with self.cv: self.closed = True; self.cv.notify_all()
+
+    def close(self):
+        self.request_close()
         self.worker.join(timeout=30)
         if self.worker.is_alive(): raise RuntimeError('瀏覽器操作尚未結束')
