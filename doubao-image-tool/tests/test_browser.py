@@ -404,6 +404,35 @@ def test_stale_draft_reset_pause_includes_mode_structure_without_deleting_draft(
     assert adapter.pending is None
     assert 5 <= clock[0] <= 5.25
 
+@pytest.mark.parametrize('scope', ['unique', 'missing', 'ambiguous', 'failed'])
+def test_failure_capture_is_only_unique_visible_input_and_bounded(tmp_path, scope):
+    captured = []
+    class Input:
+        def filter(self, **kwargs): assert kwargs == {'visible': True}; return self
+        def count(self): return {'missing': 0, 'ambiguous': 2}.get(scope, 1)
+        def screenshot(self, **kwargs):
+            assert kwargs['timeout'] <= 3000
+            assert set(kwargs) == {'path', 'timeout'}
+            if scope == 'failed': raise RuntimeError('https://private.test/signed')
+            captured.append(Path(kwargs['path']))
+            Path(kwargs['path']).write_bytes(b'local-only-image')
+    class Main:
+        def get_by_test_id(self, name): assert name == 'chat_input'; return Input()
+    class Page:
+        def get_by_role(self, role): assert role == 'main'; return Main()
+    adapter = DoubaoBrowser(tmp_path / 'profile'); adapter.page = Page()
+    adapter._mode_diagnostics = lambda: {'chat_input_count': 1}
+    captured_ok = adapter._capture_input_diagnostic()
+    assert captured_ok is (scope == 'unique')
+    screenshot = tmp_path / 'diagnostics' / 'last-input.png'
+    assert screenshot.exists() is (scope == 'unique')
+    assert captured == ([screenshot] if scope == 'unique' else [])
+    message = str(adapter._mode_failure('原始暫停原因'))
+    assert '原始暫停原因' in message
+    assert 'private' not in message
+    assert 'signed' not in message
+    if scope == 'unique': assert str(screenshot) in message
+
 def test_cancel_gate_prevents_actual_adapter_click(tmp_path):
     from contextlib import contextmanager
     adapter=DoubaoBrowser(tmp_path);adapter._prepare=lambda path,prompt:set()

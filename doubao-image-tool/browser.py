@@ -48,6 +48,19 @@ def select_fullsize(images: list[dict], identity: str) -> str:
     return eligible[0]['src']
 
 class DoubaoBrowser:
+    def _capture_input_diagnostic(self):
+        """Keep a local failure-only crop of the uniquely identified input."""
+        try:
+            control = self.page.get_by_role('main').get_by_test_id('chat_input').filter(visible=True)
+            if control.count() != 1: return False
+            path = self.profile_dir.parent / 'diagnostics' / 'last-input.png'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            control.screenshot(path=str(path), timeout=3000)
+            return True
+        except Exception:
+            # A failed local crop must never obscure the original pause.
+            return False
+
     def _mode_diagnostics(self):
         """Failure-only structural observations; never collect conversation text."""
         labels = ('图片模式', '模型', '比例', '图像生成', '模型 Seedream 5.0 Flash')
@@ -112,7 +125,9 @@ class DoubaoBrowser:
             return {'diagnostics': 'unavailable'}
 
     def _mode_failure(self, message):
-        return NeedsUser(message + '；模式結構診斷：' + json.dumps(self._mode_diagnostics(), ensure_ascii=False, separators=(',', ':')))
+        diagnostic = json.dumps(self._mode_diagnostics(), ensure_ascii=False, separators=(',', ':'))
+        screenshot = '；已保存本機輸入區截圖：' + str(self.profile_dir.parent / 'diagnostics' / 'last-input.png') if self._capture_input_diagnostic() else ''
+        return NeedsUser(message + '；模式結構診斷：' + diagnostic + screenshot)
 
     def _download_diagnostics(self):
         keys = ('close_count', 'close_visible', 'download_count', 'download_visible',
