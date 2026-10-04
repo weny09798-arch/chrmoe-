@@ -11,6 +11,12 @@ RESULT_SELECTOR = '[data-testid="message_image_content"][data-finished="true"] [
 IMAGE_OBSERVATION = '''imgs => imgs.map(img => ({src:img.currentSrc || img.src,
  complete:img.complete,natural_width:img.naturalWidth,natural_height:img.naturalHeight,
  finished:!!img.closest('[data-finished="true"]'),generated:!!img.closest('[data-testid="mdbox_image"]')}))'''
+ATTACHMENT_OBSERVATION = '''cards => {
+ const visible = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+ return cards.map(card => ({label:card.getAttribute('aria-label'),visible:visible(card),
+ loaded:Array.from(card.querySelectorAll('img[alt="image"]')).some(i => i.complete && i.naturalWidth > 0 && i.naturalHeight > 0),
+ progress:Array.from(card.querySelectorAll('[role="progressbar"], [aria-busy="true"], [aria-label="upload progress percent"], [aria-description="upload progress percent"]')).some(visible)}));
+}'''
 
 def _identity(src):
     match = re.search(r'/rc_gen_image/([a-fA-F0-9]{32})(?:\.|/|$)', urlsplit(src).path)
@@ -89,17 +95,16 @@ class DoubaoBrowser:
         with self.page.expect_file_chooser(timeout=10000) as chooser:
             self.page.get_by_text('上传文件或图片', exact=True).click()
         chooser.value.set_files(str(path))
-        # Confirm the exact staged file and absence of upload progress, without submitting.
-        main.get_by_text(path.name, exact=True).first.wait_for(state='visible', timeout=30000)
-        self.page.wait_for_function('''filename => {
-            const main = document.querySelector('main');
-            const visible = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
-            const label = Array.from(main.querySelectorAll('*')).find(e => visible(e) && e.textContent.trim() === filename && !Array.from(e.children).some(c => c.textContent.trim() === filename));
-            const staged = label && label.parentElement;
-            const loaded = staged && Array.from(staged.querySelectorAll('img')).some(i => i.complete && i.naturalWidth > 0);
-            const progress = Array.from(main.querySelectorAll('[role="progressbar"], [aria-busy="true"], [aria-label="upload progress percent"], [aria-description="upload progress percent"]')).some(visible);
-            return loaded && !progress;
-        }''', arg=path.name, timeout=15000)
+        # Actual cards name the file only via aria-label, never visible text.
+        deadline = time.monotonic() + 15
+        while True:
+            cards = main.get_by_test_id('attachment-image-card').evaluate_all(ATTACHMENT_OBSERVATION)
+            matching = [card for card in cards if card['visible'] and card['label'] == path.name]
+            if len(matching) == 1 and matching[0]['loaded'] and not matching[0]['progress']:
+                break
+            if time.monotonic() >= deadline:
+                raise NeedsUser('上傳：指定圖片尚未載入或仍在上傳，請檢查 Chrome。')
+            self.page.wait_for_timeout(250)
         self._signals()
         self.stage = '檢查提示詞'
         composer.fill(prompt)

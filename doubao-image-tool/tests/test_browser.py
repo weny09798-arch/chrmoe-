@@ -125,7 +125,7 @@ def test_started_stalled_download_is_cancelled_without_waiting_and_can_retry(tmp
     adapter.context.request.fail = False; adapter._next_poll = 0
     assert adapter.poll() == image.getvalue()
 
-@pytest.mark.parametrize('failure', ['filename', 'unloaded', 'progress', 'prompt', 'disabled', 'composer'])
+@pytest.mark.parametrize('failure', [None, 'filename', 'unloaded', 'progress', 'prompt', 'disabled', 'composer'])
 def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tmp_path, failure):
     sends = []
     class Node:
@@ -136,7 +136,7 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
         def count(self): return 0 if failure == 'composer' else 1
         def get_by_test_id(self, name): return Node(name)
         def get_by_text(self, text, **kwargs):
-            assert text == 'a.png'; assert kwargs['exact']; return Node('filename')
+            raise TimeoutError('filename exists only as aria-label')
         def locator(self, selector): return Node('composer')
         def click(self, **kwargs):
             if self.name == 'chat_input_send_button': sends.append('sent')
@@ -147,7 +147,11 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
         def fill(self, text): self.text = text
         def inner_text(self): return 'partial' if failure == 'prompt' else self.text
         def all(self): return []
-        def evaluate_all(self, script): return []
+        def evaluate_all(self, script):
+            if self.name == 'attachment-image-card':
+                return [{'label': 'wrong.png' if failure == 'filename' else 'a.png',
+                         'visible': True, 'loaded': failure != 'unloaded', 'progress': failure == 'progress'}]
+            return []
     class Chooser:
         def set_files(self, path): assert Path(path).name == 'a.png'
     class Event:
@@ -160,10 +164,16 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
         def get_by_test_id(self, name): return Node(name)
         def get_by_text(self, text, **kwargs): return Node()
         def expect_file_chooser(self, **kwargs): return Event()
+        def wait_for_timeout(self, delay): raise TimeoutError('attachment not ready')
         def wait_for_function(self, script, arg, timeout):
             assert arg == 'a.png'
             if failure in {'unloaded', 'progress'}: raise TimeoutError('upload readiness not satisfied')
     adapter = DoubaoBrowser(tmp_path); adapter.page = Page()
-    with pytest.raises(NeedsUser): adapter.submit(tmp_path / 'a.png', 'exact prompt')
-    assert not sends
-    assert adapter.pending is None
+    if failure is None:
+        adapter.submit(tmp_path / 'a.png', 'exact prompt')
+        assert sends == ['sent']
+        assert adapter.pending is not None
+    else:
+        with pytest.raises(NeedsUser): adapter.submit(tmp_path / 'a.png', 'exact prompt')
+        assert not sends
+        assert adapter.pending is None
