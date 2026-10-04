@@ -210,3 +210,22 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
         with pytest.raises(NeedsUser): adapter.submit(tmp_path / 'a.png', prompt)
         assert not sends
         assert adapter.pending is None
+
+def test_cancel_gate_prevents_actual_adapter_click(tmp_path):
+    from contextlib import contextmanager
+    adapter=DoubaoBrowser(tmp_path);adapter._prepare=lambda path,prompt:set()
+    clicks=[]
+    class Page:
+        def get_by_test_id(self,name):
+            class Send:
+                def click(self,**kwargs): clicks.append(name)
+            return Send()
+    adapter.page=Page()
+    @contextmanager
+    def reject():
+        raise RuntimeError('cancelled before send')
+        yield
+    with pytest.raises(RuntimeError, match='cancelled before send'):
+        adapter.submit(tmp_path/'a.png','convert',reject)
+    assert clicks==[]
+    assert adapter.pending is None

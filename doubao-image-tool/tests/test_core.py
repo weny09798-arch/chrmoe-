@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import io
 import threading
 import time
@@ -20,9 +21,9 @@ def wait(service, predicate):
 class Cloud:
     def __init__(self): self.sends = []; self.result = None; self.owner = None; self.closed = False
     def open(self): self.owner = threading.get_ident()
-    def submit(self, path, prompt):
+    def submit(self, path, prompt, send_gate=nullcontext):
         assert threading.get_ident() == self.owner
-        self.sends.append((Path(path).read_bytes(), prompt))
+        with send_gate(): self.sends.append((Path(path).read_bytes(), prompt))
     def poll(self): return self.result
     def close(self):
         assert threading.get_ident() == self.owner
@@ -79,8 +80,8 @@ def test_restart_requires_review_before_any_send(tmp_path):
 
 def test_uncertain_submit_continue_does_not_resend(tmp_path):
     class Uncertain(Cloud):
-        def submit(self, path, prompt):
-            super().submit(path, prompt); raise SubmissionUncertain('inspect Chrome')
+        def submit(self, path, prompt, send_gate=nullcontext):
+            super().submit(path, prompt, send_gate); raise SubmissionUncertain('inspect Chrome')
     cloud = Uncertain(); service = QueueService(lambda: cloud, tmp_path/'state')
     try:
         service.start([('a.png', png())], tmp_path/'out', 'convert')
@@ -107,9 +108,9 @@ def test_download_retry_polls_existing_request(tmp_path):
 def test_pre_send_readiness_can_continue(tmp_path):
     class Readiness(Cloud):
         def __init__(self): super().__init__(); self.ready = False
-        def submit(self, path, prompt):
+        def submit(self, path, prompt, send_gate=nullcontext):
             if not self.ready: raise NeedsUser('請登入')
-            super().submit(path, prompt)
+            super().submit(path, prompt, send_gate)
     cloud = Readiness(); service = QueueService(lambda: cloud, tmp_path/'state')
     try:
         service.start([('a.png', png())], tmp_path/'out', 'convert')
@@ -183,8 +184,8 @@ def test_redo_rejects_old_inflight_submit_and_save(tmp_path, monkeypatch, stage)
     cloud = Cloud(); cloud.result = png()
     if stage == 'submit':
         original_submit = cloud.submit
-        def submit(path, prompt):
-            original_submit(path, prompt)
+        def submit(path, prompt, send_gate=nullcontext):
+            original_submit(path, prompt, send_gate)
             if len(cloud.sends) == 1:
                 entered.set(); assert release.wait(3)
         cloud.submit = submit
@@ -251,3 +252,49 @@ def test_late_poll_success_cannot_change_terminal_item_phase(tmp_path, monkeypat
         assert service.snapshot()['items'][0]['phase'] == 'pending'
         assert not list((tmp_path/'state').glob('*/*.result'))
     finally: release.set(); service.close()
+
+@pytest.mark.parametrize('operation', ['stop', 'exit', 'redo'])
+def test_cancel_prepared_unsent_request_before_commit(tmp_path, operation):
+    entered, release = threading.Event(), threading.Event()
+    class Preparing(Cloud):
+        def submit(self, path, prompt, send_gate=None):
+            entered.set(); release.wait(2)
+            if send_gate:
+                with send_gate(): self.sends.append((Path(path).read_bytes(), prompt))
+            else: self.sends.append((Path(path).read_bytes(), prompt))
+    cloud=Preparing(); service=QueueService(lambda:cloud,tmp_path/'state')
+    service.start([('a.png',png())],tmp_path/'out','convert'); assert entered.wait(1)
+    closer=None
+    try:
+        if operation=='exit':
+            closer=threading.Thread(target=service.close); closer.start()
+            with service.cv: assert service.closed
+        else:
+            service.action('stop')
+            if operation=='redo':
+                service.action('redo',0); service.action('stop')
+        release.set()
+        if closer: closer.join(3); assert not closer.is_alive()
+        else: wait(service, lambda s:s['items'][0]['phase']=='ready')
+        assert cloud.sends==[], 'An unsent stopped/closed/stale preparation must not commit Send'
+        if operation!='exit':
+            assert service.snapshot()['status']=='stopped'
+            service.action('continue'); wait(service,lambda s:s['items'][0]['phase']=='pending')
+            assert len(cloud.sends)==1
+    finally: release.set(); service.close()
+
+def test_restart_keeps_known_unsent_items_queued_but_submitted_needs_review(tmp_path):
+    import json
+    root=tmp_path/'state';root.mkdir()
+    source=root/'input.png';source.write_bytes(png())
+    items=[{'index':i,'name':f'{i}.png','input_path':str(source),'status':'running' if i==0 else 'queued','phase':'pending' if i==0 else 'ready','message':'','result':None} for i in range(2)]
+    (root/'job.json').write_text(json.dumps({'id':'job','status':'running','output_dir':str(tmp_path/'out'),'prompt':'convert','items':items,'message':''}),encoding='utf-8')
+    cloud=Cloud();cloud.result=png();service=QueueService(lambda:cloud,root)
+    try:
+        snapshot=service.snapshot();assert snapshot['status']=='paused'
+        assert snapshot['items'][0]['status']=='needs-review'
+        assert snapshot['items'][1]['status']=='queued'
+        service.action('continue');time.sleep(.03);assert cloud.sends==[]
+        service.action('retry',0);wait(service,lambda s:s['status']=='completed')
+        assert len(cloud.sends)==2
+    finally:service.close()

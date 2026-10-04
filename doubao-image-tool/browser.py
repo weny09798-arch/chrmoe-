@@ -1,4 +1,5 @@
 """Visible, standard Chrome DOM automation; no model API or session export."""
+from contextlib import nullcontext
 import io
 import re
 import time
@@ -129,18 +130,19 @@ class DoubaoBrowser:
             raise NeedsUser('上傳：發送按鈕尚未就緒，請檢查圖片上傳。')
         return {_identity(x['src']) for x in self.page.locator(RESULT_SELECTOR).evaluate_all(IMAGE_OBSERVATION)} - {None}
 
-    def submit(self, path: Path, prompt: str):
+    def submit(self, path: Path, prompt: str, send_gate=nullcontext):
         try:
             baseline = self._prepare(Path(path), prompt)
         except NeedsUser: raise
         except Exception:
             raise NeedsUser(f'{self.stage}：操作未就緒，尚未發送；請檢查 Chrome 後繼續。') from None
-        self.pending = {'baseline': baseline, 'identity': None}
-        self.stage = '提交'
-        try:
-            self.page.get_by_test_id('chat_input_send_button').click(timeout=10000)
-        except Exception:
-            raise SubmissionUncertain('提交：可能已發送，請檢查 Chrome；明確重試才會再次提交。') from None
+        with send_gate():
+            self.pending = {'baseline': baseline, 'identity': None}
+            self.stage = '提交'
+            try:
+                self.page.get_by_test_id('chat_input_send_button').click(timeout=10000)
+            except Exception:
+                raise SubmissionUncertain('提交：可能已發送，請檢查 Chrome；明確重試才會再次提交。') from None
         self.stage = '等待生成'
         self._next_poll = 0
 

@@ -1,4 +1,5 @@
 """Serial, persistent queue. All browser calls run on the owning worker."""
+from contextlib import contextmanager
 import copy
 import json
 import threading
@@ -11,6 +12,9 @@ class NeedsUser(Exception):
     """Readiness failure before send, or a recoverable pending-request pause."""
 class SubmissionUncertain(Exception):
     """Send may have reached the service; explicit retry is required."""
+
+class SubmissionCancelled(Exception):
+    """Preparation was cancelled before the Send commit."""
 
 class StorageFailure(RuntimeError):
     """State could not be persisted; restart is required before more work."""
@@ -30,7 +34,10 @@ class QueueService:
             self.job = json.loads(path.read_text(encoding='utf-8'))
             for item in self.job['items']:
                 if item['status'] != 'completed':
-                    item['status'] = 'needs-review'; item['message'] = '程式已重新啟動；請檢查 Chrome，明確重試後才會繼續。'
+                    if item['phase'] == 'ready':
+                        item['status'] = 'queued'; item['message'] = '程式已重新啟動；此圖片尚未發送，待繼續處理。'
+                    else:
+                        item['status'] = 'needs-review'; item['message'] = '程式已重新啟動；請檢查 Chrome，明確重試後才會繼續。'
             if any(i['status'] != 'completed' for i in self.job['items']): self.job['status'] = 'paused'
             self._persist()
         self.worker = threading.Thread(target=self._run, name='doubao-browser', daemon=True); self.worker.start()
@@ -154,7 +161,16 @@ class QueueService:
                             if self.closed or self.job['status'] != 'running' or item.get('revision', 0) != revision:
                                 continue
                             item['phase'] = 'submitting'; item['status'] = 'running'; self._persist()
-                        self.browser.submit(Path(item['input_path']), self.job['prompt'])
+                        @contextmanager
+                        def send_gate():
+                            # Only the worker executes the DOM click; stop/close/revision changes
+                            # serialize against this last authorization and Send commit.
+                            with self.cv:
+                                self._check_storage()
+                                if self.closed or self.job['status'] != 'running' or item.get('revision', 0) != revision:
+                                    raise SubmissionCancelled()
+                                yield
+                        self.browser.submit(Path(item['input_path']), self.job['prompt'], send_gate)
                         with self.cv:
                             self._check_storage()
                             if item.get('revision', 0) != revision:
@@ -189,6 +205,12 @@ class QueueService:
                             self._persist()
                     else:
                         with self.cv: self._pause(item, '提交狀態不確定；請明確重試。')
+                except SubmissionCancelled:
+                    with self.cv:
+                        self._check_storage()
+                        if item.get('revision', 0) == revision:
+                            item['phase'] = 'ready'; item['status'] = 'queued'
+                            self._persist()
                 except StorageFailure:
                     raise
                 except NeedsUser as exc:

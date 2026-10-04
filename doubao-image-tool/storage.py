@@ -33,7 +33,7 @@ def save_result(output_dir, name, data, prompt):
         try:
             with path.open('xb') as handle: handle.write(output.getvalue())
         except FileExistsError: continue
-        metadata = {'output_path': str(path), 'record_path': str(record), 'prompt': prompt,
+        metadata = {'original_name': name, 'output_path': str(path), 'record_path': str(record), 'prompt': prompt,
                     'time': datetime.now(timezone.utc).isoformat(), 'status': 'completed', 'review_needed': True}
         try:
             handle = record.open('x', encoding='utf-8')

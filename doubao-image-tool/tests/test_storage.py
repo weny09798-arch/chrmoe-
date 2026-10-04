@@ -40,3 +40,11 @@ def test_json_write_error_removes_owned_partial_files(tmp_path, monkeypatch):
     with pytest.raises(OSError, match='disk full'):
         save_result(tmp_path, 'a.png', png(), 'convert')
     assert list(tmp_path.iterdir()) == []
+
+@pytest.mark.parametrize('name', ['bad<>name.png', '商品'*100+'.png', 'same.png'])
+def test_metadata_maps_original_name_despite_sanitized_duplicate_output(tmp_path, name):
+    first=save_result(tmp_path,name,png(),'convert');second=save_result(tmp_path,name,png(),'convert')
+    assert first['output_path']!=second['output_path']
+    for result in [first,second]:
+        record=json.loads(Path(result['record_path']).read_text(encoding='utf-8'))
+        assert record['original_name']==name

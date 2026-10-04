@@ -8,7 +8,8 @@ class Browser:
     stage = '生成'
     def open(self): pass
     def close(self): pass
-    def submit(self, path, prompt): pass
+    def submit(self, path, prompt, send_gate):
+        with send_gate(): pass
     def poll(self): return None
 
 @pytest.fixture
