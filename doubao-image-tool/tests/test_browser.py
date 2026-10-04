@@ -75,3 +75,95 @@ def test_poll_throttle_does_not_touch_dom_again(tmp_path):
     assert adapter.poll() == b'image'
     adapter._signals = lambda: (_ for _ in ()).throw(RuntimeError('DOM read'))
     assert adapter.poll() is None
+
+def test_started_stalled_download_is_cancelled_without_waiting_and_can_retry(tmp_path):
+    import io
+    import time
+    from PIL import Image
+    image = io.BytesIO(); Image.new('RGB', (8, 8)).save(image, format='PNG')
+    class Download:
+        cancelled = False
+        path_called = False
+        def path(self):
+            self.path_called = True
+            raise AssertionError('unbounded completion wait')
+        def delete(self): raise AssertionError('unbounded completion wait')
+        def cancel(self): self.cancelled = True
+    download = Download()
+    class Event:
+        value = download
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+    class Node:
+        def is_visible(self): return True
+        def click(self, **kwargs): pass
+        def evaluate_all(self, js):
+            full = candidate(); full['src'] += '&cgen=observed'; return [full]
+    class Page:
+        def get_by_test_id(self, name): return Node()
+        def locator(self, selector): return Node()
+        def wait_for_function(self, *args, **kwargs): pass
+        def expect_download(self, **kwargs): return Event()
+    class Response:
+        ok = True
+        def body(self): return image.getvalue()
+    class Request:
+        fail = True
+        def get(self, src, timeout):
+            assert timeout <= 8000
+            if self.fail: raise TimeoutError()
+            return Response()
+    class Context: request = Request()
+    adapter = DoubaoBrowser(tmp_path); adapter.page = Page(); adapter.context = Context()
+    adapter.pending = {'baseline': set(), 'identity': A}; adapter._signals = lambda: None
+    start = time.monotonic()
+    with pytest.raises(NeedsUser): adapter.poll()
+    assert time.monotonic() - start < 1
+    assert download.cancelled
+    assert not download.path_called
+    assert adapter.pending['identity'] == A
+    adapter.context.request.fail = False; adapter._next_poll = 0
+    assert adapter.poll() == image.getvalue()
+
+@pytest.mark.parametrize('failure', ['filename', 'unloaded', 'progress', 'prompt', 'disabled', 'composer'])
+def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tmp_path, failure):
+    sends = []
+    class Node:
+        def __init__(self, name=''): self.name = name
+        @property
+        def first(self): return self
+        def filter(self, **kwargs): return self
+        def count(self): return 0 if failure == 'composer' else 1
+        def get_by_test_id(self, name): return Node(name)
+        def get_by_text(self, text, **kwargs):
+            assert text == 'a.png'; assert kwargs['exact']; return Node('filename')
+        def locator(self, selector): return Node('composer')
+        def click(self, **kwargs):
+            if self.name == 'chat_input_send_button': sends.append('sent')
+        def wait_for(self, **kwargs):
+            if failure == 'filename': raise TimeoutError('filename absent')
+        def is_visible(self): return True
+        def is_enabled(self): return failure != 'disabled'
+        def fill(self, text): self.text = text
+        def inner_text(self): return 'partial' if failure == 'prompt' else self.text
+        def all(self): return []
+        def evaluate_all(self, script): return []
+    class Chooser:
+        def set_files(self, path): assert Path(path).name == 'a.png'
+    class Event:
+        value = Chooser()
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+    class Page:
+        def locator(self, selector): return Node()
+        def get_by_role(self, role): assert role == 'main'; return Node()
+        def get_by_test_id(self, name): return Node(name)
+        def get_by_text(self, text, **kwargs): return Node()
+        def expect_file_chooser(self, **kwargs): return Event()
+        def wait_for_function(self, script, arg, timeout):
+            assert arg == 'a.png'
+            if failure in {'unloaded', 'progress'}: raise TimeoutError('upload readiness not satisfied')
+    adapter = DoubaoBrowser(tmp_path); adapter.page = Page()
+    with pytest.raises(NeedsUser): adapter.submit(tmp_path / 'a.png', 'exact prompt')
+    assert not sends
+    assert adapter.pending is None

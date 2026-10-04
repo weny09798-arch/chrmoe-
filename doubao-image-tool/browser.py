@@ -161,8 +161,10 @@ class DoubaoBrowser:
             try:
                 with self.page.expect_download(timeout=3000) as download:
                     button.click(timeout=3000)
-                data = Path(download.value.path()).read_bytes()
-                download.value.delete()
+                # Sync path/save_as wait indefinitely for completion. Cancel the
+                # native transfer immediately and use the bounded request below
+                # for the already observed full-size DOM media instead.
+                download.value.cancel()
             except Exception:
                 # Exact URL observed in the live DOM, never assembled from a thumbnail.
                 data = None
