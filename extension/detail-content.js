@@ -308,22 +308,22 @@
 
     const candidates = productCandidates(goodsId, pageGoods);
     const root = productRoot(goodsId);
-    const images = domImages(root, goodsId);
+    const structuredSkus = first(candidates, ['skus', 'skuList']);
+    const hasStructuredSkus = Array.isArray(structuredSkus) && structuredSkus.some(sku => {
+      const mapped = mapSku(sku);
+      return Number(mapped.price) > 0 || Number(mapped.cents) > 0;
+    });
+    const ui = globalThis.__pddDetailUI?.read(root, goodsId, hasStructuredSkus);
+    const images = ui || domImages(root, goodsId);
     const titleElement = [...root.querySelectorAll('h1,[data-goods-name]')]
       .find(element => visible(element) && isCurrent(element, root, goodsId));
     const jsonSkus = first(candidates, ['skus', 'skuList']);
     const rawSkus = Array.isArray(jsonSkus) ? jsonSkus : [];
     const attributes = jsonAttributes(first(candidates, ['goodsProperty', 'properties', 'attributes']));
-    for (const item of domAttributes(root, goodsId)) {
+    for (const item of [...domAttributes(root, goodsId), ...(ui?.attributes || [])]) {
       if (!attributes.some(existing => existing.name === item.name && existing.value === item.value)) attributes.push(item);
     }
     const title = value(first(candidates, ['goodsName', 'goods_name', 'title'])) || words(titleElement);
-    let descriptionText = value(first(candidates, ['descriptionText', 'description', 'goodsDesc', 'goods_desc']));
-    if (!descriptionText) descriptionText = decorationText(first(candidates, ['decoration']));
-    if (!descriptionText) {
-      const share = value(first(candidates, ['shareDesc']));
-      if (share && share !== title) descriptionText = share;
-    }
     const jsonGallery = mediaUrls(first(candidates, ['topGallery', 'gallery', 'galleryImages', 'viewImageData']));
     const jsonDetail = mediaUrls(first(candidates, ['detailGallery', 'detailImages']));
     const decoration = decorationMedia(first(candidates, ['decoration']));
@@ -331,25 +331,31 @@
       title,
       price: yuan(first(candidates, ['minGroupPrice'])) || yuan(first(candidates, ['price'])),
       cents: first(candidates, ['cents']),
-      galleryImages: unique(jsonGallery.length ? jsonGallery : images.galleryImages),
-      descriptionText,
-      detailImages: unique(jsonDetail.length ? jsonDetail : [...decoration.detailImages, ...images.detailImages]),
+      galleryImages: unique([...jsonGallery, ...images.galleryImages].map(url => ui ? globalThis.__pddDetailUI.mediaUrl(url) : url)),
+      descriptionText: attributes.map(item => `${item.name}：${item.value}`).join('\n'),
+      detailImages: unique([...jsonDetail, ...decoration.detailImages, ...images.detailImages].map(url => ui ? globalThis.__pddDetailUI.mediaUrl(url) : url)),
       category: categoryName(first(candidates, ['category', 'catName', 'categoryName'])),
       attributes,
       videoUrl: videoFrom(candidates),
       certificateImages: unique([...mediaUrls(first(candidates, ['certificateImages'])), ...decoration.certificateImages, ...images.certificateImages]),
       sizeChartImages: unique([...mediaUrls(first(candidates, ['sizeChartImages'])), ...decoration.sizeChartImages, ...images.sizeChartImages]),
-      specNames: specNamesFrom(candidates, rawSkus),
-      skus: rawSkus.map(mapSku),
-      detailStatus: candidates.length ? 'done' : 'partial',
-      detailNote: candidates.length ? '' : '仅通过页面可见内容采集，部分详情可能缺失'
+      specNames: hasStructuredSkus ? specNamesFrom(candidates, rawSkus) : ui?.specNames || [],
+      skus: hasStructuredSkus ? rawSkus.map(mapSku) : ui?.skus || [],
+      detailStatus: hasStructuredSkus && (jsonDetail.length || images.detailImages.length) ? 'done' : 'partial',
+      detailNote: hasStructuredSkus ? '' : '正在读取规格弹窗；页面未提供的 SKU 编号、库存等字段留空'
     };
     const ready = Boolean(candidates.length && (
       detail.descriptionText || detail.category || detail.videoUrl ||
       detail.detailImages.length || detail.certificateImages.length || detail.sizeChartImages.length ||
       detail.attributes.length || detail.specNames.length || detail.skus.length
     ));
-    return { url, goodsId, blocked: false, reason: '', ready, source: candidates.length ? 'json' : 'dom', detail };
+    const skuPending = !hasStructuredSkus && (ui?.pending ?? true);
+    const detailPending = !detail.detailImages.length || Boolean(ui?.detailPending && !jsonDetail.length && !decoration.detailImages.length);
+    if (skuPending || detailPending) detail.detailStatus = 'partial';
+    if (!skuPending && !hasStructuredSkus) detail.detailNote = '已读取实际选中的规格和价格；页面未提供的 SKU 编号、库存等字段留空';
+    if (ui?.unconfirmed) detail.detailNote += `；${ui.unconfirmed} 组规格未能确认价格更新，未导出这些规格`;
+    if (detailPending) detail.detailNote += (detail.detailNote ? '；' : '') + '未读取到图文详情图片';
+    return { url, goodsId, blocked: false, reason: '', ready: ready && !skuPending && !detailPending, skuPending, detailPending, source: candidates.length ? 'json' : 'dom', detail };
   }
 
   chrome.runtime.onMessage.addListener((message, sender, respond) => {

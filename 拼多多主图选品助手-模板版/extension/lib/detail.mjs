@@ -9,6 +9,12 @@ export const DETAIL_STATUS = Object.freeze({
 const statuses = new Set(Object.values(DETAIL_STATUS));
 const text = value => value == null ? '' : String(value).trim();
 
+export function concisePddDescription(attributes) {
+  return [...new Set((Array.isArray(attributes) ? attributes : [])
+    .filter(item => text(item?.name) && text(item?.value))
+    .map(item => `${text(item.name)}：${text(item.value)}`))].join('\n').slice(0, 8000);
+}
+
 function httpsUrl(value) {
   const candidate = text(value);
   if (!candidate) return '';
@@ -121,7 +127,7 @@ export function normalizeDetail(raw = {}, fallback = {}) {
     title: rawTitle || text(fallback.title),
     image,
     galleryImages,
-    descriptionText: '',
+    descriptionText: fallback.site === 'pdd' ? concisePddDescription(attributes) : '',
     detailImages: urlList(raw.detailImages),
     category: text(raw.category),
     attributes,

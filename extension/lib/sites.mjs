@@ -6,27 +6,28 @@ const pdd = {
   supported: true,
   contentScript: 'content.js',
   detailScript: 'detail-content.js',
-  searchUrl(keyword) {
-    const url = new URL('https://mobile.pinduoduo.com/search_result.html');
+  detailHelpers: ['detail-pdd-ui.js'],
+  searchUrl(keyword, sourceOrigin = '') {
+    const url = new URL('/search_result.html', this.isOnSite(sourceOrigin) ? sourceOrigin : 'https://mobile.pinduoduo.com');
     url.searchParams.set('search_key', keyword);
     return url.href;
   },
   isSearch(raw, keyword) {
     try {
       const url = new URL(raw);
-      return url.origin === 'https://mobile.pinduoduo.com' && /\/search_result\.html$/.test(url.pathname) && url.searchParams.get('search_key') === keyword;
+      return this.isOnSite(raw) && /\/search_result\.html$/.test(url.pathname) && url.searchParams.get('search_key') === keyword;
     } catch { return false; }
   },
   productId(raw) {
     try {
       const url = new URL(raw);
       const id = url.searchParams.get('goods_id');
-      return url.protocol === 'https:' && url.hostname === 'mobile.pinduoduo.com' && /^\d+$/.test(id || '') ? id : '';
+      return this.isOnSite(raw) && /^\d+$/.test(id || '') ? id : '';
     } catch { return ''; }
   },
-  productUrl(id) { return `https://mobile.pinduoduo.com/goods.html?goods_id=${id}`; },
+  productUrl(id, original = '') { return `${this.isOnSite(original) ? new URL(original).origin : 'https://mobile.pinduoduo.com'}/goods.html?goods_id=${id}`; },
   isOnSite(raw) {
-    try { return new URL(raw).origin === 'https://mobile.pinduoduo.com'; } catch { return false; }
+    try { return ['https://mobile.pinduoduo.com','https://mobile.yangkeduo.com'].includes(new URL(raw).origin); } catch { return false; }
   }
 };
 
@@ -83,6 +84,14 @@ const taobao = {
 };
 
 const sites = { pdd, '1688': ali, taobao };
+
+export function sourceOrigin(input) {
+  const raw = String(input || '').trim();
+  try {
+    const url = new URL(raw.includes('://') ? raw : `https://${raw}`);
+    return url.protocol === 'https:' ? url.origin : '';
+  } catch { return ''; }
+}
 
 export function siteById(id) { return sites[id] || pdd; }
 

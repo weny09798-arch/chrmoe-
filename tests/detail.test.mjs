@@ -120,3 +120,9 @@ test('preserves recognized explicit status and trims detail note to 500 characte
   assert.equal(normalizeDetail({ detailStatus: 'unknown' }).detailStatus, 'done');
   assert.equal(normalizeDetail({ detailNote: `  ${'x'.repeat(600)}  ` }).detailNote, 'x'.repeat(500));
 });
+
+test('PDD concise product attributes survive normalization while Taobao and 1688 descriptions stay blank',()=>{
+  const raw={attributes:[{name:'品牌',value:'添彩'},{name:'材质',value:'聚丙烯(pp)'}],descriptionText:'整页的商品推荐和客服文字'};
+  assert.equal(normalizeDetail(raw,{site:'pdd'}).descriptionText,'品牌：添彩\n材质：聚丙烯(pp)');
+  for(const site of ['1688','taobao'])assert.equal(normalizeDetail(raw,{site}).descriptionText,'');
+});

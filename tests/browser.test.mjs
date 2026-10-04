@@ -103,7 +103,7 @@ test('detail enrichment opens a background tab, reads its snapshot, and preserve
     assert.equal(detail.skus[0].cents, 1999);
     assert.deepEqual(calls.map(call => call[0]), ['create', 'get', 'script', 'script', 'message', 'remove']);
     assert.deepEqual(calls[0][1], { url: 'https://mobile.pinduoduo.com/goods.html?goods_id=123', active: false });
-    assert.deepEqual(calls[2][1], { target: { tabId: 99 }, files: ['detail-content.js'] });
+    assert.deepEqual(calls[2][1], { target: { tabId: 99 }, files: ['detail-pdd-ui.js','detail-content.js'] });
     assert.equal(calls[3][1].world, 'MAIN');
     assert.equal(calls[3][1].target.tabId, 99);
     assert.equal(typeof calls[3][1].func, 'function');
@@ -204,6 +204,21 @@ test('detail enrichment retries an empty snapshot until content appears', async 
     assert.equal(calls.messages.length, 2);
     assert.deepEqual(calls.removed, [99]);
   } finally { globalThis.chrome = prior; }
+});
+
+test('PDD waits for pending SKU and images even when attributes have stopped changing',async()=>{
+  const prior=globalThis.chrome;
+  const base={title:'托盘',attributes:[{name:'品牌',value:'添彩'}],skus:[],detailStatus:'partial'};
+  const responses=Array.from({length:10},()=>({goodsId:'123',ready:false,skuPending:true,detailPending:true,detail:base}));
+  responses.push({goodsId:'123',ready:true,skuPending:false,detailPending:false,detail:{...base,detailImages:['https://img.pddpic.com/detail.jpg'],skus:[{specs:['白色','160'],price:'0.99'}]}});
+  const {chrome,calls}=detailChrome(responses);globalThis.chrome=chrome;
+  const waits=[];
+  try {
+    const detail=await browserPorts({save:async()=>{},update:()=>{},detailPollLimit:15,detailPollWait:async ms=>waits.push(ms)}).enrich({id:'123',site:'pdd'});
+    assert.equal(detail.skus[0].cents,99);assert.equal(calls.messages.length,11);
+    assert.ok(waits.every(ms=>ms>=1000));
+    assert.deepEqual(calls.scripts[0].files,['detail-pdd-ui.js','detail-content.js']);
+  }finally{globalThis.chrome=prior;}
 });
 
 test('detail verification is handled before goods ID validation and preserves its tab', async () => {

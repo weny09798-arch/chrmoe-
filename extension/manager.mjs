@@ -2,7 +2,7 @@ import { addKeyword, enqueueKeyword, normalizeLimit, normalizePriceCents, output
 import { Runner } from './lib/runner.mjs';
 import { browserPorts, closeTaskDetailTab } from './lib/browser.mjs';
 import { taskSheets, workbookBytes } from './lib/xlsx.mjs';
-import { resolveSite } from './lib/sites.mjs';
+import { resolveSite, sourceOrigin } from './lib/sites.mjs';
 import { productImage, removeProduct, prepareRefill } from './lib/products.mjs';
 import { createRefillScheduler } from './lib/refill.mjs';
 
@@ -255,7 +255,7 @@ $('add-form').addEventListener('submit', async event => {
   const settings = collectSettings();
   if (!settings) return;
   if (!addKeyword(keywords, $('keyword-input').value)) { notice('请输入新的商品名称，空白或重复名称不会添加。'); return; }
-  task = enqueueKeyword(task, keywords.at(-1), site.id, settings);
+  task = enqueueKeyword(task, keywords.at(-1), site.id, { ...settings, sourceOrigin: sourceOrigin($('source-url').value) });
   persistCollectSettings();
   void storage.set({ sourceUrl: $('source-url').value.trim() });
   $('keyword-input').value = ''; $('keyword-input').focus(); renderKeywords(); renderTask();

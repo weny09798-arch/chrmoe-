@@ -30,7 +30,7 @@
       try {
         const url = new URL(node.getAttribute('href'), location.href);
         const id = url.searchParams.get('goods_id');
-        if (url.hostname === 'mobile.pinduoduo.com' && /^\d+$/.test(id || '')) return id;
+        if (['mobile.pinduoduo.com','mobile.yangkeduo.com'].includes(url.hostname) && url.protocol === 'https:' && /^\d+$/.test(id || '')) return id;
       } catch { /* An unrelated link is not a product. */ }
     }
     return '';
@@ -88,7 +88,7 @@
       if (!el || !visible(el)) continue;
       const img = [...el.querySelectorAll('img')].find(largeImage);
       seen.add(id);
-      found.push({ el, card: { id, key: id, image: img ? imageUrl(img) : '', title: titleFor(el,img), priceText: text(el), url: `https://mobile.pinduoduo.com/goods.html?goods_id=${id}` } });
+      found.push({ el, card: { id, key: id, image: img ? imageUrl(img) : '', title: titleFor(el,img), priceText: text(el), url: `${new URL(location.href).origin}/goods.html?goods_id=${id}` } });
     }
     for (const img of document.querySelectorAll('img')) {
       if (found.some(item => item.el.contains(img))) continue;
@@ -99,7 +99,7 @@
       const priceText = text(el), key = id || `${image}|${title}|${priceText}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      found.push({ el, card: { id, key, image, title, priceText, url: id ? `https://mobile.pinduoduo.com/goods.html?goods_id=${id}` : '' } });
+      found.push({ el, card: { id, key, image, title, priceText, url: id ? `${new URL(location.href).origin}/goods.html?goods_id=${id}` : '' } });
     }
     return found;
   }

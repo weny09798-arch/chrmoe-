@@ -70,6 +70,7 @@ function createJob(keyword, site = 'pdd', options = {}) {
   const limit = normalizeLimit(options.limit);
   return {
     keyword, site: site === '1688' || site === 'taobao' ? site : 'pdd',
+    sourceOrigin: ['https://mobile.pinduoduo.com','https://mobile.yangkeduo.com'].includes(options.sourceOrigin) ? options.sourceOrigin : '',
     limit: limit || OUTPUT_LIMIT,
     priceMin: Number.isSafeInteger(options.priceMin) ? options.priceMin : null,
     priceMax: Number.isSafeInteger(options.priceMax) ? options.priceMax : null,
@@ -99,7 +100,7 @@ export function retryJob(task, index) {
   const previous = task?.jobs?.[index];
   if (!previous) throw new Error('找不到要重新搜索的商品名称');
   task.jobs[index] = createJob(previous.keyword, previous.site || 'pdd', {
-    limit: previous.limit, priceMin: previous.priceMin, priceMax: previous.priceMax
+    limit: previous.limit, priceMin: previous.priceMin, priceMax: previous.priceMax, sourceOrigin: previous.sourceOrigin
   });
   task.jobs[index].exclusions = previous.exclusions || [];
   task.jobs[index].restartSearch = true;

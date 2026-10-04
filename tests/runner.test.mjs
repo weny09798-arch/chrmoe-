@@ -5,6 +5,14 @@ import {Runner} from '../extension/lib/runner.mjs';
 
 const card=(id,price)=>({id,title:'相机',url:`https://mobile.pinduoduo.com/goods.html?goods_id=${id}`,image:`https://img.pddpic.com/${id}.jpg`,priceText:`¥${price}`,key:id});
 function ports(pages, overrides={}) {let i=0;return {open:async()=>{},read:async()=>pages[Math.min(i++,pages.length-1)],scroll:async()=>{},hash:async()=>({bits:'0000000000000000',color:[100,100,100],spread:50}),resolve:async c=>c,enrich:async()=>({}),save:async()=>{},update:()=>{},wait:async()=>{},...overrides};}
+
+test('PDD search waits longer between scrolls without changing other platform cadence',async()=>{
+  for(const site of ['pdd','taobao','1688']){
+    const task=createTask(['相机']);task.jobs[0].site=site;const waits=[];
+    await new Runner(task,ports([{cards:[card('1',32)],end:false},{cards:[card('2',32)],end:true}],{wait:async ms=>waits.push(ms)})).run();
+    assert.equal(waits[0],site==='pdd'?2500:1300);
+  }
+});
 test('different IDs retain both listings and no-result completion is reported as short',async()=>{
   const task=createTask(['相机']); const r=new Runner(task,ports([{cards:[card('1',32)],end:false},{cards:[card('2',29.88)],end:true}]));
   await r.run();assert.equal(task.status,'done');assert.equal(task.jobs[0].status,'short');assert.deepEqual(selected(task.jobs[0]).map(x=>x.id),['1','2']);

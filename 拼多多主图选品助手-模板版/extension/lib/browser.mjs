@@ -8,7 +8,7 @@ export function productId(raw) {
   try {
     const url = new URL(raw);
     const id = url.searchParams.get('goods_id');
-    return url.protocol === 'https:' && url.hostname === 'mobile.pinduoduo.com' && /^\d+$/.test(id || '') ? id : '';
+    return siteById('pdd').isOnSite(raw) && /^\d+$/.test(id || '') ? id : '';
   } catch { return ''; }
 }
 export function searchUrl(keyword) {
@@ -29,12 +29,14 @@ export async function closeTaskDetailTab(currentTask) {
 
 function readLiveGoods() {
   const raw = globalThis.rawData;
-  const goods = raw?.store?.initDataObj?.goods || raw?.initDataObj?.goods;
+  const id = new URL(location.href).searchParams.get('goods_id');
+  const goods = [raw?.store?.initDataObj?.goods, raw?.initDataObj?.goods, raw?.goods, raw]
+    .find(candidate => candidate && String(candidate.goodsID ?? candidate.goodsId ?? candidate.goods_id) === id);
   if (!goods || typeof goods !== 'object' || Array.isArray(goods)) return null;
-  const skuList = Array.isArray(goods.skus) ? goods.skus : [];
+  const skuList = Array.isArray(goods.skus) ? goods.skus : Array.isArray(goods.skuList) ? goods.skuList : [];
   return {
-    goodsID: goods.goodsID ?? goods.goodsId,
-    goodsName: goods.goodsName,
+    goodsID: goods.goodsID ?? goods.goodsId ?? goods.goods_id,
+    goodsName: goods.goodsName ?? goods.goods_name,
     title: goods.title,
     shareDesc: goods.shareDesc,
     goodsDesc: goods.goodsDesc,
@@ -73,6 +75,7 @@ function readLiveGoods() {
       price: sku?.price,
       cents: sku?.cents,
       thumbUrl: sku?.thumbUrl,
+      thumb_url: sku?.thumb_url,
       image: sku?.image,
       quantity: sku?.quantity,
       stock: sku?.stock,
@@ -219,7 +222,7 @@ async function descriptionImages(detailUrl) {
   } catch { return []; }
 }
 
-export function browserPorts({ save, update, detailPollLimit = 40, detailPollWait = wait, cardPollWait = wait }) {
+export function browserPorts({ save, update, detailPollLimit, detailPollWait = wait, cardPollWait = wait }) {
   let tabId, task, detailTabId, currentJob;
   async function closeDetail({ preserveBlocked = false } = {}) {
     if (preserveBlocked && task?.status === 'blocked' && Number.isInteger(task.detailTabId)) return;
@@ -292,11 +295,13 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
         await wait(300);
       }
       if (!ready) throw new Error('商品详情加载超时');
-      await chrome.scripting.executeScript({ target: { tabId: detailTabId }, files: [site.detailScript] });
+      if (site.id === 'pdd') await detailPollWait(1200);
+      await chrome.scripting.executeScript({ target: { tabId: detailTabId }, files: [...(site.detailHelpers || []), site.detailScript] });
+      const pollLimit = detailPollLimit ?? (site.id === 'pdd' ? 160 : 40);
       let best = null, bestScore = -1, stableKey = '', stableCount = 0;
       const fetchedDocs = new Set();
       let fetchedDetailImages = [];
-      for (let i = 0; i < detailPollLimit; i++) {
+      for (let i = 0; i < pollLimit; i++) {
         let pageGoods = null;
         if (site.id === 'pdd' || site.id === '1688' || site.id === 'taobao') {
           const injected = await chrome.scripting.executeScript({
@@ -342,13 +347,13 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
           // A matching top-level JSON product root is the reader's explicit readiness signal.
           // Responses from older reader versions did not include this field and remain compatible.
           const detailWait = docUrls.length ? 30 : 15;
-          const waitingForDetail = ['1688','taobao'].includes(site.id) && snapshot.detailPending && (snapshot.detailLoading ? i < detailPollLimit - 1 : stableCount < detailWait);
-          const waitingForSku = ['1688','taobao'].includes(site.id) && snapshot.skuPending && stableCount < (site.id === 'taobao' ? 20 : 12);
+          const waitingForDetail = snapshot.detailPending && (site.id === 'pdd' || (snapshot.detailLoading ? i < pollLimit - 1 : stableCount < detailWait));
+          const waitingForSku = snapshot.skuPending && (site.id === 'pdd' || stableCount < (site.id === 'taobao' ? 20 : 12));
           if (!waitingForDetail && !waitingForSku && ((snapshot.ready !== false && hasReadyDetail(detail)) || stableCount >= 8)) return normalizeDetail(best, item);
         }
-        if (i < detailPollLimit - 1) await detailPollWait(300);
+        if (i < pollLimit - 1) await detailPollWait(site.id === 'pdd' ? 1200 : 300);
       }
-      if (best) return normalizeDetail(best, item);
+      if (best) return normalizeDetail({ ...best, detailStatus: 'partial', detailNote: [best.detailNote, '加载等待已达到上限，仅保留已确认的数据'].filter(Boolean).join('；') }, item);
       throw new Error('商品详情加载超时');
     } finally {
       if (!preserveDetailTab) await closeDetail();
@@ -432,14 +437,14 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
       }
       if (sameTab) {
         // Browser history can return to the Pinduoduo home page after a SPA card click.
-        await chrome.tabs.update(tabId, { url: site.searchUrl(job.keyword) });
+        await chrome.tabs.update(tabId, { url: site.searchUrl(job.keyword, job.sourceOrigin) });
         await wait(300); await ready();
         let restored = await read(job);
         for (let i = 0; i < 8 && !restored.cards.length; i++) { await wait(500); restored = await read(job); }
         await message({ type: 'PDD_SCROLL', position: page.position });
         await wait(500);
       }
-      return { ...card, id, url: site.productUrl(id), navigated: sameTab };
+      return { ...card, id, url: site.productUrl(id, card.url || job.sourceOrigin), navigated: sameTab };
     } finally {
       chrome.tabs.onCreated.removeListener(onCreated);
       for (const child of children) await chrome.tabs.remove(child).catch(() => {});
@@ -449,7 +454,7 @@ export function browserPorts({ save, update, detailPollLimit = 40, detailPollWai
     async open(job, currentTask) {
       task = currentTask; currentJob = job; tabId = task.tabId;
       const site = siteForJob(job);
-      const target = site.searchUrl(job.keyword);
+      const target = site.searchUrl(job.keyword, job.sourceOrigin);
       let tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
       if (!tab) {
         tab = await chrome.tabs.create({ url: target, active: false });

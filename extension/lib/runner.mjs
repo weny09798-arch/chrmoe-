@@ -140,7 +140,7 @@ export class Runner {
           await this.checkpoint();
         }
       }
-      await this.ports.wait(1300);
+      await this.ports.wait(job.site === 'pdd' || !job.site ? 2500 : 1300);
     }
     if (this.intent) return;
     const full = selected(job).length >= limit;

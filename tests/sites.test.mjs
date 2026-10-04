@@ -2,6 +2,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveSite, siteForJob } from '../extension/lib/sites.mjs';
 import { enqueueKeyword, retryJob } from '../extension/lib/core.mjs';
+import { sourceOrigin } from '../extension/lib/sites.mjs';
+
+test('scheme-free source input preserves the same official mobile login origin',()=>{
+  assert.equal(sourceOrigin('mobile.yangkeduo.com/goods.html?goods_id=123'),'https://mobile.yangkeduo.com');
+  assert.equal(sourceOrigin('http://mobile.yangkeduo.com'),'');
+});
+
+test('PDD keeps the logged-in official mobile origin through search and product navigation',()=>{
+  const pdd=resolveSite('https://mobile.yangkeduo.com/goods.html?goods_id=123');
+  assert.equal(pdd.productId('https://mobile.yangkeduo.com/goods.html?goods_id=123'),'123');
+  assert.equal(pdd.productUrl('123','https://mobile.yangkeduo.com/goods.html?goods_id=123'),'https://mobile.yangkeduo.com/goods.html?goods_id=123');
+  const search=pdd.searchUrl('托盘','https://mobile.yangkeduo.com');
+  assert.equal(new URL(search).origin,'https://mobile.yangkeduo.com');
+  assert.equal(pdd.isSearch(search,'托盘'),true);
+  assert.equal(pdd.isOnSite('https://mobile.yangkeduo.com.evil.test'),false);
+  const task=enqueueKeyword(null,'托盘','pdd',{sourceOrigin:'https://mobile.yangkeduo.com'});
+  retryJob(task,0);assert.equal(task.jobs[0].sourceOrigin,'https://mobile.yangkeduo.com');
+});
 
 test('a 1688 address stays on 1688 and a Pinduoduo address stays on Pinduoduo', () => {
   const ali = resolveSite('https://www.1688.com/');
