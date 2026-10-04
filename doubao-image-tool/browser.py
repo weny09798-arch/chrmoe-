@@ -95,8 +95,14 @@ class DoubaoBrowser:
             raise NeedsUser('新對話：無法唯一辨識可見的新對話按鈕，請檢查 Chrome。')
         create.click(timeout=5000)
         composer = main.locator('[contenteditable="true"]').filter(visible=True)
-        if composer.count() != 1:
-            raise NeedsUser('輸入：無法唯一辨識輸入框，請先在 Chrome 完成登入。')
+        composer_deadline = time.monotonic() + 5
+        while True:
+            count = composer.count()
+            if count == 1: break
+            if count > 1 or time.monotonic() >= composer_deadline:
+                raise NeedsUser('輸入：無法唯一辨識輸入框，請先在 Chrome 完成登入。')
+            # SPA creation temporarily removes the input during hydration.
+            self.page.wait_for_timeout(250)
         reset_deadline = time.monotonic() + 5
         while composer.inner_text().strip() or main.get_by_test_id('attachment-image-card').filter(visible=True).count():
             if time.monotonic() >= reset_deadline:

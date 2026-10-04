@@ -125,10 +125,13 @@ def test_started_stalled_download_is_cancelled_without_waiting_and_can_retry(tmp
     adapter.context.request.fail = False; adapter._next_poll = 0
     assert adapter.poll() == image.getvalue()
 
-@pytest.mark.parametrize('failure', [None, 'guidance', 'paragraphs', 'dropped-line', 'changed-line', 'changed-space', 'ambiguous', 'stale-composer', 'stale-card', 'filename', 'unloaded', 'progress', 'prompt', 'disabled', 'composer'])
-def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tmp_path, failure):
+@pytest.mark.parametrize('failure', [None, 'hydrating', 'persistent-zero', 'multiple-composers', 'guidance', 'paragraphs', 'dropped-line', 'changed-line', 'changed-space', 'ambiguous', 'stale-composer', 'stale-card', 'filename', 'unloaded', 'progress', 'prompt', 'disabled', 'composer'])
+def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tmp_path, failure, monkeypatch):
     sends = []
     uploaded = False
+    clock = [0.0]
+    waits = []
+    if failure == 'persistent-zero': monkeypatch.setattr('browser.time.monotonic', lambda: clock[0])
     class Guidance(HTMLParser):
         in_main = False
         main_creates = 0
@@ -144,11 +147,16 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
     guidance.feed((Path(__file__).parent / 'fixtures' / 'doubao-guidance.html').read_text(encoding='utf-8'))
     class Node:
         def __init__(self, name=''):
-            self.name = name; self.text = 'old prompt' if failure == 'stale-composer' and name == 'composer' else ''
+            self.name = name; self.count_calls = 0; self.text = 'old prompt' if failure == 'stale-composer' and name == 'composer' else ''
         @property
         def first(self): return self
         def filter(self, **kwargs): return self
         def count(self):
+            if self.name == 'composer':
+                self.count_calls += 1
+                if failure == 'hydrating' and self.count_calls == 1: return 0
+                if failure == 'persistent-zero': return 0
+                if failure == 'multiple-composers': return 2
             if self.name == 'main-create' and failure in {'guidance', 'ambiguous'}: return guidance.main_creates
             if self.name == 'create_conversation_button' and failure in {'guidance', 'ambiguous'}:
                 return 2 if failure == 'ambiguous' else guidance.page_creates
@@ -196,13 +204,18 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
         def get_by_test_id(self, name): return Node(name)
         def get_by_text(self, text, **kwargs): return Node()
         def expect_file_chooser(self, **kwargs): return Event()
-        def wait_for_timeout(self, delay): raise TimeoutError('attachment not ready')
+        def wait_for_timeout(self, delay):
+            waits.append(delay)
+            if failure in {'hydrating', 'persistent-zero'}:
+                clock[0] += delay / 1000
+                return
+            raise TimeoutError('attachment not ready')
         def wait_for_function(self, script, arg, timeout):
             assert arg == 'a.png'
             if failure in {'unloaded', 'progress'}: raise TimeoutError('upload readiness not satisfied')
     adapter = DoubaoBrowser(tmp_path); adapter.page = Page()
     prompt = 'line one  two\n第二行\nthird line'
-    if failure in {None, 'guidance', 'paragraphs'}:
+    if failure in {None, 'hydrating', 'guidance', 'paragraphs'}:
         adapter.submit(tmp_path / 'a.png', prompt)
         assert sends == ['sent']
         assert adapter.pending is not None
@@ -210,6 +223,9 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
         with pytest.raises(NeedsUser): adapter.submit(tmp_path / 'a.png', prompt)
         assert not sends
         assert adapter.pending is None
+    if failure == 'hydrating': assert waits == [250]
+    if failure == 'persistent-zero': assert 5 <= clock[0] <= 5.25
+    if failure == 'multiple-composers': assert not waits
 
 def test_cancel_gate_prevents_actual_adapter_click(tmp_path):
     from contextlib import contextmanager
