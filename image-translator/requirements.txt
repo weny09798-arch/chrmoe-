@@ -1,0 +1,11 @@
+# RapidOCR includes its local ONNX models; OpenCC includes its dictionaries.
+# Windows Microsoft JhengHei (msjh.ttc) is detected on the host, never bundled.
+Flask==3.1.3
+Pillow==12.3.0
+numpy==2.5.3
+opencv-python==5.0.0.93
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.30.0
+opencc-python-reimplemented==0.1.7
+pytest==9.1.1
+PyInstaller==6.22.3
