@@ -83,6 +83,34 @@ class DoubaoBrowser:
             if re.search('登录|登入|验证码|驗證|安全验证|安全驗證|次数|额度|額度|上限|稍后再试|稍後再試|失败|失敗', text):
                 raise NeedsUser(f'{self.stage}：請在 Chrome 處理登入、驗證、額度或錯誤提示後繼續。')
 
+    def _wait_composer(self, main):
+        composer = main.locator('[contenteditable="true"]').filter(visible=True)
+        deadline = time.monotonic() + 5
+        while True:
+            count = composer.count()
+            if count == 1: return composer
+            if count > 1 or time.monotonic() >= deadline:
+                raise NeedsUser('輸入：無法唯一辨識輸入框，請先在 Chrome 完成登入。')
+            self.page.wait_for_timeout(250)
+
+    def _wait_attachment(self, main, path):
+        deadline = time.monotonic() + 15
+        while True:
+            cards = main.get_by_test_id('attachment-image-card').evaluate_all(ATTACHMENT_OBSERVATION)
+            matching = [card for card in cards if card['visible'] and card['label'] == path.name]
+            if len(matching) == 1 and matching[0]['loaded'] and not matching[0]['progress']:
+                return
+            if time.monotonic() >= deadline:
+                raise NeedsUser('上傳：指定圖片尚未載入或仍在上傳，請檢查 Chrome。')
+            self.page.wait_for_timeout(250)
+
+    def _image_mode_ready(self, main):
+        badge = any(node.is_visible() and node.inner_text().strip() == '图像生成'
+                    for node in main.get_by_test_id('skill_input_exit_button').all())
+        model = main.get_by_test_id('chat_input').get_by_role(
+            'button', name=re.compile(r'^模型\s+Seedream 5\.0 Flash$'))
+        return badge and model.count() == 1 and model.is_visible()
+
     def _prepare(self, path, prompt):
         self.stage = '登入與新對話'
         self._signals()
@@ -94,35 +122,36 @@ class DoubaoBrowser:
         if create.count() != 1:
             raise NeedsUser('新對話：無法唯一辨識可見的新對話按鈕，請檢查 Chrome。')
         create.click(timeout=5000)
-        composer = main.locator('[contenteditable="true"]').filter(visible=True)
-        composer_deadline = time.monotonic() + 5
-        while True:
-            count = composer.count()
-            if count == 1: break
-            if count > 1 or time.monotonic() >= composer_deadline:
-                raise NeedsUser('輸入：無法唯一辨識輸入框，請先在 Chrome 完成登入。')
-            # SPA creation temporarily removes the input during hydration.
-            self.page.wait_for_timeout(250)
+        composer = self._wait_composer(main)
         reset_deadline = time.monotonic() + 5
         while composer.inner_text().strip() or main.get_by_test_id('attachment-image-card').filter(visible=True).count():
             if time.monotonic() >= reset_deadline:
                 raise NeedsUser('新對話：輸入框或附件未清空，尚未發送；請檢查 Chrome。')
             self.page.wait_for_timeout(250)
         self.stage = '上傳圖片'
-        main.get_by_test_id('upload_file_button').click()
-        with self.page.expect_file_chooser(timeout=10000) as chooser:
-            self.page.get_by_text('上传文件或图片', exact=True).click()
-        chooser.value.set_files(str(path))
+        upload = main.get_by_test_id('upload_file_button').filter(visible=True)
+        if upload.count() == 1:
+            upload.click(timeout=5000)
+            with self.page.expect_file_chooser(timeout=10000) as chooser:
+                self.page.get_by_text('上传文件或图片', exact=True).click()
+            chooser.value.set_files(str(path))
+        else:
+            file_input = main.get_by_test_id('upload-file-input')
+            if file_input.count() != 1 or file_input.get_attribute('type') != 'file':
+                raise NeedsUser('上傳：找不到唯一圖片檔案輸入，請檢查 Chrome。')
+            file_input.set_input_files(str(path), timeout=10000)
         # Actual cards name the file only via aria-label, never visible text.
-        deadline = time.monotonic() + 15
-        while True:
-            cards = main.get_by_test_id('attachment-image-card').evaluate_all(ATTACHMENT_OBSERVATION)
-            matching = [card for card in cards if card['visible'] and card['label'] == path.name]
-            if len(matching) == 1 and matching[0]['loaded'] and not matching[0]['progress']:
-                break
-            if time.monotonic() >= deadline:
-                raise NeedsUser('上傳：指定圖片尚未載入或仍在上傳，請檢查 Chrome。')
+        self._wait_attachment(main, path)
+        self.stage = '確認圖像生成模式'
+        if not self._image_mode_ready(main):
+            main.get_by_role('button', name='图像生成', exact=True).click(timeout=5000)
+        mode_deadline = time.monotonic() + 5
+        while not self._image_mode_ready(main):
+            if time.monotonic() >= mode_deadline:
+                raise NeedsUser('模式：尚未確認圖像生成與 Seedream 5.0 Flash，請檢查 Chrome。')
             self.page.wait_for_timeout(250)
+        composer = self._wait_composer(main)
+        self._wait_attachment(main, path)
         self._signals()
         self.stage = '檢查提示詞'
         composer.fill(prompt)
@@ -131,6 +160,8 @@ class DoubaoBrowser:
         normalize_breaks = lambda value: re.sub(r'\n+', '\n', value.replace('\r\n', '\n').replace('\r', '\n'))
         if normalize_breaks(composer.inner_text()) != normalize_breaks(prompt):
             raise NeedsUser('輸入：提示詞未完整寫入，請檢查 Chrome。')
+        if not self._image_mode_ready(main):
+            raise NeedsUser('模式：圖像生成模式已變更，尚未發送；請檢查 Chrome。')
         send = main.get_by_test_id('chat_input_send_button')
         if not send.is_visible() or not send.is_enabled():
             raise NeedsUser('上傳：發送按鈕尚未就緒，請檢查圖片上傳。')

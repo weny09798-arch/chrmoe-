@@ -125,10 +125,11 @@ def test_started_stalled_download_is_cancelled_without_waiting_and_can_retry(tmp
     adapter.context.request.fail = False; adapter._next_poll = 0
     assert adapter.poll() == image.getvalue()
 
-@pytest.mark.parametrize('failure', [None, 'hydrating', 'persistent-zero', 'multiple-composers', 'guidance', 'paragraphs', 'dropped-line', 'changed-line', 'changed-space', 'ambiguous', 'stale-composer', 'stale-card', 'filename', 'unloaded', 'progress', 'prompt', 'disabled', 'composer'])
+@pytest.mark.parametrize('failure', [None, 'mode-missing', 'mode-failed', 'mode-disappears', 'attachment-lost', 'model-missing', 'persisted-mode', 'hydrating', 'persistent-zero', 'multiple-composers', 'guidance', 'paragraphs', 'dropped-line', 'changed-line', 'changed-space', 'ambiguous', 'stale-composer', 'stale-card', 'filename', 'unloaded', 'progress', 'prompt', 'disabled', 'composer'])
 def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tmp_path, failure, monkeypatch):
     sends = []
     uploaded = False
+    mode = failure == 'persisted-mode'
     clock = [0.0]
     waits = []
     if failure == 'persistent-zero': monkeypatch.setattr('browser.time.monotonic', lambda: clock[0])
@@ -152,6 +153,8 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
         def first(self): return self
         def filter(self, **kwargs): return self
         def count(self):
+            if self.name == 'upload_file_button' and failure == 'persisted-mode': return 0
+            if self.name == 'model' and failure == 'model-missing': return 0
             if self.name == 'composer':
                 self.count_calls += 1
                 if failure == 'hydrating' and self.count_calls == 1: return 0
@@ -164,18 +167,32 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
             return 0 if failure == 'composer' and self.name == 'composer' else 1
         def get_by_test_id(self, name):
             return Node('main-create' if self.name == 'main' and name == 'create_conversation_button' else name)
+        def get_by_role(self, role, name, **kwargs):
+            return Node('select-mode' if name == '图像生成' else 'model')
+        def get_attribute(self, name): return 'file'
+        def set_input_files(self, path, **kwargs):
+            nonlocal uploaded
+            uploaded = True
         def get_by_text(self, text, **kwargs):
             raise TimeoutError('filename exists only as aria-label')
         def locator(self, selector): return Node('composer')
         def click(self, **kwargs):
+            nonlocal mode
+            if self.name == 'select-mode':
+                if failure == 'mode-missing': raise TimeoutError('missing mode selector')
+                if failure != 'mode-failed': mode = True
             if self.name == 'main-create' and failure == 'guidance': raise TimeoutError('main has no create control')
             if self.name == 'chat_input_send_button': sends.append('sent')
         def wait_for(self, **kwargs):
             if failure == 'filename': raise TimeoutError('filename absent')
         def is_visible(self): return True
         def is_enabled(self): return failure != 'disabled'
-        def fill(self, text): self.text = text
+        def fill(self, text):
+            nonlocal mode
+            self.text = text
+            if failure == 'mode-disappears': mode = False
         def inner_text(self):
+            if self.name == 'badge': return '图像生成'
             if not self.text: return ''
             if failure == 'prompt': return 'partial'
             if failure == 'paragraphs': return self.text.replace('\n', '\r\n\r\n')
@@ -183,10 +200,11 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
             if failure == 'changed-line': return self.text.replace('第二行', 'changed')
             if failure == 'changed-space': return self.text.replace('  ', ' ')
             return self.text
-        def all(self): return []
+        def all(self): return [Node('badge'), Node('badge')] if self.name == 'skill_input_exit_button' and mode else []
         def evaluate_all(self, script):
             if self.name == 'attachment-image-card':
                 if not uploaded: return []
+                if failure == 'attachment-lost' and mode: return []
                 return [{'label': 'wrong.png' if failure == 'filename' else 'a.png',
                          'visible': True, 'loaded': failure != 'unloaded', 'progress': failure == 'progress'}]
             return []
@@ -215,7 +233,7 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
             if failure in {'unloaded', 'progress'}: raise TimeoutError('upload readiness not satisfied')
     adapter = DoubaoBrowser(tmp_path); adapter.page = Page()
     prompt = 'line one  two\n第二行\nthird line'
-    if failure in {None, 'hydrating', 'guidance', 'paragraphs'}:
+    if failure in {None, 'persisted-mode', 'hydrating', 'guidance', 'paragraphs'}:
         adapter.submit(tmp_path / 'a.png', prompt)
         assert sends == ['sent']
         assert adapter.pending is not None
@@ -223,9 +241,14 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
         with pytest.raises(NeedsUser): adapter.submit(tmp_path / 'a.png', prompt)
         assert not sends
         assert adapter.pending is None
-    if failure == 'hydrating': assert waits == [250]
+    if failure == 'hydrating': assert waits == [250, 250]
     if failure == 'persistent-zero': assert 5 <= clock[0] <= 5.25
     if failure == 'multiple-composers': assert not waits
+
+def test_search_material_thumbnail_is_not_generated_output():
+    material = candidate()
+    material['src'] = 'https://example.test/ecom-shop-material/jpeg_m_41676237671e82e229043c75d0c7f837_sx_85007_www800-800~tplv-be4g95zd3a-448x448.jpeg'
+    assert select_result([material], set()) is None
 
 def test_cancel_gate_prevents_actual_adapter_click(tmp_path):
     from contextlib import contextmanager
