@@ -1,10 +1,72 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createTask,selected} from '../extension/lib/core.mjs';
+import {createTask,selected,recoverTask} from '../extension/lib/core.mjs';
 import {Runner} from '../extension/lib/runner.mjs';
 
 const card=(id,price)=>({id,title:'相机',url:`https://mobile.pinduoduo.com/goods.html?goods_id=${id}`,image:`https://img.pddpic.com/${id}.jpg`,priceText:`¥${price}`,key:id});
-function ports(pages, overrides={}) {let i=0;return {open:async()=>{},read:async()=>pages[Math.min(i++,pages.length-1)],scroll:async()=>{},hash:async()=>({bits:'0000000000000000',color:[100,100,100],spread:50}),resolve:async c=>c,enrich:async()=>({}),save:async()=>{},update:()=>{},wait:async()=>{},...overrides};}
+function ports(pages, overrides={}) {let i=0,clock=1000;return {open:async()=>{},read:async()=>pages[Math.min(i++,pages.length-1)],scroll:async()=>{},hash:async()=>({bits:'0000000000000000',color:[100,100,100],spread:50}),resolve:async c=>c,enrich:async()=>({}),save:async()=>{},update:()=>{},...overrides,now:overrides.now||(()=>clock),wait:async ms=>{await overrides.wait?.(ms);clock+=ms;}};}
+
+test('PDD skips a missing link without clicking and continues scrolling to an identifiable card',async()=>{
+  const task=createTask(['相机']);task.jobs[0].limit=1;let resolves=0,scrolls=0;
+  const missing={...card('1',10),id:'',url:'',key:'missing'};
+  await new Runner(task,ports([{cards:[missing],end:false},{cards:[card('2',20)],end:false}],{
+    resolve:async c=>{resolves++;return {...c,id:'1',url:card('1',10).url};},scroll:async()=>scrolls++
+  })).run();
+  assert.equal(resolves,0);assert.equal(scrolls,1);assert.deepEqual(selected(task.jobs[0]).map(x=>x.id),['2']);
+  assert.equal(task.jobs[0].skipReasons['链接未识别'],1);assert.equal(task.jobs[0].scanned,2);
+});
+
+test('PDD waits three seconds after successful and ordinary failed details before the next product and keyword',async()=>{
+  const task=createTask(['相机','书包']);let clock=1000;const actions=[];
+  await new Runner(task,ports([{cards:[card('1',20),card('2',21)],end:true},{cards:[{...card('3',30),title:'书包'}],end:true}],{
+    now:()=>clock,wait:async ms=>clock+=ms,
+    open:async job=>actions.push(['search',job.keyword,clock]),
+    enrich:async item=>{actions.push(['detail',item.id,clock]);if(item.id==='2')throw new Error('普通失败');return {attributes:[{name:'材质',value:'塑料'}]};}
+  })).run();
+  assert.deepEqual(actions,[['search','相机',1000],['detail','1',1000],['detail','2',4000],['search','书包',7000],['detail','3',7000]]);
+  assert.equal(task.pddNextActionAt,10000);
+});
+
+test('PDD cooldown is interruptible, persists remaining time, and resumes without reopening search',async()=>{
+  for(const action of ['pause','stop']){
+    const task=createTask(['相机']);let clock=1000,runner;const ids=[];
+    runner=new Runner(task,ports([{cards:[card('1',20),card('2',21)],end:true}],{
+      now:()=>clock,wait:async ms=>{clock+=ms;runner[action]();},
+      enrich:async item=>{ids.push(item.id);return {attributes:[{name:'材质',value:'塑料'}]};}
+    }));
+    await runner.run();assert.deepEqual(ids,['1']);assert.equal(task.status,action==='pause'?'paused':'stopped');
+    assert.equal(task.pddNextActionAt,4000);assert.equal(clock,1250);
+    if(action==='pause'){
+      const restored=recoverTask(JSON.parse(JSON.stringify(task)));let searches=0;
+      await new Runner(restored,ports([],{now:()=>clock,wait:async ms=>clock+=ms,open:async()=>searches++,enrich:async item=>{ids.push(item.id);assert.equal(clock,4000);return {attributes:[{name:'材质',value:'塑料'}]};}})).run();
+      assert.equal(searches,0);assert.deepEqual(ids,['1','2']);
+    }
+  }
+});
+
+test('cooldown does not delay other platforms and a verification stops all further detail and search actions',async()=>{
+  for(const site of ['1688','taobao','pdd']){
+    const task=createTask(['相机','书包']);task.jobs.forEach(j=>j.site=site);let clock=1000;const events=[];
+    await new Runner(task,ports([{cards:[card('1',20),card('2',21)],end:true}],{
+      now:()=>clock,wait:async ms=>clock+=ms,open:async job=>events.push(job.keyword),
+      enrich:async item=>{events.push(item.id);if(item.id==='2')throw Object.assign(new Error('访问过于频繁'),{blocked:true});return {attributes:[{name:'材质',value:'塑料'}]};}
+    })).run();
+    assert.deepEqual(events,['相机','1','2']);assert.equal(task.status,'blocked');assert.equal(clock,site==='pdd'?4000:1000);
+  }
+});
+
+test('a blocked first PDD detail persists its cooldown and immediate manual resume honors it',async()=>{
+  const task=createTask(['相机']);let clock=1000,attempts=0;
+  await new Runner(task,ports([{cards:[card('1',20)],end:true}],{
+    now:()=>clock,enrich:async()=>{attempts++;throw Object.assign(new Error('请完成验证'),{blocked:true});}
+  })).run();
+  assert.equal(task.status,'blocked');assert.equal(attempts,1);assert.equal(task.pddNextActionAt,4000);
+  const restored=recoverTask(JSON.parse(JSON.stringify(task)));let opens=0;
+  await new Runner(restored,ports([],{now:()=>clock,wait:async ms=>clock+=ms,open:async()=>opens++,enrich:async()=>{
+    attempts++;assert.equal(clock,4000);return {attributes:[{name:'材质',value:'塑料'}]};
+  }})).run();
+  assert.equal(opens,0);assert.equal(attempts,2);assert.equal(restored.status,'done');
+});
 
 test('PDD search waits longer between scrolls without changing other platform cadence',async()=>{
   for(const site of ['pdd','taobao','1688']){

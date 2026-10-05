@@ -2,6 +2,7 @@ import { normalizeDetail } from './detail.mjs';
 import {parsePrice,validProductTitle} from './core.mjs';
 import { siteById, siteForJob } from './sites.mjs';
 import { readLiveTaobao } from './taobao-page.mjs';
+import { readLivePddSearch } from './pdd-search-page.mjs';
 
 export const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 export function productId(raw) {
@@ -393,6 +394,15 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
     }
     if (page.blocked) return page;
     if (!site.isSearch(page.url, job.keyword)) throw blocked(`采集页已离开“${job.keyword}”的搜索结果，请返回后继续`);
+    if (site.id === 'pdd' && page.cards?.some(card => !card.id)) {
+      const injected = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: readLivePddSearch }).catch(() => null);
+      const searchData = injected?.[0]?.result;
+      if (searchData) {
+        page = await message({ type: 'PDD_SNAPSHOT', searchData });
+        if (page.blocked) return page;
+        if (!site.isSearch(page.url, job.keyword)) throw blocked(`采集页已离开“${job.keyword}”的搜索结果，请返回后继续`);
+      }
+    }
     return page;
   }
   async function prepareCard(card,job,cancelled=()=>false) {
@@ -421,6 +431,8 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
   async function resolve(card, page, job) {
     currentJob = job;
     const site = siteForJob(job);
+    // PDD never leaves the search list to discover a missing product ID.
+    if (site.id === 'pdd') return { ...card, id: card.id || '', url: card.url || '', navigated: false };
     // Some result cards have only a click handler. Read the resulting detail URL.
     const children = new Set();
     const onCreated = tab => { if (tab.openerTabId === tabId) children.add(tab.id); };

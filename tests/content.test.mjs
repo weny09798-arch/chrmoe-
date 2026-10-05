@@ -4,14 +4,31 @@ import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { parseHTML } from 'linkedom';
 
-async function snapshot(html, keyword='相机') {
+async function snapshot(html, keyword='相机', searchData) {
   const {window,document}=parseHTML(`<html><body>${html}</body></html>`);
   window.Element.prototype.getBoundingClientRect=()=>({width:250,height:350,top:10,bottom:360});
   let handler;
   const context=vm.createContext({window, document, URL, location:{href:`https://mobile.pinduoduo.com/search_result.html?search_key=${encodeURIComponent(keyword)}`,pathname:'/search_result.html'},getComputedStyle:()=>({display:'block',visibility:'visible',overflowY:'visible'}),chrome:{runtime:{onMessage:{addListener:fn=>handler=fn}}}, console, setTimeout, clearTimeout});
   vm.runInContext(await readFile(new URL('../extension/content.js',import.meta.url),'utf8'),context);
-  return new Promise(resolve=>handler({type:'PDD_SNAPSHOT'}, {},resolve));
+  return new Promise(resolve=>handler({type:'PDD_SNAPSHOT',searchData}, {},resolve));
 }
+
+test('loaded search data supplies a unique matching ID without overwriting card price or source link',async()=>{
+  const html='<div role="button"><img src="https://img.pddpic.com/a.jpg?imageMogr2/thumbnail/200x"><div>数码相机</div><div>¥32</div></div>';
+  const searchData={url:'https://mobile.pinduoduo.com/search_result.html?search_key=相机',goods:[{id:'123',title:'数码相机',images:['https://img.pddpic.com/a.jpg']}]};
+  const data=await snapshot(html,'相机',searchData);
+  assert.equal(data.cards[0].id,'123');assert.equal(data.cards[0].url,'https://mobile.pinduoduo.com/goods.html?goods_id=123');assert.match(data.cards[0].priceText,/¥32/);
+});
+
+test('loaded search data rejects mismatched titles, images, ambiguous IDs and another keyword',async()=>{
+  const html='<div role="button"><img src="https://img.pddpic.com/a.jpg"><div>数码相机</div><div>¥32</div></div>';
+  for(const goods of [
+    [{id:'1',title:'另一相机',images:['https://img.pddpic.com/a.jpg']}],
+    [{id:'1',title:'数码相机',images:['https://img.pddpic.com/b.jpg']}],
+    [{id:'1',title:'数码相机',images:['https://img.pddpic.com/a.jpg']},{id:'2',title:'数码相机',images:['https://img.pddpic.com/a.jpg']}]
+  ])assert.equal((await snapshot(html,'相机',{url:'https://mobile.pinduoduo.com/search_result.html?search_key=相机',goods})).cards[0].id,'');
+  assert.equal((await snapshot(html,'相机',{url:'https://mobile.pinduoduo.com/search_result.html?search_key=书包',goods:[{id:'1',title:'数码相机',images:['https://img.pddpic.com/a.jpg']}]})).cards[0].id,'');
+});
 test('reads two similar-image cards independently and joins split price digits',async()=>{
   const data=await snapshot(`<a href="goods.html?goods_id=123"><img src="https://img.pddpic.com/a.jpg"><h3>高清数码相机</h3><div>立减20元</div><div>券后<span>¥</span><span>29</span><small>.88</small></div><span>已拼7万</span></a><a href="/goods.html?goods_id=456"><img src="https://img.pddpic.com/b.jpg"><h3>同款相机</h3><div>券后¥32</div></a>`);
   assert.equal(data.cards.length,2); assert.equal(data.cards[0].id,'123'); assert.match(data.cards[0].priceText,/¥29\.88/);assert.equal(data.cards[1].id,'456');

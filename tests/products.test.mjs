@@ -35,6 +35,7 @@ test('deleting a product excludes its ID but permits different IDs with similar 
 });
 test('refill preserves history, details, filters and target while renewing the scan budget', () => {
   const { job } = fixture(); job.priceMin = 500; job.priceMax = 5000;
+  job.site='taobao';
   job.merged=8;job.excluded=2;job.skipReasons={'价格未识别':3};
   products.removeProduct(job, '2'); products.prepareRefill(job);
   assert.equal(job.scanned, 0); assert.deepEqual(job.seen, ['1', '2', '3']);
@@ -45,6 +46,13 @@ test('refill preserves history, details, filters and target while renewing the s
   addCandidate(job, { ...item('10', 250), cents: 100 });
   assert.equal(job.groups[0].best.id, '3');
   assert.equal(job.groups[0].best.descriptionText, '保留详情');
+});
+
+test('PDD refill preserves its scan budget and requests no search reload, while manual retry can reload',()=>{
+  const {task,job}=fixture();job.scrolls=12;
+  products.removeProduct(job,'2',task);products.prepareRefill(job);
+  assert.equal(job.scanned,200);assert.equal(job.scrolls,12);assert.deepEqual(job.seen,['1','2','3']);assert.equal(job.restartSearch,false);
+  retryJob(task,0);assert.equal(task.jobs[0].restartSearch,true);assert.equal(task.jobs[0].scanned,0);
 });
 
 test('a deleted ID remains excluded when numeric data is rediscovered as a string',()=>{
@@ -91,7 +99,7 @@ test('manual retry and recovery retain exclusions and a persisted refill request
   const { task, job } = fixture(); products.removeProduct(job, '2');
   const recovered = recoverTask(JSON.parse(JSON.stringify(task)));
   assert.equal(recovered.status, 'paused'); assert.equal(recovered.jobs[0].phase, 'search');
-  assert.equal(recovered.jobs[0].scanned, 0);
+  assert.equal(recovered.jobs[0].scanned, 200);
   retryJob(recovered, 0);
   assert.equal(addCandidate(recovered.jobs[0], item('2')), false);
   assert.equal(addCandidate(recovered.jobs[0], item('4')), true);
@@ -104,7 +112,7 @@ test('legacy per-keyword deletions are also excluded in a newly added keyword af
   assert.equal(addCandidate(restored.jobs[1],item('123'),restored),false);
 });
 test('refill reaches the saved target with retained details and permits cheap different IDs', async () => {
-  const { task, job } = fixture(); products.removeProduct(job, '2'); products.prepareRefill(job);
+  const { task, job } = fixture(); job.scanned=3; products.removeProduct(job, '2'); products.prepareRefill(job);
   let reads = 0; const details = [];
   await new Runner(task, {
     open: async () => {}, close: async () => {}, save: async () => {}, update() {}, scroll: async () => {}, wait: async () => {},
@@ -113,6 +121,13 @@ test('refill reaches the saved target with retained details and permits cheap di
     enrich: async value => { details.push(value.id); return { descriptionText: '新详情' }; }
   }).run();
   assert.deepEqual(selected(job).map(x => x.id), ['3', '4']);
-  assert.equal(reads, 1); assert.equal(job.scanned, 1); assert.equal(job.status, 'done');
+  assert.equal(reads, 1); assert.equal(job.scanned, 4); assert.equal(job.status, 'done');
   assert.deepEqual(details, ['4']); assert.equal(job.groups[0].best.descriptionText, '保留详情');
+});
+
+test('a PDD refill at the scan cap reports a shortage without rereading or refreshing',async()=>{
+  const {task,job}=fixture();products.removeProduct(job,'2');products.prepareRefill(job);let reads=0,details=0;
+  await new Runner(task,{save:async()=>{},update(){},open:async()=>{},close:async()=>{},read:async()=>{reads++;throw new Error('must not read');},enrich:async()=>details++}).run();
+  assert.equal(reads,0);assert.equal(details,0);assert.equal(job.status,'short');assert.deepEqual(selected(job).map(x=>x.id),['3']);
+  assert.match(job.note,/200条上限/);
 });

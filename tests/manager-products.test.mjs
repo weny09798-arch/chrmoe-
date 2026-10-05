@@ -56,7 +56,8 @@ test('multiple deletes save exclusions immediately and trigger one refill while 
     assert.equal(f.tabCreates, 0); assert.equal(f.timerCount, 1);
     f.fire(); for (let i=0;i<6;i++) await tick();
     assert.equal(f.tabCreates, 1); assert.equal(f.saved.task.jobs[0].phase, 'search');
-    assert.equal(f.saved.task.jobs[0].scanned, 0); assert.deepEqual(f.saved.task.jobs[0].seen, ['1','2']);
+    assert.equal(f.saved.task.jobs[0].scanned, 200); assert.deepEqual(f.saved.task.jobs[0].seen, ['1','2']);
+    assert.equal(f.saved.task.jobs[0].restartSearch,false);
     assert.equal(f.saved.task.jobs[0].limit, 2); assert.equal(f.saved.task.jobs[0].priceMin, 500);
     assert.equal(f.saved.task.jobs[0].exclusions.length, 2);
   } finally { f.cleanup(); }

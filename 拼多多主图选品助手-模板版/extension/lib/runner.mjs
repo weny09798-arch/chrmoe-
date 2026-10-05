@@ -8,6 +8,18 @@ export class Runner {
   pause() { if (this.intent !== 'stopped') this.intent = 'paused'; this.refillPause = false; }
   pauseForRefill() { if (!this.intent) { this.intent = 'paused'; this.refillPause = true; } }
   stop() { this.intent = 'stopped'; this.refillPause = false; }
+  now() { return this.ports.now?.() ?? Date.now(); }
+  async waitForPdd(job) {
+    if ((job.site || 'pdd') !== 'pdd' || !Number.isSafeInteger(this.task.pddNextActionAt)) return !this.intent;
+    this.cooling = this.task.pddNextActionAt > this.now();
+    if (this.cooling) this.ports.update(this.task);
+    try {
+      while (!this.intent && this.task.pddNextActionAt > this.now()) {
+        await this.ports.wait(Math.min(250, this.task.pddNextActionAt - this.now()));
+      }
+      return !this.intent;
+    } finally { this.cooling = false; this.ports.update(this.task); }
+  }
   async checkpoint() {
     for (const job of this.task.jobs) job.detailDone = countDetails(job);
     await this.ports.save(this.task); this.ports.update(this.task);
@@ -23,7 +35,10 @@ export class Runner {
         try {
           job.status = 'running'; if (job.phase !== 'detail') job.note = ''; await this.checkpoint();
           if (job.phase === 'detail') await this.enrich(job);
-          else { await this.ports.open(job, this.task); await this.collect(job); }
+          else {
+            if (!await this.waitForPdd(job)) break;
+            await this.ports.open(job, this.task); await this.collect(job);
+          }
         } catch (error) {
           if (this.intent && !this.refillPause) break;
           if (error.blocked) {
@@ -92,6 +107,7 @@ export class Runner {
           skipReason = '价格不在区间';
           if (!priceAllowed(cents, job)) throw new Error('展示价格不在设定区间内');
           skipReason = '链接未识别';
+          if ((job.site || 'pdd') === 'pdd' && (!raw.id || !raw.url)) throw new Error('页面已加载的数据中未识别到真实商品链接，已跳过');
           const resolved = raw.id ? raw : await this.ports.resolve(raw, page, job);
           if (this.intent) return;
           navigated ||= Boolean(resolved.navigated);
@@ -156,6 +172,7 @@ export class Runner {
     for (const item of selected(job)) {
       if (this.intent) return;
       if (['done', 'partial', 'error'].includes(item.detailStatus)) continue;
+      if (!await this.waitForPdd(job)) return;
       item.detailStatus = 'running'; item.detailNote = '';
       await this.checkpoint();
       try {
@@ -170,12 +187,14 @@ export class Runner {
       } catch (error) {
         if (error.blocked) {
           item.detailStatus = 'pending'; item.detailNote = String(error.message || '详情页等待处理').slice(0, 500);
+          if ((job.site || 'pdd') === 'pdd') this.task.pddNextActionAt = this.now() + 3000;
           await this.checkpoint();
           throw error;
         }
         item.detailStatus = 'error';
         item.detailNote = String(error.message || '详情采集失败').slice(0, 500);
       }
+      if ((job.site || 'pdd') === 'pdd') this.task.pddNextActionAt = this.now() + 3000;
       await this.checkpoint();
     }
     if (this.intent) return;

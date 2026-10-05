@@ -41,12 +41,16 @@ export function removeProduct(job, id, task) {
 }
 export function prepareRefill(job) {
   if (!job.refillRequested) return false;
-  job.scanned = 0; job.skipped = 0; job.lastSkip = ''; job.searchStatus = '';
-  job.merged = 0; job.excluded = 0; job.skipReasons = {};
-  job.statsStart = 0; job.statsStartSkipped = 0;
+  const preserveSearch = source(job) === 'pdd';
+  if (!preserveSearch) {
+    job.scanned = 0; job.skipped = 0; job.lastSkip = '';
+    job.merged = 0; job.excluded = 0; job.skipReasons = {};
+    job.statsStart = 0; job.statsStartSkipped = 0;
+  }
+  job.searchStatus = '';
   delete job.paginationFromKeys;
   job.phase = 'search'; job.status = 'pending'; job.refillRequested = false;
-  job.restartSearch = true;
+  job.restartSearch = !preserveSearch;
   for (const group of job.groups) group.retained = true;
   job.note = '已删除不需要的商品，正在补齐数量';
   return true;

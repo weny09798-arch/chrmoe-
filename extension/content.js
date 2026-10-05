@@ -123,8 +123,36 @@
     }
     return document.scrollingElement || document.documentElement;
   }
-  function snapshot() {
-    const cards = cardsWithElements().map(x => x.card);
+  function loadedId(card, data) {
+    if (card.id || !card.title || !card.image || !Array.isArray(data?.goods)) return card.id;
+    try {
+      const current = new URL(location.href), source = new URL(data.url);
+      if (source.origin !== current.origin || source.pathname !== '/search_result.html'
+        || current.pathname !== source.pathname || source.searchParams.get('search_key') !== current.searchParams.get('search_key')) return '';
+    } catch { return ''; }
+    const imageKey = raw => {
+      try {
+        const url = new URL(raw, location.href);
+        if (url.protocol !== 'https:' || !/(^|\.)pddpic\.com$/.test(url.hostname)) return '';
+        if (/^img(?:-\d+)?\.pddpic\.com$/.test(url.hostname)) url.hostname = 'img.pddpic.com';
+        if (/imageMogr2|imageView2/.test(url.search)) url.search = '';
+        return url.href;
+      } catch { return ''; }
+    };
+    const titleKey = raw => cleanTitle(raw).normalize('NFKC').replace(/\s+/g, '');
+    const image = imageKey(card.image); if (!image) return '';
+    const matches = data.goods.filter(item => typeof item.id === 'string' && /^\d+$/.test(item.id)
+      && typeof item.title === 'string' && titleKey(item.title) === titleKey(card.title)
+      && Array.isArray(item.images) && item.images.some(raw => imageKey(raw) === image));
+    const ids = [...new Set(matches.map(item => item.id))];
+    return ids.length === 1 ? ids[0] : '';
+  }
+  function snapshot(searchData) {
+    const seen = new Set();
+    const cards = cardsWithElements().map(({ card }) => {
+      const id = loadedId(card, searchData);
+      return id && !card.id ? { ...card, id, key: id, url: `${new URL(location.href).origin}/goods.html?goods_id=${id}` } : card;
+    }).filter(card => { if (!card.id) return true; if (seen.has(card.id)) return false; seen.add(card.id); return true; });
     const phrases = [...document.querySelectorAll('div,p,span,h1,h2')].filter(el => !el.children.length && visible(el)).map(text);
     const verify = phrases.find(s => s.length < 150 && /请完成.*验证|拖动滑块|安全验证|访问过于频繁|操作频繁|请验证身份|商品已售罄|推荐以下相似商品|当前访问人数较多/.test(s));
     const login = /\/(?:login|login_phone|login_password)\b/.test(location.pathname) || (!cards.length && phrases.some(s => /手机号登录|请先登录|登录后查看/.test(s)));
@@ -137,21 +165,14 @@
   }
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     try {
-      if (message.type === 'PDD_SNAPSHOT') respond(snapshot());
+      if (message.type === 'PDD_SNAPSHOT') respond(snapshot(message.searchData));
       else if (message.type === 'PDD_SCROLL') {
         const root = scrollRoot();
         if (typeof message.position === 'number') root.scrollTop = Math.max(0, message.position);
         else root.scrollTop += Math.max(350, root.clientHeight * .8);
         respond({ ok: true });
       } else if (message.type === 'PDD_OPEN_CARD') {
-        const result = cardsWithElements().find(x => x.card.key === message.key);
-        if (!result) respond({ error: '商品卡片已变化，请重试' });
-        else {
-          // Only a product card previously returned by the reader can be clicked.
-          const target = result.el.querySelector('img');
-          respond({ ok: true, position: scrollRoot().scrollTop });
-          setTimeout(() => target.click(), 50);
-        }
+        respond({ error: '拼多多搜索页不再通过点击商品获取链接' });
       }
     } catch (error) { respond({ error: error.message }); }
   });

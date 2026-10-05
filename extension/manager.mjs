@@ -101,7 +101,7 @@ function renderTask() {
   $('progress-percent').textContent = `${percent}%`; $('progress').value = percent;
   const activeItems = active ? selected(active) : [];
   const activeDetails = detailCounts(activeItems);
-  $('current-detail').textContent = active
+  $('current-detail').textContent = runner?.cooling ? '商品已处理，等待下一件（间隔 3 秒）' : active
     ? active.phase === 'detail'
       ? `正在补全详情 ${active.detailDone || 0} / ${activeItems.length} · 完整 ${activeDetails.complete} · 部分 ${activeDetails.partial} · 失败 ${activeDetails.errors}`
       : `已扫描 ${active.scanned} / 200 条 · 保留 ${activeItems.length} / ${outputLimit(active)} 条${active.note ? ` · ${active.note}` : ''}${scanSummary(active) ? ` · ${scanSummary(active)}` : ''}`

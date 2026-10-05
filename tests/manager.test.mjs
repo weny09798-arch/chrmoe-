@@ -131,6 +131,27 @@ async function managerFixture(configureTask = () => {}, create = async () => { t
   return { document, saved, click, decidePermission, removedTabs, activatedTabs, get tabCreates() { return tabCreates; }, get permissionRequests() { return permissionRequests; } };
 }
 
+test('manager displays the detail cooldown and clear interrupts it without starting another product',async()=>{
+  const oldWait=Runner.prototype.waitForPdd;
+  let release, clock=1000;
+  const gate=new Promise(resolve=>release=resolve);
+  Runner.prototype.waitForPdd=async function(job){
+    this.ports.now=()=>clock;
+    this.ports.wait=async ms=>{await gate;clock+=ms;};
+    return oldWait.call(this,job);
+  };
+  try {
+    const f=await managerFixture(task=>{
+      task.pddNextActionAt=4000;
+      const job=task.jobs[0];job.phase='detail';job.groups=[{ids:['123'],best:{id:'123',title:'相机',cents:1000,detailStatus:'pending'}}];
+    });
+    f.click('resume');for(let i=0;i<4;i++)await tick();
+    assert.match(f.document.getElementById('current-detail').textContent,/商品已处理，等待下一件/);
+    f.click('clear-all');release();for(let i=0;i<8;i++)await tick();
+    assert.equal(f.saved.task,null);assert.deepEqual(f.saved.keywords,[]);assert.equal(f.tabCreates,0);
+  } finally {release();Runner.prototype.waitForPdd=oldWait;}
+});
+
 test('collection explanation shows ID dedup and rejected fields without claiming historical image merges',async()=>{
   const f=await managerFixture(task=>{
     const job=task.jobs[0];job.scanned=50;job.merged=8;job.skipped=3;

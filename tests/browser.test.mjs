@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { browserPorts, descriptionDocumentUrl, imageUrlsInDescription, productId, searchUrl } from '../extension/lib/browser.mjs';
 import { createTask } from '../extension/lib/core.mjs';
 
-test('refill reloads the same search page before replaying historical results', async () => {
+test('an explicit manual restart reloads the same search page', async () => {
   const previous = globalThis.chrome; const task = createTask(['相机']); const job = task.jobs[0];
   task.tabId = 42; job.restartSearch = true; const navigations = [];
   globalThis.chrome = { tabs: {
@@ -54,17 +54,17 @@ test('manual navigation to a different search pauses rather than saving unrelate
     await assert.rejects(()=>ports.read(task.jobs[0]),error=>error.blocked&&/离开/.test(error.message));
   } finally {globalThis.chrome=prior;}
 });
-test('returning from a same-tab product detail restores the requested search explicitly',async()=>{
+test('PDD missing-link resolution cannot click, navigate, refresh or change search position',async()=>{
   const prior=globalThis.chrome; const task=createTask(['苹果手机壳']);task.tabId=42;
-  let pageUrl=searchUrl('苹果手机壳'), updates=0;
+  let pageUrl=searchUrl('苹果手机壳'), updates=0, clicks=0, scrolls=0;
   globalThis.chrome={
     tabs:{
       get:async()=>({id:42,status:'complete',url:pageUrl}),
       update:async(_id,change)=>{updates++;pageUrl=change.url;return {id:42,url:pageUrl};},
       goBack:async()=>{pageUrl='https://mobile.pinduoduo.com/index.html';},
       sendMessage:async(_id,message)=>{
-        if(message.type==='PDD_OPEN_CARD'){pageUrl='https://mobile.pinduoduo.com/goods.html?goods_id=123&page_from=23&_oak_list_price_sign=price-proof&uin=private-user';return {ok:true};}
-        if(message.type==='PDD_SCROLL') return {ok:true};
+        if(message.type==='PDD_OPEN_CARD'){clicks++;pageUrl='https://mobile.pinduoduo.com/goods.html?goods_id=123&page_from=23&_oak_list_price_sign=price-proof&uin=private-user';return {ok:true};}
+        if(message.type==='PDD_SCROLL'){scrolls++;return {ok:true};}
         return {url:pageUrl,cards:[{key:'card-1'}],blocked:false,position:0};
       },
       onCreated:{addListener(){},removeListener(){}},remove:async()=>{}
@@ -74,10 +74,8 @@ test('returning from a same-tab product detail restores the requested search exp
   try {
     const ports=browserPorts({save:async()=>{},update:()=>{}});await ports.open(task.jobs[0],task);
     const result=await ports.resolve({key:'card-1'}, {position:0}, task.jobs[0]);
-    assert.equal(result.id,'123');assert.equal(result.navigated,true);
-    assert.equal(result.detailSourceUrl,'https://mobile.pinduoduo.com/goods.html?goods_id=123&page_from=23&_oak_list_price_sign=price-proof');
-    assert.equal(result.url,'https://mobile.pinduoduo.com/goods.html?goods_id=123');
-    assert.equal(pageUrl,searchUrl('苹果手机壳'));assert.equal(updates,1);
+    assert.equal(result.id,'');assert.equal(result.navigated,false);
+    assert.equal(pageUrl,searchUrl('苹果手机壳'));assert.equal(updates,0);assert.equal(clicks,0);assert.equal(scrolls,0);
   } finally {globalThis.chrome=prior;}
 });
 
