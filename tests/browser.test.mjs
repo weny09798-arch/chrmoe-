@@ -243,6 +243,17 @@ test('detail navigation uses search context while exported product URL stays cle
   }finally{globalThis.chrome=prior;}
 });
 
+test('PDD wait budget covers more than two dimensions while selections are still settling',async()=>{
+  const prior=globalThis.chrome;
+  const responses=Array.from({length:320},()=>({goodsId:'123',ready:false,skuPending:true,skuTotal:5,skuDimensions:3,detailPending:false,detail:{title:'洗面奶',detailImages:['https://img.pddpic.com/d.jpg'],skus:[]}}));
+  responses.push({goodsId:'123',ready:true,skuPending:false,detailPending:false,detail:{title:'洗面奶',detailImages:['https://img.pddpic.com/d.jpg'],specNames:['净含量','包装规格','款式'],skus:[{specs:['120g','1瓶','单支'],price:'17.78'}]}});
+  const {chrome,calls}=detailChrome(responses);globalThis.chrome=chrome;
+  try{
+    const detail=await browserPorts({save:async()=>{},update:()=>{},detailPollWait:async()=>{}}).enrich({id:'123',site:'pdd'});
+    assert.equal(calls.messages.length,321);assert.equal(detail.skus[0].cents,1778);
+  }finally{globalThis.chrome=prior;}
+});
+
 test('detail verification is handled before goods ID validation and preserves its tab', async () => {
   const prior = globalThis.chrome;
   const { chrome, calls } = detailChrome([{ goodsId: '', blocked: true, reason: '请完成安全验证', detail: null }]);

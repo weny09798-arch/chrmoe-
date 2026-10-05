@@ -33,7 +33,10 @@
       let role = '';
       const label = img.getAttribute('aria-label') || img.getAttribute('alt') || '';
       if (label === '商品大图') role = 'galleryImages';
-      if (label === '查看图片' && detailStart >= 0 && nodes.indexOf(img) > detailStart && (detailEnd < 0 || nodes.indexOf(img) < detailEnd)) role = 'detailImages';
+      const preview = img.closest('[role="button"][aria-label="点击查看大图"]');
+      if ((label === '查看图片' || preview) && !img.closest('[role="dialog"]')
+        && detailStart >= 0 && nodes.indexOf(img) > detailStart
+        && (detailEnd < 0 || nodes.indexOf(img) < detailEnd)) role = 'detailImages';
       if (!role) for (let at = img.parentElement; at && at !== root; at = at.parentElement) {
         const kind = `${at.getAttribute('data-role') || ''} ${at.id || ''}`;
         if (/certificate|证书/.test(kind)) { role = 'certificateImages'; break; }
@@ -76,21 +79,28 @@
       if (entry && /^\/goods\.html$/.test(new URL(location.href).pathname)) { state.opened = true; entry.click(); }
       dialog = currentDialog(id);
     }
-    const result = () => ({ skus: state.rows, specNames: state.names || [], pending: !state.finished, unconfirmed: state.unconfirmed, skuTotal: state.targets?.length || 0 });
+    const result = () => ({ skus: state.rows, specNames: state.names || [], pending: !state.finished, unconfirmed: state.unconfirmed, skuTotal: state.targets?.length || 0, skuDimensions: state.names?.length || 0 });
     if (!dialog || state.finished) return result();
     const groups = [...dialog.querySelectorAll('.sku-specs-key')].map(label => {
       const allOptions = [...label.parentElement.querySelectorAll('[role="button"]')].filter(n => optionText(n));
       return { name: text(label), allOptions, options: allOptions.filter(n => n.getAttribute('aria-disabled') !== 'true' && !n.hasAttribute('disabled') && !/disabled/i.test(n.className)) };
     });
-    if (!groups.length || groups.length > 2 || groups.some(g => !g.allOptions.length)) return result();
+    if (!groups.length || groups.some(g => !g.allOptions.length)) return result();
     if (!state.targets) {
       state.names = groups.map(g => g.name);
-      state.targets = groups.reduce((all, g) => all.flatMap(row => g.allOptions.map(n => [...row, optionText(n)])), [[]]).slice(0, 1000);
+      state.targets = groups.reduce((all, g) => all.flatMap(row => g.allOptions.map(n => [...row, optionText(n)])).slice(0, 1000), [[]]);
     }
     const target = state.targets[state.index];
     if (!target) { state.finished = true; return result(); }
     const selected = node => node.getAttribute('aria-pressed') === 'true' || node.classList.contains('hr353bdX');
-    const readPrice = () => text(dialog.querySelector('[data-sku-price],.ujEqGzEB')).replace(/\s+/g, '').match(/^[¥￥](\d+(?:\.\d+)?)$/)?.[1] || '';
+    const readPrice = () => {
+      const area = dialog.querySelector('[data-sku-price],.ujEqGzEB');
+      const label = area?.querySelector('[role="img"][aria-label]')?.getAttribute('aria-label');
+      // Read the selected SKU's primary price only, never coupon amounts,
+      // crossed-out prices or an unresolved range elsewhere in the dialog.
+      return String(label || text(area)).replace(/\s+/g, '')
+        .match(/^(?:首件|券后|补贴后|优惠后|大促价|到手价)?[¥￥](\d+(?:\.\d+)?)$/)?.[1] || '';
+    };
     const oldPrice = readPrice();
     const oldImage = imageUrl(dialog.querySelector('img[aria-label="点击查看大图"]'));
     if (!state.awaitingPrice) {
@@ -158,12 +168,13 @@
       mediaState.stable = key === mediaState.key ? mediaState.stable + 1 : 1;
       mediaState.key = key; mediaState.scans++;
       const detailPending = !media.detailImages.length || mediaState.stable < 5;
-      const sku = !detailPending || mediaState.scans >= 10 || hasStructuredSkus
+      const sku = !detailPending || mediaState.scans >= 30 || hasStructuredSkus
         ? skuUI(root, id, hasStructuredSkus) : { skus: [], specNames: [], pending: true, unconfirmed: 0 };
       // Check the current detail tail while waiting for the address list to settle.
       if (detailPending && mediaState.scans % 2 === 0 && !currentDialog(id)) {
         const heading = [...root.querySelectorAll('p,h2,h3,span')].find(n => text(n) === '商品详情');
-        const last = [...root.querySelectorAll('img[aria-label="查看图片"]')].filter(n => current(n, root, id)).at(-1);
+        const last = [...root.querySelectorAll('img[aria-label="查看图片"],[role="button"][aria-label="点击查看大图"] img')]
+          .filter(n => !n.closest('[role="dialog"]') && current(n, root, id)).at(-1);
         (last || heading)?.scrollIntoView?.({ block: 'end', behavior: 'instant' });
       }
       return { ...media, attributes: attrs, ...sku, detailPending };

@@ -64,14 +64,21 @@ function cleanStrings(values, limit = Infinity) {
   return [...new Set(values.map(text).filter(Boolean))].slice(0, limit);
 }
 
-function normalizedSku(sku) {
+function normalizedSku(sku, specNames, keepExtraDimensions) {
   if (!sku || typeof sku !== 'object') return null;
   const cents = explicitCents(sku.cents) || priceCents(sku.price);
   if (!cents) return null;
   const id = text(sku.id) || text(sku.skuId);
+  const values = Array.isArray(sku.specs) ? sku.specs.map(text).filter(Boolean) : [];
+  const escaped = val => val.replace(/[\\:；]/g, '\\$&');
+  // The import template has two spec columns. Preserve all PDD dimensions
+  // before deduplication, folding dimensions 2+ into a labelled second value.
+  const specs = keepExtraDimensions && values.length > 2
+    ? [values[0], values.slice(1).map((val, i) => `${escaped(specNames[i + 1] || `规格${i + 2}`)}:${escaped(val)}`).join('；')]
+    : values.slice(0, 2);
   return {
     id,
-    specs: Array.isArray(sku.specs) ? sku.specs.map(text).filter(Boolean).slice(0, 2) : [],
+    specs,
     cents,
     image: httpsUrl(sku.image),
     stock: text(sku.stock),
@@ -106,13 +113,16 @@ export function normalizeDetail(raw = {}, fallback = {}) {
   }
 
   const detailCents = explicitCents(raw.cents) || priceCents(raw.price);
+  const specNames = cleanStrings(raw.specNames);
+  const keepExtraDimensions = fallback.site === 'pdd';
   const skus = [];
   const skuKeys = new Set();
   if (Array.isArray(raw.skus)) {
     for (const item of raw.skus) {
-      const sku = normalizedSku(item);
+      const sku = normalizedSku(item, specNames, keepExtraDimensions);
       if (!sku) continue;
-      const key = sku.id || JSON.stringify([sku.specs, sku.cents, sku.image]);
+      const identitySpecs = keepExtraDimensions && Array.isArray(item.specs) ? item.specs.map(text) : sku.specs;
+      const key = sku.id || JSON.stringify([identitySpecs, sku.cents, sku.image]);
       if (skuKeys.has(key)) continue;
       skuKeys.add(key);
       skus.push(sku);
@@ -134,7 +144,8 @@ export function normalizeDetail(raw = {}, fallback = {}) {
     videoUrl: httpsUrl(raw.videoUrl),
     certificateImages: urlList(raw.certificateImages),
     sizeChartImages: urlList(raw.sizeChartImages),
-    specNames: cleanStrings(raw.specNames, 2),
+    specNames: keepExtraDimensions && specNames.length > 2
+      ? [specNames[0], specNames.slice(1).join(' / ')] : specNames.slice(0, 2),
     skus,
     detailCents,
     detailStatus: statuses.has(status) ? status : DETAIL_STATUS.DONE,

@@ -66,6 +66,25 @@ test('preserves duplicate SKU spec values in their original dimension positions'
   assert.deepEqual(detail.skus[0].specs, ['通用', '通用']);
 });
 
+test('PDD third-dimensional same-priced same-picture SKUs survive the two-column template',()=>{
+  const detail=normalizeDetail({specNames:['净含量','包装规格','款式'],skus:[
+    {specs:['120g','1瓶','单支'],price:'10',image:'https://img.pddpic.com/same.jpg'},
+    {specs:['120g','1瓶','套装'],price:'10',image:'https://img.pddpic.com/same.jpg'}
+  ]},{site:'pdd'});
+  assert.equal(detail.skus.length,2);
+  assert.deepEqual(detail.specNames,['净含量','包装规格 / 款式']);
+  assert.deepEqual(detail.skus.map(s=>s.specs),[['120g','包装规格:1瓶；款式:单支'],['120g','包装规格:1瓶；款式:套装']]);
+});
+
+test('PDD option punctuation cannot merge distinct multi-dimensional SKUs',()=>{
+  const detail=normalizeDetail({specNames:['净含量','包装规格','款式'],skus:[
+    {specs:['120g','1瓶；款式:套装','单支'],price:'10',image:'https://img.pddpic.com/same.jpg'},
+    {specs:['120g','1瓶','套装；款式:单支'],price:'10',image:'https://img.pddpic.com/same.jpg'}
+  ]},{site:'pdd'});
+  assert.equal(detail.skus.length,2);
+  assert.notEqual(detail.skus[0].specs[1],detail.skus[1].specs[1]);
+});
+
 test('keeps only valid positive integer prices and deduplicates SKUs by documented keys', () => {
   const detail = normalizeDetail({ skus: [
     { id: 'a', skuId: 'ignored', specs: ['黑色'], cents: 2990, image: 'https://img/a.jpg' },

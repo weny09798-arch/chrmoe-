@@ -319,9 +319,10 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
         }
         if (snapshot.error) throw new Error(snapshot.error);
         if (site.id === 'pdd' && detailPollLimit == null && Number.isSafeInteger(snapshot.skuTotal) && snapshot.skuTotal > 0) {
-          // Allow two dimension changes and their bounded retries per target.
+          // Allow every dimension change and its bounded retries per target.
           // Very large products retain an overall wait cap and a partial note.
-          pollLimit = Math.max(pollLimit, Math.min(3600, 20 + snapshot.skuTotal * 44));
+          const dimensions = Number.isSafeInteger(snapshot.skuDimensions) && snapshot.skuDimensions > 0 ? snapshot.skuDimensions : 2;
+          pollLimit = Math.max(pollLimit, Math.min(3600, 30 + snapshot.skuTotal * (dimensions * 20 + 4)));
         }
         if (snapshot.goodsId !== id) throw new Error('商品详情 ID 不匹配');
         const docUrls = [...new Set([...(pageGoods?.detailUrls || []), pageGoods?.detailUrl, ...(snapshot.descriptionUrls || [])].filter(url => typeof url === 'string' && url))];

@@ -291,7 +291,7 @@ test('a known PDD entry opens specifications once and retains only observed vari
     });
   };
   page.document.querySelector('[role=button]').addEventListener('click',mount);
-  let result;for(let i=0;i<40;i++)result=await page.snapshot();
+  let result;for(let i=0;i<80;i++)result=await page.snapshot();
   assert.equal(openings,1);assert.equal(confirmations,0);
   assert.deepEqual(Array.from(result.detail.skus,sku=>[...sku.specs,sku.price]),[['白色','140型号','0.67'],['白色','160型号','0.99'],['红色','140型号','0.68'],['红色','160型号','1.00']]);
   assert.equal(result.skuPending,false);
@@ -409,6 +409,51 @@ test('visible login and frequent-access prompts block extraction', async () => {
     assert.equal(result.blocked, true, phrase);
     assert.equal(result.detail, null, phrase);
   }
+});
+
+test('PDD detail images inside labelled preview buttons are read from lazy data-src',async()=>{
+  const html=await readFile(new URL('./fixtures/pdd-wrapped-details.html',import.meta.url),'utf8');
+  const observed=JSON.parse(await readFile(new URL('./fixtures/pdd-wrapped-details.json',import.meta.url),'utf8'));
+  const result=await snapshot(html+'<aside data-role="recommendations"><div role="button" aria-label="点击查看大图"><img src="https://img.pddpic.com/recommend.jpg"></div></aside>','1010230971105');
+  assert.equal(result.detail.detailImages.length,26);
+  assert.deepEqual(Array.from(result.detail.detailImages),observed.map(url=>url.split('?')[0]));
+});
+
+test('the real three-dimensional cleanser dialog exports all eight first-item prices',async()=>{
+  const html=await readFile(new URL('./fixtures/pdd-cleanser-sku.html',import.meta.url),'utf8');
+  const observed=JSON.parse(await readFile(new URL('./fixtures/pdd-cleanser-observed.json',import.meta.url),'utf8'));
+  const page=await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/detail.jpg"></div></main>'+html,'681129590053');
+  const dialog=page.document.querySelector('[role=dialog]');let confirmations=0;
+  dialog.querySelector('[aria-label="确定"]').addEventListener('click',()=>confirmations++);
+  for(const label of dialog.querySelectorAll('.sku-specs-key')) for(const option of label.parentElement.querySelectorAll('[role=button]')) option.addEventListener('click',()=>{
+    for(const n of label.parentElement.querySelectorAll('[role=button]')) n.classList.remove('hr353bdX');
+    option.classList.add('hr353bdX');
+    const choices=[...dialog.querySelectorAll('.sku-specs-key')].map(n=>n.parentElement.querySelector('.hr353bdX')?.getAttribute('aria-label'));
+    const row=observed.find(row=>row.specs.every((v,i)=>v===choices[i]));
+    dialog.querySelector('.Mbx2m60G').textContent='已选：'+choices.join(' ');
+    const price=dialog.querySelector('.ujEqGzEB');price.textContent='';
+    price.insertAdjacentHTML('afterbegin',`<span role="img" aria-label="${row.price}"><span aria-hidden="true">${row.price}</span></span>`);
+    dialog.querySelector('img[aria-label="点击查看大图"]').setAttribute('src',row.image);
+  });
+  let result;for(let i=0;i<200;i++)result=await page.snapshot();
+  assert.equal(result.detail.skus.length,8);
+  assert.deepEqual(Array.from(result.detail.skus,s=>[...s.specs,s.price]),observed.map(row=>[...row.specs,row.price.replace('首件¥','')]));
+  const rows=productRows({id:'681129590053',site:'pdd',title:'洗面奶',...normalizeDetail(result.detail,{site:'pdd'})});
+  assert.equal(rows.length,8);assert.equal(new Set(rows.map(row=>row[15])).size,8);
+  assert.equal(rows[0][15],'包装规格:1瓶；款式:芦荟洗面奶1支');
+  assert.deepEqual(rows.map(row=>row[17]),['17.78','26.45','24.63','24.63','26.46','26.46','27.59','37.49']);
+  assert.equal(result.skuPending,false);assert.equal(confirmations,0);
+});
+
+test('SKU opening cannot block detail pictures that arrive after the tenth scan',async()=>{
+  const page=await detailPage('<main><p>商品详情</p><div class="yK39frdi" role="button">发起拼单</div></main>');
+  let opened=false;
+  page.document.querySelector('[role=button]').addEventListener('click',()=>{opened=true;});
+  let result;for(let i=0;i<14;i++){result=await page.snapshot();assert.equal(opened,false);}
+  page.document.querySelector('main').insertAdjacentHTML('beforeend','<div role="button" aria-label="点击查看大图"><img data-src="https://img.pddpic.com/late.jpg"></div>');
+  for(let i=0;i<6;i++)result=await page.snapshot();
+  assert.deepEqual(Array.from(result.detail.detailImages),['https://img.pddpic.com/late.jpg']);
+  assert.equal(opened,true);
 });
 
 test('reads Pinduoduo window.rawData goods, SKU specs, galleries and attributes', async () => {
