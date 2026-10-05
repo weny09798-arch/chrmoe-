@@ -297,6 +297,25 @@ test('a known PDD entry opens specifications once and retains only observed vari
   assert.equal(result.skuPending,false);
 });
 
+test('PDD SKU badge text and changing badges do not hide the six actual car-hook variants',async()=>{
+  const style='G全新升级-超强承重（车型通用）高端车载挂钩支架';
+  const names=['活动特惠：拍一发二（2个装）手快有份','精选品质：（4个装）既是挂钩也是支架','精选品质：（3个装）既是挂钩也是支架','精选品质：（2个装）既是挂钩也是支架','精选品质：（1个装）既是挂钩也是支架','普通材质：薄款（1个）只可当做挂钩'];
+  const prices=['13.8','16.5','15.1','13.9','12.5','2.6'];
+  const page=await detailPage(`<main><div data-role="detail"><img src="https://img.pddpic.com/d.jpg"></div></main><div role="dialog"><img aria-label="点击查看大图" src="https://img.pddpic.com/0.jpg"><div class="ujEqGzEB">¥13.8</div><span class="Mbx2m60G">已选：${style} ${names[0]}</span><div><span class="sku-specs-key">款式</span><div role="button" aria-label="${style}" class="hr353bdX">${style}</div></div><div><span class="sku-specs-key">组合</span>${names.map((name,i)=>`<div role="button" aria-label="${name}" class="${i===0?'hr353bdX':''}"><span>${name}</span><div class="badge">${i===5?'马上卖完':''}</div></div>`).join('')}</div></div>`,'1007998908733');
+  const dialog=page.document.querySelector('[role=dialog]');
+  const options=[...dialog.querySelectorAll('.sku-specs-key')][1].parentElement.querySelectorAll('[role=button]');
+  for(const [i,option] of [...options].entries())option.addEventListener('click',()=>{
+    for(const other of options){other.classList.remove('hr353bdX');other.querySelector('.badge').textContent='热卖';}
+    option.classList.add('hr353bdX');option.querySelector('.badge').textContent='马上卖完';
+    dialog.querySelector('.Mbx2m60G').textContent=`已选：${style} ${names[i]}`;
+    dialog.querySelector('.ujEqGzEB').textContent='¥'+prices[i];
+    dialog.querySelector('img').setAttribute('src',`https://img.pddpic.com/${i}.jpg`);
+  });
+  let result;for(let i=0;i<160;i++)result=await page.snapshot();
+  assert.deepEqual(Array.from(result.detail.skus,s=>[...s.specs,s.price,s.image]),names.map((n,i)=>[style,n,prices[i],`https://img.pddpic.com/${i}.jpg`]));
+  assert.equal(result.skuPending,false);assert.doesNotMatch(result.detail.detailNote,/未读取到稳定/);
+});
+
 test('equal-priced variants retain their shared image and do not stop enumeration',async()=>{
   const page=await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/detail.jpg"></div></main><div role="dialog"><div data-sku-price>¥1</div><span data-sku-selected>已选：白色</span><div><span class="sku-specs-key">颜色</span><div><div role="button" class="hr353bdX">白色</div><div role="button">红色</div><div role="button">绿色</div></div></div></div>');
   page.document.querySelector('[role=dialog]').insertAdjacentHTML('afterbegin','<img aria-label="点击查看大图" src="https://img.pddpic.com/shared.jpg">');

@@ -122,10 +122,10 @@ export function hasDetailData(item) {
 const detailFinished = item => ['done', 'partial', 'error'].includes(item.detailStatus);
 export function countDetails(job) { return selected(job).filter(detailFinished).length; }
 
-export function addCandidate(job, candidate) {
+export function addCandidate(job, candidate, task) {
   if (!candidate.id || !Number.isSafeInteger(candidate.cents) || candidate.cents <= 0) return false;
-  if (candidateExcluded(job, candidate)) return false;
-  const group = job.groups.find(g => g.best.id === candidate.id);
+  if (candidateExcluded(job, candidate, task)) return false;
+  const group = job.groups.find(g => String(g.best.id).trim() === String(candidate.id).trim());
   if (!group) {
     job.groups.push({ ids: [candidate.id], best: candidate });
   } else {
@@ -136,9 +136,22 @@ export function addCandidate(job, candidate) {
 
 export function recoverTask(task) {
   if (!task || task.version !== 1 || !Array.isArray(task.jobs)) return null;
+  task.exclusions ||= [];
+  // Upgrade old keyword-only deletion records before checking any job.
+  for (const job of task.jobs) {
+    const site = job.site || 'pdd';
+    const ids = (job.exclusions || []).flatMap(group => group.ids || []).map(id => String(id ?? '').trim()).filter(Boolean);
+    if (!ids.length) continue;
+    let record = task.exclusions.find(group => group.site === site);
+    if (!record) { record = { site, ids: [] }; task.exclusions.push(record); }
+    record.ids = [...new Set([...(record.ids || []).map(id => String(id).trim()), ...ids])];
+  }
   task.permissionOrigin = '';
   if (['running', 'pending', 'blocked'].includes(task.status)) task.status = 'paused';
   for (const job of task.jobs) {
+    const before = job.groups.length;
+    job.groups = job.groups.filter(group => !candidateExcluded(job, group.best || {}, task));
+    if (job.groups.length < before) job.refillRequested = true;
     if (prepareRefill(job)) { job.status = 'paused'; task.status = 'paused'; }
     if (['running', 'blocked'].includes(job.status)) job.status = 'paused';
     for (const group of job.groups || []) {

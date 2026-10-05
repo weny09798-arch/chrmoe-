@@ -106,7 +106,7 @@ export class Runner {
         }
         if (candidate) {
           const count = job.groups.length;
-          if (!addCandidate(job, candidate)) job.excluded = (job.excluded || 0) + 1;
+          if (!addCandidate(job, candidate, this.task)) job.excluded = (job.excluded || 0) + 1;
           else if (job.groups.length === count) job.merged = (job.merged || 0) + 1;
         } else {
           job.skipped++; job.lastSkip = problem;

@@ -7,18 +7,20 @@ const { workbookBytes, taskSheets, productRows } = xlsx;
 
 const decoder = new TextDecoder();
 
-test('PDD simple description exports as a single paragraph without leaking into detail pictures',()=>{
+test('PDD parameters stay in custom attributes while importer description is empty',()=>{
   const row=productRows({id:'123',site:'pdd',title:'托盘',cents:67,attributes:[{name:'品牌',value:'添彩'},{name:'使用场景',value:'客厅\n卧室，阳台'}],detailImages:['https://img.pddpic.com/detail.jpg']})[0];
-  assert.equal(row[7],'品牌：添彩；使用场景：客厅 卧室，阳台');
+  assert.equal(row[7],'');
+  assert.equal(row[10],'品牌:添彩；使用场景:客厅\n卧室，阳台');
   assert.equal(row[8],'https://img.pddpic.com/detail.jpg');
 });
 
-test('only PDD attribute descriptions enter template column H and media stays in column I', () => {
+test('every source leaves template description blank and retains attributes and detail pictures', () => {
   const item = { id: '123', title: '托盘', cents: 67, attributes: [{name:'品牌',value:'添彩'}], descriptionText:'整页广告文字', detailImages:['https://img.pddpic.com/detail.jpg'] };
   for (const site of ['pdd','1688','taobao']) {
     const row = productRows({...item,site})[0];
     assert.equal(row.length,22);
-    assert.equal(row[7],site==='pdd'?'品牌：添彩':'');
+    assert.equal(row[7],'');
+    assert.equal(row[10],'品牌:添彩');
     assert.equal(row[8],'https://img.pddpic.com/detail.jpg');
   }
 });

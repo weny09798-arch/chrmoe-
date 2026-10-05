@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as products from '../extension/lib/products.mjs';
-import { createTask, addCandidate, retryJob, selected, recoverTask } from '../extension/lib/core.mjs';
+import { createTask, enqueueKeyword, addCandidate, retryJob, selected, recoverTask } from '../extension/lib/core.mjs';
 import { taskSheets } from '../extension/lib/xlsx.mjs';
 import { Runner } from '../extension/lib/runner.mjs';
 
@@ -47,6 +47,29 @@ test('refill preserves history, details, filters and target while renewing the s
   assert.equal(job.groups[0].best.descriptionText, '保留详情');
 });
 
+test('a deleted ID remains excluded when numeric data is rediscovered as a string',()=>{
+  const task=createTask(['相机']);const job=task.jobs[0];
+  addCandidate(job,item(123));products.removeProduct(job,123,task);
+  const restored=recoverTask(JSON.parse(JSON.stringify(task)));
+  assert.equal(addCandidate(restored.jobs[0],item('123'),restored),false);
+});
+
+test('deleting a product excludes it across names and later jobs, without confusing source platforms',async()=>{
+  const task=createTask(['相机','相机配件']);
+  for(const job of task.jobs){addCandidate(job,item('123'));addCandidate(job,item('456'));}
+  products.removeProduct(task.jobs[0],'123',task);
+  assert.deepEqual(selected(task.jobs[1]).map(x=>x.id),['456']);
+  const restored=recoverTask(JSON.parse(JSON.stringify(task)));
+  enqueueKeyword(restored,'新相机','pdd',{limit:1});const other=restored.jobs[2];
+  for(const job of restored.jobs.slice(0,2))job.status='done';
+  await new Runner(restored,{save:async()=>{},update(){},open:async()=>{},close:async()=>{},
+    read:async()=>({cards:['123','789'].map(id=>({...item(id),key:id,priceText:'¥10'})),end:true}),
+    enrich:async()=>({detailStatus:'done',attributes:[{name:'材质',value:'塑料'}]})}).run();
+  assert.deepEqual(selected(other).map(x=>x.id),['789']);
+  enqueueKeyword(restored,'相机','taobao');
+  assert.equal(addCandidate(restored.jobs[3], {...item('123'),site:'taobao'},restored),true);
+});
+
 test('automatic refill pause preserves a verification response and manual stop stays stopped', async () => {
   for (const intent of ['automatic', 'stop']) {
     const { task, job } = fixture(); job.status = 'pending'; job.phase = 'search'; job.scanned = 0; job.limit = 3;
@@ -72,6 +95,13 @@ test('manual retry and recovery retain exclusions and a persisted refill request
   retryJob(recovered, 0);
   assert.equal(addCandidate(recovered.jobs[0], item('2')), false);
   assert.equal(addCandidate(recovered.jobs[0], item('4')), true);
+});
+
+test('legacy per-keyword deletions are also excluded in a newly added keyword after recovery',()=>{
+  const task=createTask(['相机']);task.jobs[0].exclusions=[{ids:[123]}];
+  const restored=recoverTask(JSON.parse(JSON.stringify(task)));
+  enqueueKeyword(restored,'相机配件','pdd');
+  assert.equal(addCandidate(restored.jobs[1],item('123'),restored),false);
 });
 test('refill reaches the saved target with retained details and permits cheap different IDs', async () => {
   const { task, job } = fixture(); products.removeProduct(job, '2'); products.prepareRefill(job);

@@ -164,7 +164,7 @@ function renderLinks() {
     remove.title = `删除 ${item.title}，自动补齐`; remove.setAttribute('aria-label', `删除 ${item.title}`);
     remove.disabled = lockedOut || clearing;
     remove.addEventListener('click', () => {
-      if (lockedOut || clearing || !task?.jobs.includes(job) || !removeProduct(job, item.id)) return;
+      if (lockedOut || clearing || !task?.jobs.includes(job) || !removeProduct(job, item.id, task)) return;
       const mayRestart = busy ? Boolean(runner && (!runner.intent || refillAuto)) : !['paused', 'blocked', 'stopped'].includes(task.status);
       refillAuto ||= mayRestart;
       refillWaiting = true;

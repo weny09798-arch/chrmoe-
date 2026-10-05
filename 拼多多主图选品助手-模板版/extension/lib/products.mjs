@@ -9,17 +9,34 @@ export function productImage(item) {
   }
   return safeImage(item?.image);
 }
-export function candidateExcluded(job, candidate) {
-  return (job.exclusions || []).some(group => candidate.id && group.ids?.includes(candidate.id));
+const productId = value => value == null ? '' : String(value).trim();
+const source = job => job.site || 'pdd';
+export function candidateExcluded(job, candidate, task) {
+  const id = productId(candidate.id);
+  return Boolean(id && (
+    (job.exclusions || []).some(group => group.ids?.some(value => productId(value) === id)) ||
+    (task?.exclusions || []).some(group => group.site === source(job) && group.ids?.some(value => productId(value) === id))
+  ));
 }
-export function removeProduct(job, id) {
-  const index = job?.groups?.findIndex(group => group.best?.id === id) ?? -1;
+export function removeProduct(job, id, task) {
+  id = productId(id);
+  const index = job?.groups?.findIndex(group => productId(group.best?.id) === id) ?? -1;
   if (index < 0) return false;
-  const [group] = job.groups.splice(index, 1);
-  job.exclusions ||= [];
-  job.exclusions.push({ ids: [group.best.id] });
-  job.refillRequested = true;
-  job.detailDone = job.groups.filter(g => ['done', 'partial', 'error'].includes(g.best?.detailStatus)).length;
+  if (task) {
+    task.exclusions ||= [];
+    if (!task.exclusions.some(group => group.site === source(job) && group.ids?.some(value => productId(value) === id))) task.exclusions.push({ site: source(job), ids: [id] });
+  }
+  // Deleting an item in any keyword removes the same source item everywhere.
+  for (const current of task?.jobs || [job]) {
+    if (source(current) !== source(job)) continue;
+    const before = current.groups.length;
+    current.groups = current.groups.filter(group => productId(group.best?.id) !== id);
+    current.exclusions ||= [];
+    if (!current.exclusions.some(group => group.ids?.some(value => productId(value) === id))) current.exclusions.push({ ids: [id] });
+    if (before === current.groups.length) continue;
+    current.refillRequested = true;
+    current.detailDone = current.groups.filter(g => ['done', 'partial', 'error'].includes(g.best?.detailStatus)).length;
+  }
   return true;
 }
 export function prepareRefill(job) {

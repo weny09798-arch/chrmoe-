@@ -2,7 +2,7 @@
 const encoder = new TextEncoder();
 import { TEMPLATE_HEADERS, TEMPLATE_INSTRUCTIONS } from './template.mjs';
 import { outputLimit, validProductTitle } from './core.mjs';
-import { fallbackSku, concisePddDescription } from './detail.mjs';
+import { fallbackSku } from './detail.mjs';
 import { matchTemplateXls } from './xls-biff.mjs';
 const LINK_HEADERS = new Set(['商品链接', '主图地址', '货源链接', '产品主图']);
 
@@ -166,7 +166,7 @@ export function productRows(item, fallbackNumber = 0) {
     : '';
   const common = [
     cellText(item.title), 'CNY', gallery, cellText(item.url), cellText(item.platform) || '拼多多', id,
-    item.site === 'pdd' ? concisePddDescription(item.attributes) : '', joinedValues(item.detailImages), cellText(item.category),
+    '', joinedValues(item.detailImages), cellText(item.category),
     attributes, cellText(item.videoUrl), joinedValues(item.certificateImages), joinedValues(item.sizeChartImages)
   ];
   const skus = Array.isArray(item.skus) && item.skus.length ? item.skus : [fallbackSku(item)];

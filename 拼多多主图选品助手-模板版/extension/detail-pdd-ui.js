@@ -56,6 +56,8 @@
     }
     return found;
   }
+  // aria-label contains the SKU value without changing sales/stock badges.
+  const optionText = node => String(node?.getAttribute('aria-label') || text(node)).trim();
   let state;
   function currentDialog(id) {
     return [...document.querySelectorAll('[role="dialog"]')].find(node => {
@@ -77,13 +79,13 @@
     const result = () => ({ skus: state.rows, specNames: state.names || [], pending: !state.finished, unconfirmed: state.unconfirmed, skuTotal: state.targets?.length || 0 });
     if (!dialog || state.finished) return result();
     const groups = [...dialog.querySelectorAll('.sku-specs-key')].map(label => {
-      const allOptions = [...label.parentElement.querySelectorAll('[role="button"]')].filter(n => text(n));
+      const allOptions = [...label.parentElement.querySelectorAll('[role="button"]')].filter(n => optionText(n));
       return { name: text(label), allOptions, options: allOptions.filter(n => n.getAttribute('aria-disabled') !== 'true' && !n.hasAttribute('disabled') && !/disabled/i.test(n.className)) };
     });
     if (!groups.length || groups.length > 2 || groups.some(g => !g.allOptions.length)) return result();
     if (!state.targets) {
       state.names = groups.map(g => g.name);
-      state.targets = groups.reduce((all, g) => all.flatMap(row => g.allOptions.map(n => [...row, text(n)])), [[]]).slice(0, 1000);
+      state.targets = groups.reduce((all, g) => all.flatMap(row => g.allOptions.map(n => [...row, optionText(n)])), [[]]).slice(0, 1000);
     }
     const target = state.targets[state.index];
     if (!target) { state.finished = true; return result(); }
@@ -92,11 +94,11 @@
     const oldPrice = readPrice();
     const oldImage = imageUrl(dialog.querySelector('img[aria-label="点击查看大图"]'));
     if (!state.awaitingPrice) {
-      const next = groups.findIndex((g, index) => !g.options.some(n => text(n) === target[index] && selected(n)));
+      const next = groups.findIndex((g, index) => !g.options.some(n => optionText(n) === target[index] && selected(n)));
       if (next >= 0) {
-        const option = groups[next].options.find(n => text(n) === target[next]);
+        const option = groups[next].options.find(n => optionText(n) === target[next]);
         if (option) {
-          state.choice = groups.map(g => text(g.options.find(selected)));
+          state.choice = groups.map(g => optionText(g.options.find(selected)));
           state.choice[next] = target[next];
           state.beforePrice = oldPrice; state.beforeImage = oldImage;
           state.changedAt = Date.now(); state.stableCount = 0;
@@ -108,19 +110,19 @@
     const summary = text(dialog.querySelector('[data-sku-selected],.Mbx2m60G'));
     const price = readPrice();
     const image = imageUrl(dialog.querySelector('img[aria-label="点击查看大图"]'));
-    const matches = target.every((val, i) => groups[i].options.some(n => text(n) === val && selected(n))) && target.every(val => summary.includes(val));
-    const signature = JSON.stringify([groups.map(g => text(g.options.find(selected))), summary, price, image]);
+    const matches = target.every((val, i) => groups[i].options.some(n => optionText(n) === val && selected(n))) && target.every(val => summary.includes(val));
+    const signature = JSON.stringify([groups.map(g => optionText(g.options.find(selected))), summary, price, image]);
     // Labels can update ahead of prices and images. Wait after every selection,
     // including equal-priced variants, and restart stability after any update.
     state.stableCount = state.stable === signature ? (state.stableCount || 0) + 1 : 1;
     const settled = !state.awaitingPrice || Date.now() - state.changedAt >= (Number(price) === Number(state.beforePrice) ? 8400 : 4800);
-    const choiceMatches = !state.awaitingPrice || state.choice.every((val, i) => val && groups[i].options.some(n => text(n) === val && selected(n)) && summary.includes(val));
+    const choiceMatches = !state.awaitingPrice || state.choice.every((val, i) => val && groups[i].options.some(n => optionText(n) === val && selected(n)) && summary.includes(val));
     const loading = Boolean(dialog.querySelector('[aria-busy="true"],[data-loading="true"]'));
     // The first opened popup may have no default selections. Its price range
     // cannot resolve until all dimensions are chosen; do not wait for a SKU
     // price or an "已选" summary while a dimension is still empty.
-    if (state.awaitingPrice && state.choice.some((val, i) => !val || !groups[i].options.some(n => text(n) === val))
-      && state.choice.every((val, i) => text(groups[i].options.find(selected)) === (groups[i].options.some(n => text(n) === val) ? val : ''))
+    if (state.awaitingPrice && state.choice.some((val, i) => !val || !groups[i].options.some(n => optionText(n) === val))
+      && state.choice.every((val, i) => optionText(groups[i].options.find(selected)) === (groups[i].options.some(n => optionText(n) === val) ? val : ''))
       && Date.now() - state.changedAt >= 1200 && !loading) {
       state.awaitingPrice = false; state.stable = ''; state.stableCount = 0; state.retries = 0;
       return result();
