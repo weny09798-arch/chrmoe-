@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { parseHTML } from 'linkedom';
+import { normalizeDetail } from '../extension/lib/detail.mjs';
+import { productRows } from '../extension/lib/xlsx.mjs';
 
 async function detailPage(html, goodsId = '123') {
   const { window, document } = parseHTML(`<html><body>${html}</body></html>`);
@@ -10,9 +12,11 @@ async function detailPage(html, goodsId = '123') {
   const listeners = [];
   const url = `https://mobile.pinduoduo.com/goods.html?goods_id=${goodsId}`;
   const location = { href: url, pathname: '/goods.html' };
+  let now = 0;
   const context = vm.createContext({
     window, document, URL,
     location,
+    Date: { now: () => now },
     getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
     chrome: { runtime: { onMessage: { addListener: fn => { listeners.push(fn); } } } },
     console
@@ -30,7 +34,7 @@ async function detailPage(html, goodsId = '123') {
     location,
     inject,
     listenerCount: () => listeners.length,
-    snapshot: pageGoods => new Promise(resolve => listeners[0]({ type: 'PDD_DETAIL_SNAPSHOT', pageGoods }, {}, resolve))
+    snapshot: pageGoods => { now += 1200; return new Promise(resolve => listeners[0]({ type: 'PDD_DETAIL_SNAPSHOT', pageGoods }, {}, resolve)); }
   };
 }
 
@@ -293,13 +297,90 @@ test('a known PDD entry opens specifications once and retains only observed vari
   assert.equal(result.skuPending,false);
 });
 
-test('an unchanged price after switching specifications stops fallback with a partial note rather than assigning old prices',async()=>{
+test('equal-priced variants retain their shared image and do not stop enumeration',async()=>{
   const page=await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/detail.jpg"></div></main><div role="dialog"><div data-sku-price>¥1</div><span data-sku-selected>已选：白色</span><div><span class="sku-specs-key">颜色</span><div><div role="button" class="hr353bdX">白色</div><div role="button">红色</div><div role="button">绿色</div></div></div></div>');
-  const [white,red]=page.document.querySelectorAll('[role=button]');
-  red.addEventListener('click',()=>{white.classList.remove('hr353bdX');red.classList.add('hr353bdX');page.document.querySelector('[data-sku-selected]').textContent='已选：红色';});
+  page.document.querySelector('[role=dialog]').insertAdjacentHTML('afterbegin','<img aria-label="点击查看大图" src="https://img.pddpic.com/shared.jpg">');
+  const options=[...page.document.querySelectorAll('[role=button]')];
+  for (const option of options) option.addEventListener('click',()=>{for(const n of options)n.classList.remove('hr353bdX');option.classList.add('hr353bdX');page.document.querySelector('[data-sku-selected]').textContent='已选：'+option.textContent;});
   let result;for(let i=0;i<40;i++)result=await page.snapshot();
-  assert.equal(result.detail.skus.length,1);assert.equal(result.detail.skus[0].specs[0],'白色');
-  assert.equal(result.detail.detailStatus,'partial');assert.match(result.detail.detailNote,/2 组规格未能确认/);
+  assert.deepEqual(Array.from(result.detail.skus,s=>[s.specs[0],s.price,s.image]),['白色','红色','绿色'].map(v=>[v,'1','https://img.pddpic.com/shared.jpg']));
+  assert.doesNotMatch(result.detail.detailNote,/未能确认/);
+  assert.equal(result.skuPending,false);
+});
+
+test('a price update cannot export the previous variant picture while its replacement is still loading',async()=>{
+  const page=await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/d.jpg"></div></main><div role="dialog"><img aria-label="点击查看大图" src="https://img.pddpic.com/white.jpg"><div data-sku-price>¥1</div><span data-sku-selected>已选：白色</span><div><span class="sku-specs-key">颜色</span><div role="button" class="hr353bdX">白色</div><div role="button">红色</div></div></div>');
+  const picture=page.document.querySelector('img[aria-label="点击查看大图"]');let loading=false,remaining=0;
+  Object.defineProperty(picture,'complete',{get:()=>!loading});
+  const [white,red]=page.document.querySelectorAll('[role=button]');
+  red.addEventListener('click',()=>{white.classList.remove('hr353bdX');red.classList.add('hr353bdX');page.document.querySelector('[data-sku-selected]').textContent='已选：红色';page.document.querySelector('[data-sku-price]').textContent='¥2';loading=true;remaining=7;});
+  let result;for(let i=0;i<35;i++){
+    if(remaining&&!--remaining){loading=false;picture.setAttribute('src','https://img.pddpic.com/red.jpg');}
+    result=await page.snapshot();
+    assert.ok(Array.from(result.detail.skus).every(s=>s.specs[0]!=='红色'||s.image==='https://img.pddpic.com/red.jpg'));
+  }
+  assert.equal(result.detail.skus.length,2);assert.equal(result.skuPending,false);
+});
+
+test('the real fan dialog selects all initially empty dimensions before reading a single SKU price',async()=>{
+  const html=await readFile(new URL('./fixtures/pdd-fan-sku.html',import.meta.url),'utf8');
+  const observed=JSON.parse(await readFile(new URL('./fixtures/pdd-fan-observed.json',import.meta.url),'utf8'));
+  const page=await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/detail.jpg"></div></main>'+html,'985864719369');
+  const dialog=page.document.querySelector('[role=dialog]');
+  for(const n of dialog.querySelectorAll('.hr353bdX')) n.classList.remove('hr353bdX');
+  const price=dialog.querySelector('.ujEqGzEB'),summary=dialog.querySelector('.Mbx2m60G');
+  price.textContent='¥19.99-29.99'; summary.textContent='请选择 型号 款式';
+  let confirmations=0;dialog.querySelector('[aria-label="确定"]').addEventListener('click',()=>confirmations++);
+  for(const label of dialog.querySelectorAll('.sku-specs-key')) for(const option of label.parentElement.querySelectorAll('[role=button]')) option.addEventListener('click',()=>{
+    for(const n of label.parentElement.querySelectorAll('[role=button]')) n.classList.remove('hr353bdX');
+    option.classList.add('hr353bdX');
+    const choices=[...dialog.querySelectorAll('.sku-specs-key')].map(n=>n.parentElement.querySelector('.hr353bdX')?.textContent);
+    if(choices.every(Boolean)){
+      const record=observed.find(row=>row.specs.every((v,i)=>v===choices[i]));
+      summary.textContent='已选：'+choices.join(' ');price.textContent=record.price;
+      dialog.querySelector('img[aria-label="点击查看大图"]').setAttribute('src',record.image);
+    }
+    else{summary.textContent='请选择 款式';price.textContent='¥19.99-29.99';}
+  });
+  let result;for(let i=0;i<160;i++)result=await page.snapshot();
+  assert.equal(result.detail.skus.length,9);
+  assert.deepEqual(Array.from(result.detail.skus,s=>[...s.specs,s.price,s.image]),observed.map(row=>[...row.specs,row.price.replace('¥',''),row.image.split('?')[0]]));
+  const rows=productRows({id:'985864719369',site:'pdd',title:'手持风扇',...normalizeDetail(result.detail,{site:'pdd'})});
+  assert.equal(rows.length,9);
+  assert.deepEqual(rows.map(row=>[row[14],row[15],row[17],row[18]]),observed.map(row=>[...row.specs,row.price.replace('¥',''),row.image.split('?')[0]]));
+  assert.equal(result.skuPending,false);assert.equal(confirmations,0);assert.doesNotMatch(result.detail.detailNote,/未读取到稳定/);
+});
+
+test('one unresponsive option is skipped without preventing later variants from being read',async()=>{
+  const page=await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/d.jpg"></div></main><div role="dialog"><img aria-label="点击查看大图" src="https://img.pddpic.com/shared.jpg"><div data-sku-price>¥1</div><span data-sku-selected>已选：白色</span><div><span class="sku-specs-key">颜色</span><div role="button" class="hr353bdX">白色</div><div role="button">红色</div><div role="button">绿色</div></div></div>');
+  const options=[...page.document.querySelectorAll('[role=button]')];
+  options[2].addEventListener('click',()=>{for(const n of options)n.classList.remove('hr353bdX');options[2].classList.add('hr353bdX');page.document.querySelector('[data-sku-selected]').textContent='已选：绿色';page.document.querySelector('[data-sku-price]').textContent='¥2';});
+  let result;for(let i=0;i<70;i++)result=await page.snapshot();
+  assert.deepEqual(Array.from(result.detail.skus,s=>[s.specs[0],s.price]),[['白色','1'],['绿色','2']]);
+  assert.match(result.detail.detailNote,/1 组规格未读取到稳定/);assert.equal(result.skuPending,false);
+});
+
+test('an option that disappears after target discovery cannot leave the reader pending forever',async()=>{
+  const page=await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/d.jpg"></div></main><div role="dialog"><div data-sku-price>¥1</div><span data-sku-selected>已选：白色</span><div><span class="sku-specs-key">颜色</span><div role="button" class="hr353bdX">白色</div><div role="button">红色</div></div></div>');
+  let result;for(let i=0;i<6;i++)result=await page.snapshot();
+  page.document.querySelectorAll('[role=button]')[1].remove();
+  for(let i=0;i<50;i++)result=await page.snapshot();
+  assert.equal(result.skuPending,false);assert.match(result.detail.detailNote,/1 组规格未读取到稳定/);
+});
+
+test('a size initially disabled for one color can still be collected when another color enables it',async()=>{
+  const page=await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/d.jpg"></div></main><div role="dialog"><div data-sku-price>¥1</div><span data-sku-selected>已选：白色 S</span><div><span class="sku-specs-key">颜色</span><div role="button" class="hr353bdX">白色</div><div role="button">红色</div></div><div><span class="sku-specs-key">尺寸</span><div role="button" class="hr353bdX">S</div><div role="button" aria-disabled="true">M</div></div></div>');
+  const labels=[...page.document.querySelectorAll('.sku-specs-key')];const m=labels[1].parentElement.querySelector('[aria-disabled]');
+  for(const label of labels)for(const n of label.parentElement.querySelectorAll('[role=button]'))n.addEventListener('click',()=>{
+    assert.notEqual(n.getAttribute('aria-disabled'),'true');
+    for(const other of label.parentElement.querySelectorAll('[role=button]'))other.classList.remove('hr353bdX');n.classList.add('hr353bdX');
+    const choices=labels.map(l=>l.parentElement.querySelector('.hr353bdX').textContent);
+    m.setAttribute('aria-disabled',choices[0]==='白色'?'true':'false');
+    page.document.querySelector('[data-sku-selected]').textContent='已选：'+choices.join(' ');
+    page.document.querySelector('[data-sku-price]').textContent=choices[1]==='M'?'¥2':'¥1';
+  });
+  let result;for(let i=0;i<100;i++)result=await page.snapshot();
+  assert.deepEqual(Array.from(result.detail.skus,s=>s.specs.join(' ')),['白色 S','红色 S','红色 M']);
   assert.equal(result.skuPending,false);
 });
 

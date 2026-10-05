@@ -261,7 +261,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
     const id = typeof item?.id === 'string' ? item.id : Number.isSafeInteger(item?.id) ? String(item.id) : '';
     if (!/^\d+$/.test(id)) throw new Error('无效商品 ID');
     const site = siteById(item?.site);
-    const detailUrl = site.productUrl(id, item.url);
+    const detailUrl = site.detailUrl ? site.detailUrl(id, item.detailSourceUrl || item.url) : site.productUrl(id, item.url);
     let preserveDetailTab = false;
     try {
       let tab = null;
@@ -297,7 +297,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
       if (!ready) throw new Error('商品详情加载超时');
       if (site.id === 'pdd') await detailPollWait(1200);
       await chrome.scripting.executeScript({ target: { tabId: detailTabId }, files: [...(site.detailHelpers || []), site.detailScript] });
-      const pollLimit = detailPollLimit ?? (site.id === 'pdd' ? 160 : 40);
+      let pollLimit = detailPollLimit ?? (site.id === 'pdd' ? 160 : 40);
       let best = null, bestScore = -1, stableKey = '', stableCount = 0;
       const fetchedDocs = new Set();
       let fetchedDetailImages = [];
@@ -318,6 +318,11 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
           throw blocked(snapshot.reason || '商品详情页已阻断');
         }
         if (snapshot.error) throw new Error(snapshot.error);
+        if (site.id === 'pdd' && detailPollLimit == null && Number.isSafeInteger(snapshot.skuTotal) && snapshot.skuTotal > 0) {
+          // Allow two dimension changes and their bounded retries per target.
+          // Very large products retain an overall wait cap and a partial note.
+          pollLimit = Math.max(pollLimit, Math.min(3600, 20 + snapshot.skuTotal * 44));
+        }
         if (snapshot.goodsId !== id) throw new Error('商品详情 ID 不匹配');
         const docUrls = [...new Set([...(pageGoods?.detailUrls || []), pageGoods?.detailUrl, ...(snapshot.descriptionUrls || [])].filter(url => typeof url === 'string' && url))];
         if ((site.id === '1688' || site.id === 'taobao') && docUrls.length) {
@@ -419,7 +424,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
     const children = new Set();
     const onCreated = tab => { if (tab.openerTabId === tabId) children.add(tab.id); };
     chrome.tabs.onCreated.addListener(onCreated);
-    let id = '', sameTab = false;
+    let id = '', sameTab = false, sourceUrl = '';
     try {
       await message({ type: 'PDD_OPEN_CARD', key: card.key });
       for (let i = 0; i < 32 && !id; i++) {
@@ -427,7 +432,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
         for (const candidateTabId of [tabId, ...children]) {
           const tab = await chrome.tabs.get(candidateTabId).catch(() => null);
           const found = site.productId(tab?.url || '');
-          if (found) { id = found; sameTab = candidateTabId === tabId; break; }
+          if (found) { id = found; sourceUrl = tab.url; sameTab = candidateTabId === tabId; break; }
         }
       }
       if (!id) {
@@ -444,7 +449,8 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
         await message({ type: 'PDD_SCROLL', position: page.position });
         await wait(500);
       }
-      return { ...card, id, url: site.productUrl(id, card.url || job.sourceOrigin), navigated: sameTab };
+      return { ...card, id, url: site.productUrl(id, sourceUrl || card.url || job.sourceOrigin),
+        ...(site.detailUrl ? { detailSourceUrl: site.detailUrl(id, sourceUrl) } : {}), navigated: sameTab };
     } finally {
       chrome.tabs.onCreated.removeListener(onCreated);
       for (const child of children) await chrome.tabs.remove(child).catch(() => {});

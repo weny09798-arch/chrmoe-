@@ -16,6 +16,12 @@ test('reads two similar-image cards independently and joins split price digits',
   const data=await snapshot(`<a href="goods.html?goods_id=123"><img src="https://img.pddpic.com/a.jpg"><h3>高清数码相机</h3><div>立减20元</div><div>券后<span>¥</span><span>29</span><small>.88</small></div><span>已拼7万</span></a><a href="/goods.html?goods_id=456"><img src="https://img.pddpic.com/b.jpg"><h3>同款相机</h3><div>券后¥32</div></a>`);
   assert.equal(data.cards.length,2); assert.equal(data.cards[0].id,'123'); assert.match(data.cards[0].priceText,/¥29\.88/);assert.equal(data.cards[1].id,'456');
 });
+
+test('search anchor retains its detail navigation context separately from the clean export URL',async()=>{
+  const data=await snapshot('<a href="/goods.html?goods_id=123&amp;page_from=23&amp;_oak_list_price_sign=price-proof"><h3>高清相机</h3><span>¥32</span></a>');
+  assert.equal(data.cards[0].detailSourceUrl,'https://mobile.pinduoduo.com/goods.html?goods_id=123&page_from=23&_oak_list_price_sign=price-proof');
+  assert.equal(data.cards[0].url,'https://mobile.pinduoduo.com/goods.html?goods_id=123');
+});
 test('ignores hidden cards and unrelated small icons',async()=>{
   const data=await snapshot('<a href="goods.html?goods_id=123" hidden><img src="https://img.pddpic.com/a.jpg"><div>¥32</div></a><img width="20" height="20" src="https://img.pddpic.com/icon.png">');
   assert.equal(data.cards.length,0);

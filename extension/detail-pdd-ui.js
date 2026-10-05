@@ -74,20 +74,21 @@
       if (entry && /^\/goods\.html$/.test(new URL(location.href).pathname)) { state.opened = true; entry.click(); }
       dialog = currentDialog(id);
     }
-    const result = () => ({ skus: state.rows, specNames: state.names || [], pending: !state.finished, unconfirmed: state.unconfirmed });
+    const result = () => ({ skus: state.rows, specNames: state.names || [], pending: !state.finished, unconfirmed: state.unconfirmed, skuTotal: state.targets?.length || 0 });
     if (!dialog || state.finished) return result();
-    const groups = [...dialog.querySelectorAll('.sku-specs-key')].map(label => ({
-      name: text(label), options: [...label.parentElement.querySelectorAll('[role="button"]')].filter(n => text(n) && n.getAttribute('aria-disabled') !== 'true' && !n.hasAttribute('disabled') && !/disabled/i.test(n.className))
-    }));
-    if (!groups.length || groups.length > 2 || groups.some(g => !g.options.length)) return result();
+    const groups = [...dialog.querySelectorAll('.sku-specs-key')].map(label => {
+      const allOptions = [...label.parentElement.querySelectorAll('[role="button"]')].filter(n => text(n));
+      return { name: text(label), allOptions, options: allOptions.filter(n => n.getAttribute('aria-disabled') !== 'true' && !n.hasAttribute('disabled') && !/disabled/i.test(n.className)) };
+    });
+    if (!groups.length || groups.length > 2 || groups.some(g => !g.allOptions.length)) return result();
     if (!state.targets) {
       state.names = groups.map(g => g.name);
-      state.targets = groups.reduce((all, g) => all.flatMap(row => g.options.map(n => [...row, text(n)])), [[]]).slice(0, 1000);
+      state.targets = groups.reduce((all, g) => all.flatMap(row => g.allOptions.map(n => [...row, text(n)])), [[]]).slice(0, 1000);
     }
     const target = state.targets[state.index];
     if (!target) { state.finished = true; return result(); }
     const selected = node => node.getAttribute('aria-pressed') === 'true' || node.classList.contains('hr353bdX');
-    const readPrice = () => text(dialog.querySelector('[data-sku-price],.ujEqGzEB')).match(/^[¥￥]\s*(\d+(?:\.\d+)?)/)?.[1] || '';
+    const readPrice = () => text(dialog.querySelector('[data-sku-price],.ujEqGzEB')).replace(/\s+/g, '').match(/^[¥￥](\d+(?:\.\d+)?)$/)?.[1] || '';
     const oldPrice = readPrice();
     const oldImage = imageUrl(dialog.querySelector('img[aria-label="点击查看大图"]'));
     if (!state.awaitingPrice) {
@@ -98,6 +99,7 @@
           state.choice = groups.map(g => text(g.options.find(selected)));
           state.choice[next] = target[next];
           state.beforePrice = oldPrice; state.beforeImage = oldImage;
+          state.changedAt = Date.now(); state.stableCount = 0;
           state.awaitingPrice = true; state.stable = ''; state.retries = 0;
           option.click(); return result();
         }
@@ -107,24 +109,39 @@
     const price = readPrice();
     const image = imageUrl(dialog.querySelector('img[aria-label="点击查看大图"]'));
     const matches = target.every((val, i) => groups[i].options.some(n => text(n) === val && selected(n))) && target.every(val => summary.includes(val));
-    const signature = JSON.stringify([target, price, image]);
-    // Selection labels can update before the price. A stable old price is not
-    // evidence of the new SKU price; prefer structured SKUs when prices repeat.
-    const freshPrice = !state.awaitingPrice || Number(price) !== Number(state.beforePrice);
+    const signature = JSON.stringify([groups.map(g => text(g.options.find(selected))), summary, price, image]);
+    // Labels can update ahead of prices and images. Wait after every selection,
+    // including equal-priced variants, and restart stability after any update.
+    state.stableCount = state.stable === signature ? (state.stableCount || 0) + 1 : 1;
+    const settled = !state.awaitingPrice || Date.now() - state.changedAt >= (Number(price) === Number(state.beforePrice) ? 8400 : 4800);
     const choiceMatches = !state.awaitingPrice || state.choice.every((val, i) => val && groups[i].options.some(n => text(n) === val && selected(n)) && summary.includes(val));
     const loading = Boolean(dialog.querySelector('[aria-busy="true"],[data-loading="true"]'));
-    if (choiceMatches && freshPrice && Number(price) > 0 && !loading && state.stable === signature) {
+    // The first opened popup may have no default selections. Its price range
+    // cannot resolve until all dimensions are chosen; do not wait for a SKU
+    // price or an "已选" summary while a dimension is still empty.
+    if (state.awaitingPrice && state.choice.some((val, i) => !val || !groups[i].options.some(n => text(n) === val))
+      && state.choice.every((val, i) => text(groups[i].options.find(selected)) === (groups[i].options.some(n => text(n) === val) ? val : ''))
+      && Date.now() - state.changedAt >= 1200 && !loading) {
+      state.awaitingPrice = false; state.stable = ''; state.stableCount = 0; state.retries = 0;
+      return result();
+    }
+    const picture = dialog.querySelector('img[aria-label="点击查看大图"]');
+    const pictureLoading = picture?.complete === false;
+    if ((matches || state.awaitingPrice) && choiceMatches && settled && Number(price) > 0 && !loading && !pictureLoading && state.stableCount >= 3) {
       if (!matches) { state.awaitingPrice = false; state.stable = ''; state.retries = 0; return result(); }
-      const confirmedImage = state.awaitingPrice && image === state.beforeImage ? '' : image;
-      state.rows.push({ id: '', specs: target, price, image: confirmedImage, stock: '', weightKg: '', sizeCm: '' });
+      state.rows.push({ id: '', specs: target, price, image, stock: '', weightKg: '', sizeCm: '' });
       state.index++; state.stable = ''; state.retries = 0;
       state.awaitingPrice = false;
       if (state.index >= state.targets.length) state.finished = true;
     } else {
       state.stable = signature;
-      // Stop this fallback when an update cannot be confirmed. Moving to another
-      // target could otherwise reuse the same unresolved price for a new row.
-      if (++state.retries >= 10) { state.unconfirmed = state.targets.length - state.index; state.finished = true; }
+      // A single unavailable or unresponsive combination must not discard the
+      // rest. The next changed selection gets its own full settling period.
+      if (++state.retries >= 20) {
+        state.unconfirmed++; state.index++; state.awaitingPrice = false;
+        state.stable = ''; state.stableCount = 0; state.retries = 0;
+        if (state.index >= state.targets.length) state.finished = true;
+      }
     }
     return result();
   }

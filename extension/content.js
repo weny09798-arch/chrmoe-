@@ -45,6 +45,19 @@
     return null;
   }
   const productSelector = 'a[href*="goods_id="], [data-goods-id]';
+  function detailSourceUrl(el, id) {
+    for (const node of [el, ...el.querySelectorAll('a[href]')]) {
+      const href = node.getAttribute('href'); if (!href) continue;
+      try {
+        const url = new URL(href, location.href);
+        if (['https://mobile.pinduoduo.com','https://mobile.yangkeduo.com'].includes(url.origin)
+          && url.pathname === '/goods.html' && url.searchParams.get('goods_id') === id) {
+          url.searchParams.delete('uin'); return url.href;
+        }
+      } catch { /* Ignore unrelated links. */ }
+    }
+    return '';
+  }
   function cardForProduct(seed) {
     for (let el = seed, depth = 0; el && el !== document.body && depth < 7; el = el.parentElement, depth++) {
       const ids = new Set([el, ...el.querySelectorAll(productSelector)].map(goodsId).filter(Boolean));
@@ -88,7 +101,7 @@
       if (!el || !visible(el)) continue;
       const img = [...el.querySelectorAll('img')].find(largeImage);
       seen.add(id);
-      found.push({ el, card: { id, key: id, image: img ? imageUrl(img) : '', title: titleFor(el,img), priceText: text(el), url: `${new URL(location.href).origin}/goods.html?goods_id=${id}` } });
+      found.push({ el, card: { id, key: id, image: img ? imageUrl(img) : '', title: titleFor(el,img), priceText: text(el), detailSourceUrl: detailSourceUrl(el,id), url: `${new URL(location.href).origin}/goods.html?goods_id=${id}` } });
     }
     for (const img of document.querySelectorAll('img')) {
       if (found.some(item => item.el.contains(img))) continue;
@@ -99,7 +112,7 @@
       const priceText = text(el), key = id || `${image}|${title}|${priceText}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      found.push({ el, card: { id, key, image, title, priceText, url: id ? `${new URL(location.href).origin}/goods.html?goods_id=${id}` : '' } });
+      found.push({ el, card: { id, key, image, title, priceText, detailSourceUrl: detailSourceUrl(el,id), url: id ? `${new URL(location.href).origin}/goods.html?goods_id=${id}` : '' } });
     }
     return found;
   }

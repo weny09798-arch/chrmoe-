@@ -26,6 +26,14 @@ const pdd = {
     } catch { return ''; }
   },
   productUrl(id, original = '') { return `${this.isOnSite(original) ? new URL(original).origin : 'https://mobile.pinduoduo.com'}/goods.html?goods_id=${id}`; },
+  detailUrl(id, original = '') {
+    const clean = this.productUrl(id, original);
+    if (this.productId(original) !== id || new URL(original).pathname !== '/goods.html') return clean;
+    const url = new URL(clean);
+    const allowed = new Set(['_oak_rcto','_oc_trace_mark','_oc_adinfo','_oak_gallery','_oak_gallery_token','_oc_refer_ad','_oak_search_term','_oak_list_price_sign','_x_query','page_from','thumb_url','refer_page_el_sn','refer_rn','refer_page_name','refer_page_id','refer_page_sn']);
+    for (const [key, val] of new URL(original).searchParams) if (allowed.has(key)) url.searchParams.set(key, val);
+    return url.href;
+  },
   isOnSite(raw) {
     try { return ['https://mobile.pinduoduo.com','https://mobile.yangkeduo.com'].includes(new URL(raw).origin); } catch { return false; }
   }

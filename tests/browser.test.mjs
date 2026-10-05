@@ -63,7 +63,7 @@ test('returning from a same-tab product detail restores the requested search exp
       update:async(_id,change)=>{updates++;pageUrl=change.url;return {id:42,url:pageUrl};},
       goBack:async()=>{pageUrl='https://mobile.pinduoduo.com/index.html';},
       sendMessage:async(_id,message)=>{
-        if(message.type==='PDD_OPEN_CARD'){pageUrl='https://mobile.pinduoduo.com/goods.html?goods_id=123';return {ok:true};}
+        if(message.type==='PDD_OPEN_CARD'){pageUrl='https://mobile.pinduoduo.com/goods.html?goods_id=123&page_from=23&_oak_list_price_sign=price-proof&uin=private-user';return {ok:true};}
         if(message.type==='PDD_SCROLL') return {ok:true};
         return {url:pageUrl,cards:[{key:'card-1'}],blocked:false,position:0};
       },
@@ -75,6 +75,8 @@ test('returning from a same-tab product detail restores the requested search exp
     const ports=browserPorts({save:async()=>{},update:()=>{}});await ports.open(task.jobs[0],task);
     const result=await ports.resolve({key:'card-1'}, {position:0}, task.jobs[0]);
     assert.equal(result.id,'123');assert.equal(result.navigated,true);
+    assert.equal(result.detailSourceUrl,'https://mobile.pinduoduo.com/goods.html?goods_id=123&page_from=23&_oak_list_price_sign=price-proof');
+    assert.equal(result.url,'https://mobile.pinduoduo.com/goods.html?goods_id=123');
     assert.equal(pageUrl,searchUrl('苹果手机壳'));assert.equal(updates,1);
   } finally {globalThis.chrome=prior;}
 });
@@ -218,6 +220,26 @@ test('PDD waits for pending SKU and images even when attributes have stopped cha
     assert.equal(detail.skus[0].cents,99);assert.equal(calls.messages.length,11);
     assert.ok(waits.every(ms=>ms>=1000));
     assert.deepEqual(calls.scripts[0].files,['detail-pdd-ui.js','detail-content.js']);
+  }finally{globalThis.chrome=prior;}
+});
+
+test('PDD allocates extra reading time for many popup combinations without stopping at 160 snapshots',async()=>{
+  const prior=globalThis.chrome;
+  const responses=Array.from({length:175},()=>({goodsId:'123',ready:false,skuPending:true,skuTotal:33,detailPending:false,detail:{title:'托盘',detailImages:['https://img.pddpic.com/d.jpg'],skus:[]}}));
+  responses.push({goodsId:'123',ready:true,skuPending:false,detailPending:false,detail:{title:'托盘',detailImages:['https://img.pddpic.com/d.jpg'],skus:[{specs:['白色','160'],price:'0.99'}]}});
+  const {chrome,calls}=detailChrome(responses);globalThis.chrome=chrome;
+  try{
+    const detail=await browserPorts({save:async()=>{},update:()=>{},detailPollWait:async()=>{}}).enrich({id:'123',site:'pdd'});
+    assert.equal(calls.messages.length,176);assert.equal(detail.skus[0].cents,99);
+  }finally{globalThis.chrome=prior;}
+});
+
+test('detail navigation uses search context while exported product URL stays clean',async()=>{
+  const prior=globalThis.chrome;
+  const {chrome,calls}=detailChrome([{goodsId:'123',ready:true,detail:{title:'托盘',skus:[{specs:['白色'],price:'1'}]}}]);globalThis.chrome=chrome;
+  try{
+    await browserPorts({save:async()=>{},update:()=>{},detailPollWait:async()=>{}}).enrich({id:'123',site:'pdd',url:'https://mobile.yangkeduo.com/goods.html?goods_id=123',detailSourceUrl:'https://mobile.yangkeduo.com/goods.html?goods_id=123&page_from=23&_oak_list_price_sign=price-proof&uin=private-user'});
+    assert.equal(calls.created[0].url,'https://mobile.yangkeduo.com/goods.html?goods_id=123&page_from=23&_oak_list_price_sign=price-proof');
   }finally{globalThis.chrome=prior;}
 });
 

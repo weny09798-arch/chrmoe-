@@ -12,7 +12,7 @@ const text = value => value == null ? '' : String(value).trim();
 export function concisePddDescription(attributes) {
   return [...new Set((Array.isArray(attributes) ? attributes : [])
     .filter(item => text(item?.name) && text(item?.value))
-    .map(item => `${text(item.name)}：${text(item.value)}`))].join('\n').slice(0, 8000);
+    .map(item => `${text(item.name).replace(/\s+/g, ' ')}：${text(item.value).replace(/\s+/g, ' ')}`))].join('；').slice(0, 8000);
 }
 
 function httpsUrl(value) {
