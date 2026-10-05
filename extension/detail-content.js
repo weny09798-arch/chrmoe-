@@ -354,6 +354,7 @@
     if (skuPending || detailPending) detail.detailStatus = 'partial';
     if (!skuPending && !hasStructuredSkus) detail.detailNote = '已按选中规格等待页面稳定，读取展示价格和图片；页面未提供的 SKU 编号、库存等字段留空';
     if (ui?.unconfirmed) detail.detailNote += `；${ui.unconfirmed} 组规格未读取到稳定的选中状态、价格或图片，未导出这些规格`;
+    if (ui?.unavailable) detail.detailNote += `；已跳过 ${ui.unavailable} 组页面不可选的缺货规格`;
     if (detailPending) detail.detailNote += (detail.detailNote ? '；' : '') + '未读取到图文详情图片';
     return { url, goodsId, blocked: false, reason: '', ready: ready && !skuPending && !detailPending, skuPending, skuTotal: ui?.skuTotal || 0, skuDimensions: ui?.skuDimensions || 0, detailPending, source: candidates.length ? 'json' : 'dom', detail };
   }

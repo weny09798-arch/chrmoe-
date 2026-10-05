@@ -17,7 +17,7 @@ async function detailPage(html, goodsId = '123') {
     window, document, URL,
     location,
     Date: { now: () => now },
-    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    getComputedStyle: node => ({ display: 'block', visibility: 'visible', pointerEvents: node.style.pointerEvents || 'auto' }),
     chrome: { runtime: { onMessage: { addListener: fn => { listeners.push(fn); } } } },
     console
   });
@@ -401,6 +401,90 @@ test('a size initially disabled for one color can still be collected when anothe
   let result;for(let i=0;i<100;i++)result=await page.snapshot();
   assert.deepEqual(Array.from(result.detail.skus,s=>s.specs.join(' ')),['白色 S','红色 S','红色 M']);
   assert.equal(result.skuPending,false);
+});
+
+test('the observed saucer dialog skips grey styles and finishes all five available packs without long unavailable retries', async () => {
+  const html = await readFile(new URL('./fixtures/pdd-saucer-stock-sku.html', import.meta.url), 'utf8');
+  const page = await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/detail.jpg"></div></main>' + html, '909991940686');
+  const dialog = page.document.querySelector('[role=dialog]');
+  const labels = [...dialog.querySelectorAll('.sku-specs-key')];
+  let disabledClicks = 0, confirmations = 0;
+  dialog.querySelector('[aria-label="确定"]').addEventListener('click', () => confirmations++);
+  const prices = { '4只装': '6', '6支装': '8', '8只装': '10', '10只装': '12', '2个装': '3.52' };
+  for (const label of labels) for (const option of label.parentElement.querySelectorAll('[role=button]')) option.addEventListener('click', () => {
+    if (option.classList.contains('uRVpnTQ1')) { disabledClicks++; return; }
+    for (const other of label.parentElement.querySelectorAll('[role=button]')) other.classList.remove('hr353bdX');
+    option.classList.add('hr353bdX');
+    const choices = labels.map(l => l.parentElement.querySelector('.hr353bdX').getAttribute('aria-label'));
+    dialog.querySelector('.Mbx2m60G').textContent = '已选：' + choices.join(' ');
+    dialog.querySelector('.ujEqGzEB').textContent = '¥' + prices[choices[1]];
+  });
+  let result;
+  for (let i = 0; i < 65; i++) { result = await page.snapshot(); if (!result.skuPending) break; }
+  assert.equal(disabledClicks, 0, 'unavailable styles must never be clicked');
+  assert.equal(result.skuPending, false, '90 targets must not each spend 20 polls waiting');
+  assert.match(result.detail.detailNote, /已跳过 85 组页面不可选/);
+  assert.deepEqual(Array.from(result.detail.skus, s => [...s.specs, s.price]).sort(), [
+    ['纯白杯碟', '4只装', '6'], ['纯白杯碟', '6支装', '8'], ['纯白杯碟', '8只装', '10'], ['纯白杯碟', '10只装', '12'], ['纯白杯碟', '2个装', '3.52']
+  ].sort());
+  assert.equal(confirmations, 0);
+});
+
+test('a grey first dimension can become available after selecting a different second dimension', async () => {
+  const page = await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/d.jpg"></div></main><div role="dialog"><div data-sku-price>¥1</div><span data-sku-selected>已选：白色 S</span><div><span class="sku-specs-key">颜色</span><div role="button" class="hr353bdX">白色</div><div role="button" style="pointer-events:none">红色</div></div><div><span class="sku-specs-key">尺寸</span><div role="button" class="hr353bdX">S</div><div role="button">M</div></div></div>');
+  const labels = [...page.document.querySelectorAll('.sku-specs-key')];
+  const red = labels[0].parentElement.querySelectorAll('[role=button]')[1];
+  for (const label of labels) for (const option of label.parentElement.querySelectorAll('[role=button]')) option.addEventListener('click', () => {
+    assert.notEqual(option.style.pointerEvents, 'none', 'do not click a disabled option');
+    for (const other of label.parentElement.querySelectorAll('[role=button]')) other.classList.remove('hr353bdX');
+    option.classList.add('hr353bdX');
+    const choices = labels.map(l => l.parentElement.querySelector('.hr353bdX').textContent);
+    red.style.pointerEvents = choices[1] === 'S' ? 'none' : 'auto';
+    page.document.querySelector('[data-sku-selected]').textContent = '已选：' + choices.join(' ');
+    page.document.querySelector('[data-sku-price]').textContent = choices[0] === '红色' ? '¥3' : choices[1] === 'M' ? '¥2' : '¥1';
+  });
+  let result;
+  for (let i = 0; i < 60; i++) result = await page.snapshot();
+  assert.deepEqual(Array.from(result.detail.skus, s => s.specs.join(' ')).sort(), ['白色 S', '白色 M', '红色 M'].sort());
+  assert.equal(result.skuPending, false);
+});
+
+test('a changed selected price and updated picture are collected after three stable polls instead of extra fixed waits', async () => {
+  const page = await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/d.jpg"></div></main><div role="dialog"><img aria-label="点击查看大图" src="https://img.pddpic.com/shared.jpg"><div data-sku-price>¥1</div><span data-sku-selected>已选：白色</span><div><span class="sku-specs-key">颜色</span><div role="button" class="hr353bdX">白色</div><div role="button">红色</div></div></div>');
+  const [white, red] = page.document.querySelectorAll('[role=button]');
+  let clicked = false;
+  red.addEventListener('click', () => {
+    white.classList.remove('hr353bdX'); red.classList.add('hr353bdX'); clicked = true;
+    page.document.querySelector('[data-sku-selected]').textContent = '已选：红色';
+    page.document.querySelector('[data-sku-price]').textContent = '¥2';
+    page.document.querySelector('img[aria-label="点击查看大图"]').setAttribute('src', 'https://img.pddpic.com/red.jpg');
+  });
+  let result;
+  for (let i = 0; i < 15 && !clicked; i++) result = await page.snapshot();
+  assert.equal(clicked, true);
+  for (let i = 0; i < 3; i++) result = await page.snapshot();
+  assert.deepEqual(Array.from(result.detail.skus, s => [s.specs[0], s.price]), [['白色', '1'], ['红色', '2']]);
+  assert.equal(result.skuPending, false);
+});
+
+test('an immediate price update cannot accelerate collection while the old complete picture URL has not changed', async () => {
+  const page = await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/d.jpg"></div></main><div role="dialog"><img aria-label="点击查看大图" src="https://img.pddpic.com/white.jpg"><div data-sku-price>¥1</div><span data-sku-selected>已选：白色</span><div><span class="sku-specs-key">颜色</span><div role="button" class="hr353bdX">白色</div><div role="button">红色</div></div></div>');
+  const [white, red] = page.document.querySelectorAll('[role=button]');
+  const picture = page.document.querySelector('img[aria-label="点击查看大图"]');
+  Object.defineProperty(picture, 'complete', { value: true });
+  let remaining = 0;
+  red.addEventListener('click', () => {
+    white.classList.remove('hr353bdX'); red.classList.add('hr353bdX');
+    page.document.querySelector('[data-sku-selected]').textContent = '已选：红色';
+    page.document.querySelector('[data-sku-price]').textContent = '¥2'; remaining = 4;
+  });
+  let result;
+  for (let i = 0; i < 30; i++) {
+    if (remaining && !--remaining) picture.setAttribute('src', 'https://img.pddpic.com/red.jpg');
+    result = await page.snapshot();
+    assert.ok(Array.from(result.detail.skus).every(s => s.specs[0] !== '红色' || s.image === 'https://img.pddpic.com/red.jpg'));
+  }
+  assert.equal(result.detail.skus.length, 2);
 });
 
 test('visible login and frequent-access prompts block extraction', async () => {

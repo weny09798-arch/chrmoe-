@@ -61,6 +61,9 @@
   }
   // aria-label contains the SKU value without changing sales/stock badges.
   const optionText = node => String(node?.getAttribute('aria-label') || text(node)).trim();
+  const selectable = node => node.getAttribute('aria-disabled') !== 'true' && !node.hasAttribute('disabled')
+    && !/disabled/i.test(node.className) && !node.classList.contains('uRVpnTQ1')
+    && getComputedStyle(node).pointerEvents !== 'none';
   let state;
   function currentDialog(id) {
     return [...document.querySelectorAll('[role="dialog"]')].find(node => {
@@ -70,7 +73,7 @@
     });
   }
   function skuUI(root, id, hasStructuredSkus) {
-    if (!state || state.id !== id) state = { id, opened: false, targets: null, index: 0, rows: [], stable: '', retries: 0, finished: false, unconfirmed: 0, awaitingPrice: false, beforePrice: '', beforeImage: '' };
+    if (!state || state.id !== id) state = { id, opened: false, targets: null, index: 0, rows: [], stable: '', retries: 0, finished: false, unconfirmed: 0, unavailable: 0, awaitingPrice: false, beforePrice: '', beforeImage: '' };
     if (hasStructuredSkus) return { skus: [], specNames: [], pending: false };
     let dialog = currentDialog(id);
     if (!dialog && !state.opened) {
@@ -79,18 +82,25 @@
       if (entry && /^\/goods\.html$/.test(new URL(location.href).pathname)) { state.opened = true; entry.click(); }
       dialog = currentDialog(id);
     }
-    const result = () => ({ skus: state.rows, specNames: state.names || [], pending: !state.finished, unconfirmed: state.unconfirmed, skuTotal: state.targets?.length || 0, skuDimensions: state.names?.length || 0 });
+    const result = () => ({ skus: state.rows, specNames: state.names || [], pending: !state.finished, unconfirmed: state.unconfirmed, unavailable: state.unavailable, skuTotal: state.targets?.length || 0, skuDimensions: state.names?.length || 0 });
     if (!dialog || state.finished) return result();
     const groups = [...dialog.querySelectorAll('.sku-specs-key')].map(label => {
       const allOptions = [...label.parentElement.querySelectorAll('[role="button"]')].filter(n => optionText(n));
-      return { name: text(label), allOptions, options: allOptions.filter(n => n.getAttribute('aria-disabled') !== 'true' && !n.hasAttribute('disabled') && !/disabled/i.test(n.className)) };
+      return { name: text(label), allOptions, options: allOptions.filter(selectable) };
     });
     if (!groups.length || groups.some(g => !g.allOptions.length)) return result();
     if (!state.targets) {
       state.names = groups.map(g => g.name);
-      state.targets = groups.reduce((all, g) => all.flatMap(row => g.allOptions.map(n => [...row, optionText(n)])).slice(0, 1000), [[]]);
+      // Visit disabled-heavy dimensions inside each context, so a page with
+      // 17 grey styles and five packs needs five pack changes, not 90 retries.
+      // Keep every value: another pack/color may enable a currently grey value.
+      const order = groups.map((g, index) => ({ index, disabled: 1 - g.options.length / g.allOptions.length }))
+        .sort((a, b) => a.disabled - b.disabled);
+      state.targets = order.reduce((all, { index }) => all.flatMap(row => groups[index].allOptions.map(n => {
+        const next = [...row]; next[index] = optionText(n); return next;
+      })).slice(0, 1000), [[]]);
     }
-    const target = state.targets[state.index];
+    let target = state.targets[state.index];
     if (!target) { state.finished = true; return result(); }
     const selected = node => node.getAttribute('aria-pressed') === 'true' || node.classList.contains('hr353bdX');
     const readPrice = () => {
@@ -103,11 +113,14 @@
     };
     const oldPrice = readPrice();
     const oldImage = imageUrl(dialog.querySelector('img[aria-label="点击查看大图"]'));
+    const loading = Boolean(dialog.querySelector('[aria-busy="true"],[data-loading="true"]'));
     if (!state.awaitingPrice) {
-      const next = groups.findIndex((g, index) => !g.options.some(n => optionText(n) === target[index] && selected(n)));
-      if (next >= 0) {
-        const option = groups[next].options.find(n => optionText(n) === target[next]);
-        if (option) {
+      while (target && !loading) {
+        // A later dimension may enable an earlier one. Choose any reachable
+        // desired value rather than waiting on the first grey desired value.
+        const next = groups.findIndex((g, index) => g.options.some(n => optionText(n) === target[index] && !selected(n)));
+        if (next >= 0) {
+          const option = groups[next].options.find(n => optionText(n) === target[next]);
           state.choice = groups.map(g => optionText(g.options.find(selected)));
           state.choice[next] = target[next];
           state.beforePrice = oldPrice; state.beforeImage = oldImage;
@@ -115,7 +128,13 @@
           state.awaitingPrice = true; state.stable = ''; state.retries = 0;
           option.click(); return result();
         }
+        if (!target.some((val, i) => groups[i].allOptions.some(n => optionText(n) === val && !selectable(n)))) break;
+        // No desired value is reachable in this settled context. Skip only
+        // this combination; never blacklist the value for other contexts.
+        state.unavailable++; state.index++; state.stable = ''; state.stableCount = 0; state.retries = 0;
+        target = state.targets[state.index];
       }
+      if (!target) { state.finished = true; return result(); }
     }
     const summary = text(dialog.querySelector('[data-sku-selected],.Mbx2m60G'));
     const price = readPrice();
@@ -125,9 +144,12 @@
     // Labels can update ahead of prices and images. Wait after every selection,
     // including equal-priced variants, and restart stability after any update.
     state.stableCount = state.stable === signature ? (state.stableCount || 0) + 1 : 1;
-    const settled = !state.awaitingPrice || Date.now() - state.changedAt >= (Number(price) === Number(state.beforePrice) ? 8400 : 4800);
+    // An old image can still be complete before its new URL is assigned.
+    // Accelerate only when both price and picture have actually changed.
+    const minimumWait = Number(price) === Number(state.beforePrice) ? 8400
+      : image && image !== state.beforeImage ? 2400 : 4800;
+    const settled = !state.awaitingPrice || Date.now() - state.changedAt >= minimumWait;
     const choiceMatches = !state.awaitingPrice || state.choice.every((val, i) => val && groups[i].options.some(n => optionText(n) === val && selected(n)) && summary.includes(val));
-    const loading = Boolean(dialog.querySelector('[aria-busy="true"],[data-loading="true"]'));
     // The first opened popup may have no default selections. Its price range
     // cannot resolve until all dimensions are chosen; do not wait for a SKU
     // price or an "已选" summary while a dimension is still empty.
