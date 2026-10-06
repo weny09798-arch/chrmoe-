@@ -257,7 +257,19 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
       ['detailImages', 'certificateImages', 'sizeChartImages', 'attributes', 'specNames', 'skus'].some(key => detail[key]?.length)
     ));
   }
-  async function enrich(item, currentTask) {
+  async function enrich(item, currentTask, cancelled) {
+    const checkCancelled = () => {
+      if (cancelled?.()) throw Object.assign(new Error('商品详情采集已取消'), { cancelled: true });
+    };
+    const interruptibleWait = async (ms, pause = detailPollWait) => {
+      checkCancelled();
+      if (!cancelled) return pause(ms);
+      for (let remaining = ms; remaining > 0; remaining -= Math.min(100, remaining)) {
+        await pause(Math.min(100, remaining));
+        checkCancelled();
+      }
+    };
+    checkCancelled();
     task = currentTask || task;
     const id = typeof item?.id === 'string' ? item.id : Number.isSafeInteger(item?.id) ? String(item.id) : '';
     if (!/^\d+$/.test(id)) throw new Error('无效商品 ID');
@@ -268,11 +280,13 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
       let tab = null;
       if (Number.isInteger(task?.detailTabId) && (!task.detailGoodsId || task.detailGoodsId === id) && (!task.detailSite || task.detailSite === site.id)) {
         tab = await chrome.tabs.get(task.detailTabId).catch(() => null);
+        checkCancelled();
         if (tab && (!task.detailGoodsId && site.productId(tab.url || '') !== id)) tab = null;
         if (tab && task.detailSite && task.detailSite !== site.id) tab = null;
       }
       if (!tab) {
         if (Number.isInteger(task?.detailTabId)) await closeDetail();
+        checkCancelled();
         tab = await chrome.tabs.create({ url: detailUrl, active: false });
         detailTabId = tab.id;
         if (task) {
@@ -290,19 +304,26 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
           await save(task);
         }
       }
+      checkCancelled();
       let ready = false;
       for (let i = 0; i < 40; i++) {
-        if ((await chrome.tabs.get(detailTabId)).status === 'complete') { ready = true; break; }
-        await wait(300);
+        checkCancelled();
+        const loadedTab = await chrome.tabs.get(detailTabId);
+        checkCancelled();
+        if (loadedTab.status === 'complete') { ready = true; break; }
+        await interruptibleWait(300, wait);
       }
       if (!ready) throw new Error('商品详情加载超时');
-      if (site.id === 'pdd') await detailPollWait(1200);
+      if (site.id === 'pdd') await interruptibleWait(1200);
+      checkCancelled();
       await chrome.scripting.executeScript({ target: { tabId: detailTabId }, files: [...(site.detailHelpers || []), site.detailScript] });
+      checkCancelled();
       let pollLimit = detailPollLimit ?? (site.id === 'pdd' ? 160 : 40);
       let best = null, bestScore = -1, stableKey = '', stableCount = 0;
       const fetchedDocs = new Set();
       let fetchedDetailImages = [];
       for (let i = 0; i < pollLimit; i++) {
+        checkCancelled();
         let pageGoods = null;
         if (site.id === 'pdd' || site.id === '1688' || site.id === 'taobao') {
           const injected = await chrome.scripting.executeScript({
@@ -310,14 +331,16 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
           }).catch(() => null);
           pageGoods = injected?.[0]?.result || null;
         }
+        checkCancelled();
         const snapshot = await chrome.tabs.sendMessage(detailTabId, pageGoods
           ? { type: 'PDD_DETAIL_SNAPSHOT', pageGoods }
           : { type: 'PDD_DETAIL_SNAPSHOT' });
-        if (!snapshot) throw new Error('商品详情页未响应');
-        if (snapshot.blocked) {
+        if (snapshot?.blocked) {
           preserveDetailTab = true;
           throw blocked(snapshot.reason || '商品详情页已阻断');
         }
+        checkCancelled();
+        if (!snapshot) throw new Error('商品详情页未响应');
         if (snapshot.error) throw new Error(snapshot.error);
         if (site.id === 'pdd' && detailPollLimit == null && Number.isSafeInteger(snapshot.skuTotal) && snapshot.skuTotal > 0) {
           // Allow every dimension change and its bounded retries per target.
@@ -332,6 +355,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
             if (fetchedDocs.has(url)) continue;
             fetchedDocs.add(url);
             fetchedDetailImages.push(...await descriptionImages(url));
+            checkCancelled();
           }
           fetchedDetailImages = [...new Set(fetchedDetailImages)];
           const reserved = new Set((snapshot.detail?.skus || []).map(sku => sku?.image).filter(Boolean));
@@ -358,7 +382,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
           const waitingForSku = snapshot.skuPending && (site.id === 'pdd' || stableCount < (site.id === 'taobao' ? 20 : 12));
           if (!waitingForDetail && !waitingForSku && ((snapshot.ready !== false && hasReadyDetail(detail)) || stableCount >= 8)) return normalizeDetail(best, item);
         }
-        if (i < pollLimit - 1) await detailPollWait(site.id === 'pdd' ? 1200 : 300);
+        if (i < pollLimit - 1) await interruptibleWait(site.id === 'pdd' ? 1200 : 300);
       }
       if (best) return normalizeDetail({ ...best, detailStatus: 'partial', detailNote: [best.detailNote, '加载等待已达到上限，仅保留已确认的数据'].filter(Boolean).join('；') }, item);
       throw new Error('商品详情加载超时');

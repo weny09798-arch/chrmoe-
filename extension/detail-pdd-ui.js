@@ -109,7 +109,7 @@
       // Read the selected SKU's primary price only, never coupon amounts,
       // crossed-out prices or an unresolved range elsewhere in the dialog.
       return String(label || text(area)).replace(/\s+/g, '')
-        .match(/^(?:首件|券后|补贴后|优惠后|大促价|到手价)?[¥￥](\d+(?:\.\d+)?)$/)?.[1] || '';
+        .match(/^(?:首件|券后|补贴后|优惠后|大促价|到手价|仅\d+(?:分钟|小时|秒))?[¥￥](\d+(?:\.\d+)?)$/)?.[1] || '';
     };
     const oldPrice = readPrice();
     const oldImage = imageUrl(dialog.querySelector('img[aria-label="点击查看大图"]'));

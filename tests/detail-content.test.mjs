@@ -42,6 +42,35 @@ async function snapshot(html, goodsId = '123') {
   return (await detailPage(html, goodsId)).snapshot();
 }
 
+test('reads actual timed SKU primary price without timing out or collecting the pre-coupon price',async()=>{
+  const page=await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/d.jpg"></div></main><div role="dialog"><img aria-label="点击查看大图" src="https://img.pddpic.com/a.jpg"><div class="ujEqGzEB"><span role="img" aria-label="仅55分钟¥37.1"><span aria-hidden="true">仅55分钟</span><span aria-hidden="true">¥37.1</span></span></div><span>券前¥43.6</span><span data-sku-selected>已选：4件套餐</span><div><span class="sku-specs-key">款式</span><div role="button" class="hr353bdX">4件套餐</div></div></div>');
+  let result;for(let i=0;i<8;i++)result=await page.snapshot();
+  assert.deepEqual(Array.from(result.detail.skus,s=>[s.specs[0],s.price]),[['4件套餐','37.1']]);
+  assert.equal(result.skuPending,false);
+});
+
+test('timed prices finish all changed variants without spending the retry limit on each',async()=>{
+  const page=await detailPage('<main><div data-role="detail"><img src="https://img.pddpic.com/d.jpg"></div></main><div role="dialog"><img aria-label="点击查看大图" src="https://img.pddpic.com/a.jpg"><div class="ujEqGzEB"><span role="img" aria-label="仅55分钟¥37.1"></span></div><span>券前¥43.6</span><span data-sku-selected>已选：4件套餐</span><div><span class="sku-specs-key">款式</span><div role="button" class="hr353bdX">4件套餐</div><div role="button">5件套餐</div><div role="button">6件套餐</div></div></div>');
+  const dialog=page.document.querySelector('[role=dialog]'),options=[...dialog.querySelectorAll('[role=button]')];
+  for(const [i,option] of options.entries())option.addEventListener('click',()=>{
+    for(const other of options)other.classList.remove('hr353bdX');option.classList.add('hr353bdX');
+    dialog.querySelector('[data-sku-selected]').textContent='已选：'+option.textContent;
+    dialog.querySelector('.ujEqGzEB [role=img]').setAttribute('aria-label','仅55分钟¥'+['37.1','38.2','39.3'][i]);
+    dialog.querySelector('img').setAttribute('src',`https://img.pddpic.com/${i}.jpg`);
+  });
+  let result;for(let i=0;i<20;i++)result=await page.snapshot();
+  assert.deepEqual(Array.from(result.detail.skus,s=>[s.specs[0],s.price]),[['4件套餐','37.1'],['5件套餐','38.2'],['6件套餐','39.3']]);
+  assert.equal(result.skuPending,false);
+});
+
+test('timed price support still rejects pre-coupon labels, ranges and combined monetary text',async()=>{
+  for(const value of ['券前¥43.6','仅55分钟¥37.1-43.6','仅55分钟¥37.1券前¥43.6']){
+    const page=await detailPage(`<main><div data-role="detail"><img src="https://img.pddpic.com/d.jpg"></div></main><div role="dialog"><div class="ujEqGzEB"><span role="img" aria-label="${value}"></span></div><span data-sku-selected>已选：4件套餐</span><div><span class="sku-specs-key">款式</span><div role="button" class="hr353bdX">4件套餐</div></div></div>`);
+    let result;for(let i=0;i<25;i++)result=await page.snapshot();
+    assert.equal(result.detail.skus.length,0,value);
+  }
+});
+
 test('reads the current product with its actual two-dimensional SKU combinations', async () => {
   const html = `
     <main data-goods-id="123">

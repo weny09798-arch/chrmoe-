@@ -206,6 +206,59 @@ test('detail enrichment retries an empty snapshot until content appears', async 
   } finally { globalThis.chrome = prior; }
 });
 
+test('cancels detail waiting promptly and closes the tab without another SKU snapshot',async()=>{
+  const prior=globalThis.chrome;let cancelled=false;const waits=[];
+  const {chrome,calls}=detailChrome([{goodsId:'123',ready:false,skuPending:true,detailPending:false,detail:{title:'商品',skus:[]}}]);globalThis.chrome=chrome;
+  try{
+    const ports=browserPorts({save:async()=>{},update(){},detailPollWait:async ms=>{waits.push(ms);cancelled=true;}});
+    await assert.rejects(()=>ports.enrich({id:'123',site:'pdd'},{},()=>cancelled),e=>e.cancelled===true);
+    assert.equal(calls.messages.length,0);assert.deepEqual(calls.removed,[99]);
+    assert.ok(waits.every(ms=>ms<=100));
+  }finally{globalThis.chrome=prior;}
+});
+
+test('deletion during a MAIN read prevents sending a SKU selection snapshot',async()=>{
+  const prior=globalThis.chrome;let cancelled=false;
+  const {chrome,calls}=detailChrome([{goodsId:'123',ready:true,detail:{title:'商品'}}]);
+  const execute=chrome.scripting.executeScript;
+  chrome.scripting.executeScript=async options=>{const result=await execute(options);if(options.world==='MAIN')cancelled=true;return result;};
+  globalThis.chrome=chrome;
+  try{
+    await assert.rejects(()=>browserPorts({save:async()=>{},update(){},detailPollWait:async()=>{}}).enrich({id:'123',site:'pdd'},{},()=>cancelled),e=>e.cancelled===true);
+    assert.equal(calls.messages.length,0);assert.deepEqual(calls.removed,[99]);
+  }finally{globalThis.chrome=prior;}
+});
+
+test('deletion after a SKU snapshot interrupts the polling delay before the next selection',async()=>{
+  const prior=globalThis.chrome;let cancelled=false;const waits=[];
+  const {chrome,calls}=detailChrome([{goodsId:'123',skuPending:true,detailPending:false,detail:{title:'商品',skus:[]}}]);globalThis.chrome=chrome;
+  try{
+    const ports=browserPorts({save:async()=>{},update(){},detailPollWait:async ms=>{if(calls.messages.length){waits.push(ms);cancelled=true;}}});
+    await assert.rejects(()=>ports.enrich({id:'123',site:'pdd'},{},()=>cancelled),e=>e.cancelled===true);
+    assert.equal(calls.messages.length,1);assert.deepEqual(waits,[100]);assert.deepEqual(calls.removed,[99]);
+  }finally{globalThis.chrome=prior;}
+});
+
+test('deletion during tab creation closes the created tab before injecting or reading',async()=>{
+  const prior=globalThis.chrome;let cancelled=false;
+  const {chrome,calls}=detailChrome([]);const create=chrome.tabs.create;
+  chrome.tabs.create=async options=>{const result=await create(options);cancelled=true;return result;};globalThis.chrome=chrome;
+  try{
+    await assert.rejects(()=>browserPorts({save:async()=>{},update(){},detailPollWait:async()=>{}}).enrich({id:'123',site:'pdd'},{},()=>cancelled),e=>e.cancelled===true);
+    assert.equal(calls.messages.length,0);assert.equal(calls.scripts.length,0);assert.deepEqual(calls.removed,[99]);
+  }finally{globalThis.chrome=prior;}
+});
+
+test('a verification response racing with deletion still blocks and preserves its page',async()=>{
+  const prior=globalThis.chrome;let cancelled=false;
+  const {chrome,calls}=detailChrome([]);
+  chrome.tabs.sendMessage=async()=>{cancelled=true;return {goodsId:'',blocked:true,reason:'访问过于频繁',detail:null};};globalThis.chrome=chrome;
+  try{
+    const task={};await assert.rejects(()=>browserPorts({save:async()=>{},update(){},detailPollWait:async()=>{}}).enrich({id:'123',site:'pdd'},task,()=>cancelled),e=>e.blocked===true);
+    assert.equal(task.detailTabId,99);assert.deepEqual(calls.removed,[]);
+  }finally{globalThis.chrome=prior;}
+});
+
 test('PDD waits for pending SKU and images even when attributes have stopped changing',async()=>{
   const prior=globalThis.chrome;
   const base={title:'托盘',attributes:[{name:'品牌',value:'添彩'}],skus:[],detailStatus:'partial'};

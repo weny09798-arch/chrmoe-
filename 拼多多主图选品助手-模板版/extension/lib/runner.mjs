@@ -171,12 +171,25 @@ export class Runner {
   async enrich(job) {
     for (const item of selected(job)) {
       if (this.intent) return;
+      if (!selected(job).includes(item)) continue;
       if (['done', 'partial', 'error'].includes(item.detailStatus)) continue;
       if (!await this.waitForPdd(job)) return;
+      if (!selected(job).includes(item)) continue;
+      const cancelled = () => Boolean((this.intent && !this.refillPause) || !selected(job).includes(item));
       item.detailStatus = 'running'; item.detailNote = '';
       await this.checkpoint();
+      if (cancelled()) {
+        item.detailStatus = 'pending';
+        if (this.intent) { await this.checkpoint(); return; }
+        continue;
+      }
       try {
-        const detail = await this.ports.enrich(item, this.task);
+        const detail = await this.ports.enrich(item, this.task, cancelled);
+        if (!selected(job).includes(item)) {
+          if ((job.site || 'pdd') === 'pdd') this.task.pddNextActionAt = this.now() + 3000;
+          await this.checkpoint();
+          continue;
+        }
         Object.assign(item, detail);
         item.detailStatus = detail.detailStatus === 'partial' || !hasDetailData(item) ? 'partial' : 'done';
         item.detailNote = detail.detailNote || (item.detailStatus === 'partial' ? '仅采集到基础商品信息' : '');
@@ -190,6 +203,13 @@ export class Runner {
           if ((job.site || 'pdd') === 'pdd') this.task.pddNextActionAt = this.now() + 3000;
           await this.checkpoint();
           throw error;
+        }
+        if (error.cancelled || cancelled()) {
+          item.detailStatus = 'pending'; item.detailNote = '';
+          if ((job.site || 'pdd') === 'pdd') this.task.pddNextActionAt = this.now() + 3000;
+          await this.checkpoint();
+          if (this.intent) return;
+          continue;
         }
         item.detailStatus = 'error';
         item.detailNote = String(error.message || '详情采集失败').slice(0, 500);

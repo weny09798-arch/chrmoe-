@@ -95,6 +95,39 @@ test('automatic refill pause preserves a verification response and manual stop s
     assert.equal(job.status, task.status);
   }
 });
+
+test('deleting the running detail cancels further reads and discards its late result',async()=>{
+  const {task,job}=fixture();job.phase='detail';job.status='pending';
+  const deleted=selected(job)[0];let cancelledAfterDelete=false,runner;
+  runner=new Runner(task,{save:async()=>{},update(){},close:async()=>{},
+    enrich:async(value,currentTask,cancelled)=>{
+      products.removeProduct(job,value.id,currentTask);runner.pauseForRefill();
+      cancelledAfterDelete=cancelled?.()===true;
+      return {descriptionText:'deleted late result'};
+    }});
+  await runner.run();
+  assert.equal(cancelledAfterDelete,true);
+  assert.notEqual(deleted.descriptionText,'deleted late result');
+  assert.deepEqual(selected(job).map(i=>i.id),['3']);
+  assert.equal(task.status,'paused');assert.equal(job.refillRequested,true);
+});
+
+test('a removed queued detail is skipped even when selected before the removal',async()=>{
+  const {task,job}=fixture();job.phase='detail';job.status='pending';
+  selected(job)[1].detailStatus='pending';const ids=[];let now=10000;
+  await new Runner(task,{save:async()=>{},update(){},close:async()=>{},wait:async ms=>{now+=ms;},now:()=>now,
+    enrich:async(value)=>{ids.push(value.id);products.removeProduct(job,'3',task);return {attributes:[{name:'材质',value:'棉'}]};}
+  }).enrich(job);
+  assert.deepEqual(ids,['2']);
+});
+
+test('deleting another item for refill does not discard the still-wanted detail in progress',async()=>{
+  const {task,job}=fixture();job.phase='detail';job.status='pending';let runner,wasCancelled;
+  runner=new Runner(task,{save:async()=>{},update(){},close:async()=>{},
+    enrich:async(value,currentTask,cancelled)=>{products.removeProduct(job,'3',currentTask);runner.pauseForRefill();wasCancelled=cancelled();return {attributes:[{name:'材质',value:'棉'}]};}
+  });
+  await runner.run();assert.equal(wasCancelled,false);assert.equal(selected(job)[0].detailStatus,'done');
+});
 test('manual retry and recovery retain exclusions and a persisted refill request', () => {
   const { task, job } = fixture(); products.removeProduct(job, '2');
   const recovered = recoverTask(JSON.parse(JSON.stringify(task)));
