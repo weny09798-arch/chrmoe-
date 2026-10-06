@@ -70,7 +70,7 @@
   }
   const badgePrefix = /^(?:已(?:缴纳|交纳|交付)保证金|好评(?:超|率)?\d+(?:\.\d+)?%?同款|\d+(?:\.\d+)?(?:万|千)?\+?人好评|[\p{L}]{1,12}(?:地区|地方|省|市)?(?:不配送|不可配送|不支持配送)|未发货秒退|(?:券后|立减|补贴|满减)[¥￥]?\d+(?:\.\d+)?(?:元|折)?|(?:本店)?已拼\d+(?:\.\d+)?(?:万|千)?\+?(?:件|人)?|包邮|旗舰店|正品险|退货包运费)[\s·|]*/u;
   function cleanTitle(value) {
-    let title = String(value || '').trim();
+    let title = String(value || '').replace(/[\uE000-\uF8FF]/g, '').trim();
     while (badgePrefix.test(title)) title = title.replace(badgePrefix, '').trim();
     if (title.length < 2 || !/[\p{L}]/u.test(title) || /[¥￥]|^商品(?:主图|图片|图)$/.test(title)) return '';
     return title.slice(0, 300);
@@ -88,6 +88,7 @@
     const candidates = [
       ...(explicit ? [ownText(explicit), ...[...explicit.querySelectorAll('span,div,p')].filter(el => !el.children.length).map(text)] : []),
       ...[...card.querySelectorAll('span,div,p')].filter(el => !el.children.length).map(text),
+      ...[...card.querySelectorAll('span,div,p')].filter(el => visible(el) && !el.querySelector('div,p,h1,h2,h3,h4')).map(text),
       img?.getAttribute('alt'), ownText(card)
     ];
     return candidates.map(cleanTitle).find(title => title && relatedToSearch(title)) || '';
@@ -139,7 +140,7 @@
         return url.href;
       } catch { return ''; }
     };
-    const titleKey = raw => cleanTitle(raw).normalize('NFKC').replace(/\s+/g, '');
+    const titleKey = raw => cleanTitle(raw).normalize('NFKC').replace(/[\s【】]+/g, '');
     const image = imageKey(card.image); if (!image) return '';
     const matches = data.goods.filter(item => typeof item.id === 'string' && /^\d+$/.test(item.id)
       && typeof item.title === 'string' && titleKey(item.title) === titleKey(card.title)

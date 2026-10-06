@@ -13,11 +13,25 @@ async function snapshot(html, keyword='相机', searchData) {
   return new Promise(resolve=>handler({type:'PDD_SNAPSHOT',searchData}, {},resolve));
 }
 
+test('reads the real decorated tooth-brush title container without exporting icons or promotion text',async()=>{
+  const html=await readFile(new URL('./fixtures/pdd-search-decorated-title.html',import.meta.url),'utf8');
+  const title='倍加洁黑白软毛牙刷学生情侣护龈深层清洁成人家庭装高档宿舍家用';
+  const data=await snapshot(html,'牙刷',{url:'https://mobile.pinduoduo.com/search_result.html?search_key=牙刷',goods:[{id:'123',title,images:['https://img.pddpic.com/mms-material-img/2024-05-11/a7bae866-f4f1-4bb1-a101-5634fd19d73d.jpeg']}]});
+  assert.equal(data.cards.length,1);assert.equal(data.cards[0].title.replace(/\s/g,''),title);assert.equal(data.cards[0].id,'123');
+  assert.doesNotMatch(data.cards[0].title,/回头客|疯抢|包邮|[\uE000-\uF8FF]/);
+});
+
 test('loaded search data supplies a unique matching ID without overwriting card price or source link',async()=>{
   const html='<div role="button"><img src="https://img.pddpic.com/a.jpg?imageMogr2/thumbnail/200x"><div>数码相机</div><div>¥32</div></div>';
   const searchData={url:'https://mobile.pinduoduo.com/search_result.html?search_key=相机',goods:[{id:'123',title:'数码相机',images:['https://img.pddpic.com/a.jpg']}]};
   const data=await snapshot(html,'相机',searchData);
   assert.equal(data.cards[0].id,'123');assert.equal(data.cards[0].url,'https://mobile.pinduoduo.com/goods.html?goods_id=123');assert.match(data.cards[0].priceText,/¥32/);
+});
+
+test('associates the observed brand-decorated component name with its actual rendered card',async()=>{
+  const html=await readFile(new URL('./fixtures/pdd-search-decorated-title.html',import.meta.url),'utf8');
+  const data=await snapshot(html,'牙刷',{url:'https://mobile.pinduoduo.com/search_result.html?search_key=牙刷',goods:[{id:'910957227286',title:'【倍加洁】黑白软毛牙刷学生情侣护龈深层清洁成人家庭装高档宿舍家用',images:['https://img.pddpic.com/mms-material-img/2024-05-11/a7bae866-f4f1-4bb1-a101-5634fd19d73d.jpeg']}]});
+  assert.equal(data.cards[0].id,'910957227286');
 });
 
 test('loaded search data rejects mismatched titles, images, ambiguous IDs and another keyword',async()=>{
