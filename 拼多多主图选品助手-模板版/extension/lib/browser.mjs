@@ -264,9 +264,13 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
     const interruptibleWait = async (ms, pause = detailPollWait) => {
       checkCancelled();
       if (!cancelled) return pause(ms);
-      for (let remaining = ms; remaining > 0; remaining -= Math.min(100, remaining)) {
-        await pause(Math.min(100, remaining));
+      for (let remaining = ms; remaining > 0;) {
+        const slice = Math.min(100, remaining), started = Date.now();
+        await pause(slice);
         checkCancelled();
+        // Hidden-page timers may wake much later than requested. Count that time
+        // instead of multiplying the delay across every cancellation-check slice.
+        remaining -= Math.max(slice, Date.now() - started);
       }
     };
     checkCancelled();

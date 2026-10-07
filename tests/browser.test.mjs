@@ -206,6 +206,51 @@ test('detail enrichment retries an empty snapshot until content appears', async 
   } finally { globalThis.chrome = prior; }
 });
 
+for (const tick of [100, 1000, 60000]) {
+  test(`cancellable SKU polling counts real elapsed time when each timer takes ${tick}ms`, async () => {
+    const prior = globalThis.chrome, originalNow = Date.now;
+    let clock = 0;
+    const waits = [];
+    const ready = { goodsId: '123', ready: true, skuPending: false, detailPending: false,
+      detail: { title: '托盘', skus: [{ specs: ['白色'], price: '0.99' }] } };
+    const { chrome, calls } = detailChrome([{ ...ready, ready: false, skuPending: true }, ready]);
+    globalThis.chrome = chrome;
+    Date.now = () => clock;
+    try {
+      const detail = await browserPorts({ save: async () => {}, update() {}, detailPollWait: async ms => {
+        const elapsed = Math.max(tick, ms);
+        waits.push({ requested: ms, elapsed });
+        clock += elapsed;
+      } }).enrich({ id: '123', site: 'pdd' }, {}, () => false);
+      assert.equal(detail.skus[0].cents, 99);
+      assert.equal(calls.messages.length, 2);
+      // There are two 1200ms waits: startup and one SKU polling interval.
+      // A late timer must count toward that interval, rather than schedule eleven more.
+      const wakeupsPerWait = Math.ceil(1200 / tick);
+      assert.equal(waits.length, wakeupsPerWait * 2);
+      assert.equal(clock, wakeupsPerWait * tick * 2);
+      assert.deepEqual(calls.removed, [99]);
+    } finally { globalThis.chrome = prior; Date.now = originalNow; }
+  });
+}
+
+test('late polling wakeup still checks deletion before another SKU snapshot', async () => {
+  const prior = globalThis.chrome, originalNow = Date.now;
+  let clock = 0, cancelled = false;
+  const { chrome, calls } = detailChrome([{ goodsId: '123', skuPending: true, detailPending: false,
+    detail: { title: '托盘', skus: [] } }]);
+  globalThis.chrome = chrome;
+  Date.now = () => clock;
+  try {
+    await assert.rejects(() => browserPorts({ save: async () => {}, update() {}, detailPollWait: async () => {
+      clock += 60000;
+      if (calls.messages.length) cancelled = true;
+    } }).enrich({ id: '123', site: 'pdd' }, {}, () => cancelled), error => error.cancelled === true);
+    assert.equal(calls.messages.length, 1);
+    assert.deepEqual(calls.removed, [99]);
+  } finally { globalThis.chrome = prior; Date.now = originalNow; }
+});
+
 test('cancels detail waiting promptly and closes the tab without another SKU snapshot',async()=>{
   const prior=globalThis.chrome;let cancelled=false;const waits=[];
   const {chrome,calls}=detailChrome([{goodsId:'123',ready:false,skuPending:true,detailPending:false,detail:{title:'商品',skus:[]}}]);globalThis.chrome=chrome;
