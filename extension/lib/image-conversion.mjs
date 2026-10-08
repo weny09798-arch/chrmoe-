@@ -226,7 +226,6 @@ export class ConversionController {
   async start(task, outputDir = this.outputDir, collecting = false, options = {}) {
     if (collecting || !task || !['done','stopped','error','short'].includes(task.status)) throw new Error('请先停止采集或等待采集结束，再开始图片转换。');
     if (this.working || (this.job && !['completed','done'].includes(this.job.status))) throw new Error('请先处理当前图片批次。');
-    if (!outputDir) throw new Error('请先选择本地保存文件夹。');
     const imageKinds = Object.freeze([...new Set(options.imageKinds ?? ['main','detail','sku'])]);
     if (!imageKinds.length) throw new Error('请至少选择一种图片类型。');
     const provider = options.provider ?? 'doubao', paidConfirmed = options.paidConfirmed === true;
@@ -249,9 +248,10 @@ export class ConversionController {
           if (capabilities.aliyun_configured !== true) throw new Error('请先在本地工具配置阿里云密钥，再刷新配置状态。');
         }
         if (capabilities?.image_link_replacement !== true) throw new Error('本地工具需升级到支持 OSS 图片链接自动替换的版本。');
+        if (capabilities.cloud_image_storage !== true) throw new Error('本地工具需升级到 1.6.3 或更新版本，才能直接保存到 OSS。');
         if (capabilities.oss_configured !== true) throw new Error('请先在本地工具配置 OSS，再刷新配置状态。');
         if (!this.current(epoch)) return;
-        snapshot = await this.client.request('jobs', { body: { source_task_id: sourceTaskId, output_dir: outputDir, entries, provider, image_kinds:imageKinds, paid_confirmed:paidConfirmed }, connection });
+        snapshot = await this.client.request('jobs', { body: { source_task_id: sourceTaskId, cloud_only:true, entries, provider, image_kinds:imageKinds, paid_confirmed:paidConfirmed }, connection });
       }
       finally { if (this.current(epoch)) this.pendingSource = null; }
       if (!this.current(epoch)) {

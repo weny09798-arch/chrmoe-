@@ -24,7 +24,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
   function selection(task) {
     const entries = buildImageManifest(task, imageKinds);
     const unique = new Set(entries.map(entry => entry.url)).size;
-    return { entries, count:entries.length, unique, amount:unique * 0.06, signature:JSON.stringify([task?.id,provider,imageKinds,controller.outputDir,entries]) };
+    return { entries, count:entries.length, unique, amount:unique * 0.06, signature:JSON.stringify([task?.id,provider,imageKinds,entries]) };
   }
   function displayedSelection(task) {
     const job = controller.job, pending = controller.pendingSource;
@@ -69,7 +69,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
       for (const ref of item.refs || []) refs.append(node('p', `${ref.platform} · ${ref.product_id} · ${ref.title} · ${KIND[ref.kind] || ref.kind} ${ref.order}${ref.sku ? ` · ${ref.sku}` : ''}`, 'muted'));
       row.append(refs);
       const controls = node('div', '', 'actions'), previews = node('div', '', 'conversion-previews');
-      for (const [kind, label, available] of [['original','预览原图',Boolean(item.input_path)], ['result','预览结果',Boolean(item.result?.output_path || item.result_path)]]) {
+      for (const [kind, label, available] of [['original','预览原图',Boolean(item.input_path)], ['result','预览结果',Boolean(item.result?.public_url || item.result?.output_path || item.result_path)]]) {
         const button = node('button', label, 'button'); button.type = 'button'; button.disabled = !available;
         const figure = node('figure', ''), caption = node('figcaption', label.slice(2)); figure.hidden = true; figure.append(caption); previews.append(figure);
         button.addEventListener('click', () => void run(async () => {
@@ -109,8 +109,8 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     const chosen = displayedSelection(task), allEntries = chosen.frozen ? chosen.entries : buildImageManifest(task);
     if (!chosen.frozen) quoteSignature = chosen.signature;
     $('conversion-selection').textContent = allEntries ? `${Object.entries(KIND).map(([kind,label]) => `${label} ${allEntries.filter(entry => entry.kind === kind).length}`).join(' · ')} · 已选 ${chosen.count} 个位置 · 独立 URL ${chosen.unique}` : chosen.count === null ? '本批清单正在恢复，图片数量和费用待本地快照确认。' : `本批已选 ${chosen.count} 个位置 · 独立 URL 待恢复`;
-    const ossReady = capabilities?.image_link_replacement === true && capabilities.oss_configured === true;
-    const ossStatus = !connected ? '连接本地工具后可查询 OSS 和阿里云配置状态。' : !capabilities ? '请刷新配置状态。' : capabilities.image_link_replacement !== true ? '请升级本地工具，以支持 OSS 图片链接自动替换。' : capabilities.oss_configured !== true ? '请在本地工具配置 OSS，返回后点击“刷新配置状态”。' : 'OSS 已配置，上传成功的图片将自动替换商品 Excel 链接。';
+    const ossReady = capabilities?.image_link_replacement === true && capabilities.cloud_image_storage === true && capabilities.oss_configured === true;
+    const ossStatus = !connected ? '连接本地工具后可查询 OSS 和阿里云配置状态。' : !capabilities ? '请刷新配置状态。' : capabilities.image_link_replacement !== true || capabilities.cloud_image_storage !== true ? '请升级本地工具到 1.6.3 或更新版本，以支持图片直接保存到 OSS。' : capabilities.oss_configured !== true ? '请在本地工具配置 OSS，返回后点击“刷新配置状态”。' : 'OSS 已配置，上传成功的图片将自动替换商品 Excel 链接。';
     $('conversion-provider-status').textContent = ossStatus + (ossReady ? !capabilities.providers?.includes('aliyun') ? ' 阿里云付费模式需要升级本地工具。' : capabilities.aliyun_configured === true ? ' 阿里云密钥已在本机配置（尚未验证云端服务）。' : ' 请在本地工具配置阿里云密钥，返回后点击“刷新配置状态”。' : '');
     $('conversion-settings').hidden = !connected;
     if (connected) $('conversion-settings').setAttribute('href',`${client.connection.baseUrl}/#token=${encodeURIComponent(client.connection.token)}`);
@@ -122,15 +122,13 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     $('conversion-connected').textContent = connected ? '本地工具已连接' : '未连接';
     $('conversion-connect').disabled = working || !controller.canReconnect();
     $('conversion-forget').hidden = !state.canForget; $('conversion-forget').disabled = working;
-    $('conversion-folder').disabled = !connected || working || Boolean(job && !['completed','done'].includes(job.status));
     $('conversion-login').disabled = !connected || working;
     $('conversion-login').hidden = paid;
     $('conversion-start').textContent = paid ? chosen.amount === null ? '付费开始转换（费用待恢复）' : `付费开始转换（上限 ¥${chosen.amount.toFixed(2)}）` : '开始图片转换（豆包免费）';
-    $('conversion-start').disabled = !extensionId || !connected || !ossReady || working || !state.outputDir || collecting || !task || !['done','stopped','error','short'].includes(task.status) || frozen || !chosen.count || (paid && (!capabilities?.providers?.includes('aliyun') || capabilities.aliyun_configured !== true));
+    $('conversion-start').disabled = !extensionId || !connected || !ossReady || working || collecting || !task || !['done','stopped','error','short'].includes(task.status) || frozen || !chosen.count || (paid && (!capabilities?.providers?.includes('aliyun') || capabilities.aliyun_configured !== true));
     $('conversion-stop').disabled = working || !job || ['completed','done','paused','stopped'].includes(job.status);
     $('conversion-continue').disabled = working || !job || !['paused','stopped','blocked'].includes(job.status);
-    $('conversion-output').textContent = state.outputDir || '尚未选择文件夹';
-    $('conversion-status').textContent = job ? `${STATUS[job.status] || job.status} · ${job.provider === 'aliyun' ? '阿里云付费' : '豆包免费'} · ${(job.image_kinds || ['main','detail','sku']).map(kind => KIND[kind]).join('、')} · 付费请求 ${job.paid_calls || 0}${job.provider === 'aliyun' ? '（包含不确定请求，以实际账单为准）' : ''}${job.browser_message ? ` · ${job.browser_message}` : ''}` : collecting || (task && !['done','stopped','error','short'].includes(task.status)) ? '请先停止采集或等待采集结束' : connected ? '已连接，选择保存文件夹后开始转换' : '等待连接本地工具';
+    $('conversion-status').textContent = job ? `${STATUS[job.status] || job.status} · ${job.provider === 'aliyun' ? '阿里云付费' : '豆包免费'} · ${(job.image_kinds || ['main','detail','sku']).map(kind => KIND[kind]).join('、')} · 付费请求 ${job.paid_calls || 0}${job.provider === 'aliyun' ? '（包含不确定请求，以实际账单为准）' : ''}${job.browser_message ? ` · ${job.browser_message}` : ''}` : collecting || (task && !['done','stopped','error','short'].includes(task.status)) ? '请先停止采集或等待采集结束' : connected ? '已连接，图片将保存到 OSS' : '等待连接本地工具';
     const counts = job?.counts || {};
     const replacedKeys = new Set(matchingImageReplacements(task,task?.imageReplacements).map(imagePositionKey)), exportManifest = buildImageManifest(task);
     const replaced = exportManifest.filter(ref => replacedKeys.has(imagePositionKey(ref))).length, total = exportManifest.length;
@@ -146,7 +144,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
       for (const button of row.querySelectorAll('[data-conversion-action]')) {
         const retry = button.dataset.conversionAction === 'retry';
         const uploadRetry = button.dataset.conversionAction === 'retry-upload';
-        const canUploadRetry = item?.phase === 'upload-failed' && Boolean(item.result?.output_path || item.result_path);
+        const canUploadRetry = item?.phase === 'upload-failed' && Boolean(item.result?.public_url || item.result?.output_path || item.result_path);
         if (retry) { button.textContent = label || '无需重试'; button.hidden = !label; }
         if (uploadRetry) button.hidden = !canUploadRetry;
         button.disabled = working || !['paused','stopped','blocked','completed','done'].includes(job?.status) || !['failed','needs-review','paused','completed'].includes(item?.status) || (retry && !label) || (uploadRetry && !canUploadRetry);
@@ -160,7 +158,6 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     await connecting;
     if (controller.current(epoch) && client.connection) { $('conversion-code').value = ''; message('已连接本地工具。'); }
   }));
-  $('conversion-folder').addEventListener('click', () => void run(() => controller.chooseFolder()));
   $('conversion-refresh-config').addEventListener('click', () => { if (!$('conversion-refresh-config').disabled) void run(() => controller.refreshCapabilities()); });
   for (const kind of Object.keys(KIND)) $('conversion-kind-'+kind).addEventListener('change', () => {
     if (!$('conversion-kind-'+kind).disabled) imageKinds = Object.keys(KIND).filter(kind => $('conversion-kind-'+kind).checked);

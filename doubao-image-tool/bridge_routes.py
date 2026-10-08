@@ -5,6 +5,7 @@ from pathlib import Path
 from flask import request, jsonify, send_file
 from folder_picker import choose_folder
 from prompts import build_prompt
+from cloud_images import image_response
 
 EXTENSION_ID = re.compile(r'[a-p]{32}\Z')
 ALLOWED_HEADERS = {'content-type', 'x-tool-token', 'x-extension-id'}
@@ -95,7 +96,7 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
 
     @app.get('/api/bridge/capabilities')
     def capabilities():
-        return jsonify(version='1.6.2',providers=['doubao','aliyun'],image_kinds=['main','detail','sku'],
+        return jsonify(version='1.6.3',cloud_image_storage=True,providers=['doubao','aliyun'],image_kinds=['main','detail','sku'],
                        **(credential_status() if credential_status else {'aliyun_configured':False,'aliyun_price_per_image':0.06}))
 
     @app.post('/api/bridge/folder')
@@ -107,7 +108,8 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
     @app.post('/api/bridge/jobs', endpoint='bridge_jobs')
     def jobs():
         data = body()
-        output = output_folder(data.get('output_dir'))
+        cloud_only=data.get('cloud_only') is True or 'output_dir' not in data
+        output = None if cloud_only else output_folder(data.get('output_dir'))
         source = data.get('source_task_id')
         if not isinstance(source, str) or not source.strip() or len(source) > 200: raise ValueError('采集任务编号无效')
         if not isinstance(data.get('entries'), list): raise ValueError('图片清单无效')
@@ -116,7 +118,7 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
             if queue.snapshot()['status'] not in {'idle', 'completed'}:
                 raise RuntimeError('本机工具有未完成任务，请先在工具页面处理或清空')
             queue.start_urls(data['entries'], output, build_prompt(), source,
-                             provider=data.get('provider','doubao'),image_kinds=data.get('image_kinds'),paid_confirmed=data.get('paid_confirmed') is True)
+                             provider=data.get('provider','doubao'),image_kinds=data.get('image_kinds'),paid_confirmed=data.get('paid_confirmed') is True,cloud_only=cloud_only)
             return jsonify(queue.snapshot())
 
     @app.get('/api/bridge/state', endpoint='bridge_state')
@@ -156,8 +158,6 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
             snap = owned(job)
             try:
                 item = snap['items'][index]
-                path = item.get('input_path') if kind == 'original' else (item.get('result') or {}).get('output_path') if kind == 'result' else None
-                if not path or not Path(path).is_file(): return jsonify(error='图片尚未保存'), 404
-                return send_file(path)
+                return image_response(snap,item,kind)
             except (IndexError,KeyError,TypeError):
                 return jsonify(error='图片不存在'), 404

@@ -58,12 +58,13 @@ function render(){
   view.detail.textContent=`${phases[item.phase]||item.phase} · ${item.status==='running'||item.phase==='pending'?state.browser_stage:''} ${item.message||''}`;
   if(item.result){
    if(!view.resultImage){const figure=node('figure');const img=node('img');img.alt='转换结果';figure.append(node('figcaption','转换结果'),img);view.pair.append(figure);view.resultFigure=figure;view.resultImage=img;}
-   if(view.resultVersion!==item.result.output_path){
-    view.resultVersion=item.result.output_path;
-    view.resultImage.src=imageUrl(item.index,'result')+`&version=${encodeURIComponent(item.result.output_path)}`;
+   const resultVersion=item.result.public_url||item.result.output_path;
+   if(view.resultVersion!==resultVersion){
+    view.resultVersion=resultVersion;
+    view.resultImage.src=imageUrl(item.index,'result')+`&version=${encodeURIComponent(resultVersion)}`;
     view.link.href=view.resultImage.src;
    }
-   view.link.hidden=false;view.path.textContent=item.result.output_path;
+   view.link.hidden=false;view.path.textContent=item.result.public_url ? '已保存到 OSS：'+item.result.public_url : item.result.output_path;
   }else{
    if(view.resultFigure)view.resultFigure.remove();
    view.resultFigure=null;view.resultImage=null;view.resultVersion=null;

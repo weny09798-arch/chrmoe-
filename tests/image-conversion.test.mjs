@@ -5,7 +5,7 @@ import { taskSheets, workbookBytes } from '../extension/lib/xlsx.mjs';
 import { buildImageManifest, parseConnectionCode, BridgeClient, ConversionController } from '../extension/lib/image-conversion.mjs';
 
 const image = 'https://img.pddpic.com/main.jpg?size=100';
-const capabilities = { providers:['doubao','aliyun'], image_kinds:['main','detail','sku'], oss_configured:true, image_link_replacement:true, aliyun_configured:true, aliyun_price_per_image:0.06 };
+const capabilities = { providers:['doubao','aliyun'], image_kinds:['main','detail','sku'], oss_configured:true, image_link_replacement:true,cloud_image_storage:true, aliyun_configured:true, aliyun_price_per_image:0.06 };
 function fixture() {
   const task = createTask(['杯']); task.status = 'done';
   task.jobs[0].limit = 1; task.jobs[0].status = 'done';
