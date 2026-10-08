@@ -217,3 +217,21 @@ test('older cloud tool allows unlimited selection but blocks limited selection w
  assert.equal(f.document.getElementById('conversion-start').disabled,true);assert.match(f.document.getElementById('conversion-provider-status').textContent,/1\.6\.4/);
  input.value='';input.dispatchEvent(new f.window.Event('input'));assert.equal(f.document.getElementById('conversion-start').disabled,false);
 });
+
+test('native bad numeric input stays invalid for selected kinds and never submits a paid unlimited batch',async()=>{
+ const f=fixture();await connectFolder(f);f.change('conversion-paid',true);
+ const input=f.document.getElementById('conversion-limit-main');let badInput=false, nativeValue='';
+ // Like Chrome, assigning value programmatically clears the malformed edit.
+ Object.defineProperty(input,'value',{get:()=>nativeValue,set:value=>{nativeValue=value;badInput=false;}});
+ // Chrome exposes incomplete tokens such as 1e as value='' and badInput=true.
+ Object.defineProperty(input,'validity',{get:()=>({badInput})});input.value='';badInput=true;input.dispatchEvent(new f.window.Event('input'));
+ assert.equal(f.document.getElementById('conversion-start').disabled,true);assert.match(f.document.getElementById('conversion-selection').textContent,/数量/);
+ f.click('conversion-start');await tick();assert.equal(f.requests.some(r=>r.url.endsWith('/jobs')),false);
+ f.panel.refresh();assert.equal(f.document.getElementById('conversion-start').disabled,true);
+ // Unchecked malformed input is ignored, and selecting it again restores the error.
+ f.change('conversion-kind-main',false);assert.equal(input.disabled,true);assert.doesNotMatch(f.document.getElementById('conversion-selection').textContent,/数量/);
+ f.change('conversion-kind-main',true);assert.equal(f.document.getElementById('conversion-start').disabled,true);
+ // A genuine cleared input has no native badInput and means unlimited.
+ badInput=false;input.value='';input.dispatchEvent(new f.window.Event('input'));assert.equal(f.document.getElementById('conversion-start').disabled,false);
+ f.click('conversion-start');await tick();const body=JSON.parse(f.requests.find(r=>r.url.endsWith('/jobs')).options.body);assert.deepEqual(body.image_limits,{main:null,detail:null,sku:null});
+});
