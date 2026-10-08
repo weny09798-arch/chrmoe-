@@ -24,7 +24,10 @@ export function createConversionPanel({ document, extensionId, getCollection, on
   let imageKinds = ['main','detail','sku'], provider = 'doubao', quoteSignature = '', batchOptionsSignature = '';
   function selection(task) {
     let limits, entries;
-    try { limits = normalizeImageLimits(imageKinds,imageLimits); entries = buildImageManifest(task, imageKinds,limits); }
+    try {
+      // Number inputs expose malformed native tokens as an empty value.
+      if (imageKinds.some(kind => $('conversion-limit-'+kind).validity?.badInput)) throw new Error('图片数量必须为空（不限）或安全范围内的正整数。');
+      limits = normalizeImageLimits(imageKinds,imageLimits); entries = buildImageManifest(task, imageKinds,limits); }
     catch (error) { return {error:error.message,count:0,unique:0,amount:0,entries:[]}; }
     const unique = new Set(entries.map(entry => entry.url)).size;
     return { entries, limits, availableCounts:imageKindCounts(buildImageManifest(task)), count:entries.length, unique, amount:unique * 0.06, signature:JSON.stringify([task?.id,provider,imageKinds,limits,entries]) };
@@ -106,7 +109,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     const batchSignature = job ? JSON.stringify([job.id,job.provider,job.image_kinds,job.image_limits]) : '';
     if (job && !controller.pendingSource && (frozen || batchSignature !== batchOptionsSignature)) { imageKinds = [...(job.image_kinds || ['main','detail','sku'])]; provider = job.provider || 'doubao'; imageLimits = {...(job.image_limits || {main:null,detail:null,sku:null})}; }
     batchOptionsSignature = batchSignature;
-    for (const kind of Object.keys(KIND)) { $('conversion-kind-'+kind).checked = imageKinds.includes(kind); $('conversion-kind-'+kind).disabled = working || frozen; const input = $('conversion-limit-'+kind); input.value = imageLimits[kind] ?? ''; input.disabled = working || frozen || !imageKinds.includes(kind); }
+    for (const kind of Object.keys(KIND)) { $('conversion-kind-'+kind).checked = imageKinds.includes(kind); $('conversion-kind-'+kind).disabled = working || frozen; const input = $('conversion-limit-'+kind); if (frozen || !input.validity?.badInput) input.value = imageLimits[kind] ?? ''; input.disabled = working || frozen || !imageKinds.includes(kind); }
     $('conversion-paid').checked = provider === 'aliyun'; $('conversion-paid').disabled = working || frozen;
     const paid = provider === 'aliyun', capabilities = state.capabilities;
     const chosen = displayedSelection(task), allEntries = chosen.frozen ? chosen.entries : buildImageManifest(task);
