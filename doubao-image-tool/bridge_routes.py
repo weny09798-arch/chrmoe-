@@ -96,7 +96,7 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
 
     @app.get('/api/bridge/capabilities')
     def capabilities():
-        return jsonify(version='1.6.3',cloud_image_storage=True,providers=['doubao','aliyun'],image_kinds=['main','detail','sku'],
+        return jsonify(version='1.6.4',cloud_image_storage=True,image_type_limits=True,providers=['doubao','aliyun'],image_kinds=['main','detail','sku'],
                        **(credential_status() if credential_status else {'aliyun_configured':False,'aliyun_price_per_image':0.06}))
 
     @app.post('/api/bridge/folder')
@@ -118,7 +118,7 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
             if queue.snapshot()['status'] not in {'idle', 'completed'}:
                 raise RuntimeError('本机工具有未完成任务，请先在工具页面处理或清空')
             queue.start_urls(data['entries'], output, build_prompt(), source,
-                             provider=data.get('provider','doubao'),image_kinds=data.get('image_kinds'),paid_confirmed=data.get('paid_confirmed') is True,cloud_only=cloud_only)
+                             provider=data.get('provider','doubao'),image_kinds=data.get('image_kinds'),image_limits=data.get('image_limits'),paid_confirmed=data.get('paid_confirmed') is True,cloud_only=cloud_only)
             return jsonify(queue.snapshot())
 
     @app.get('/api/bridge/state', endpoint='bridge_state')

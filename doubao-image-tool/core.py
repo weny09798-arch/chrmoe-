@@ -17,6 +17,32 @@ from cloud_images import save_cached_result,clean_cached_images
 
 IMAGE_KINDS = ('main', 'detail', 'sku')
 
+def image_limit_options(image_limits, kinds):
+    if image_limits is None:
+        image_limits = {}
+    if not isinstance(image_limits, dict):
+        raise ValueError('图片数量设置无效')
+    limits = dict.fromkeys(IMAGE_KINDS)
+    for kind in kinds:
+        value = image_limits.get(kind)
+        if value is not None and (type(value) is not int or not 1 <= value <= 9007199254740991):
+            raise ValueError('图片数量必须是正整数（最大 9007199254740991），留空不限')
+        limits[kind] = value
+    return limits
+
+
+def select_image_entries(entries, kinds, limits):
+    selected = []
+    used = dict.fromkeys(IMAGE_KINDS, 0)
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get('kind') not in kinds:
+            continue
+        kind = entry['kind']
+        if limits[kind] is None or used[kind] < limits[kind]:
+            selected.append(entry)
+            used[kind] += 1
+    return selected
+
 def conversion_options(provider, image_kinds):
     if provider not in ('doubao', 'aliyun'): raise ValueError('转换服务无效')
     kinds = list(IMAGE_KINDS) if image_kinds is None else image_kinds
@@ -53,6 +79,7 @@ class QueueService:
             self.job = json.loads(path.read_text(encoding='utf-8'))
             self.job.setdefault('provider', 'doubao')
             self.job.setdefault('image_kinds', list(IMAGE_KINDS))
+            self.job.setdefault('image_limits', dict.fromkeys(IMAGE_KINDS))
             self.job.setdefault('paid_calls', 0)
             self.job.setdefault('estimated_cost_upper', 0)
             for item in self.job['items']:
@@ -116,10 +143,11 @@ class QueueService:
                             estimated_cost_upper=round(len(items)*PRICE_PER_IMAGE,2) if provider=='aliyun' else 0)
             self._persist(); self.cv.notify_all(); return job_id
 
-    def start_urls(self, entries, output_dir, prompt, source_task_id, provider='doubao', image_kinds=None, paid_confirmed=False, cloud_only=False):
+    def start_urls(self, entries, output_dir, prompt, source_task_id, provider='doubao', image_kinds=None, paid_confirmed=False, cloud_only=False, image_limits=None):
         kinds = conversion_options(provider, image_kinds)
+        limits = image_limit_options(image_limits, kinds)
         if not isinstance(entries, list): raise ValueError('图片清单无效')
-        items = build_items([entry for entry in entries if isinstance(entry, dict) and entry.get('kind') in kinds])
+        items = build_items(select_image_entries(entries, kinds, limits))
         if provider == 'aliyun':
             if paid_confirmed is not True: raise ValueError('阿里云转换按 ¥0.06/张计费，请先确认付费')
             if self.aliyun_factory is None: raise ValueError('请先在本机工具配置阿里云 AccessKey')
@@ -141,7 +169,7 @@ class QueueService:
                         'status': 'running', 'output_dir': str(output) if output is not None else None, 'run_dir': str(run), 'cloud_only':bool(cloud_only),
                         'mapping_path': str(run / '图片转换对应记录.json'),
                         'prompt': prompt, 'items': items, 'message': '', 'review_needed': True}
-            self.job.update(provider=provider, image_kinds=kinds, paid_calls=0,
+            self.job.update(provider=provider, image_kinds=kinds, image_limits=limits, paid_calls=0,
                             upload_enabled=publisher is not None,oss_target_id=publisher.target_id if publisher else None,
                             estimated_cost_upper=round(len(items)*PRICE_PER_IMAGE, 2) if provider=='aliyun' else 0)
             self._persist(); self.cv.notify_all(); return job_id
@@ -151,6 +179,7 @@ class QueueService:
             if job_id and (not self.job or job_id != self.job['id']): raise KeyError(job_id)
             state = copy.deepcopy(self.job) if self.job else {'id': None, 'status': 'idle', 'items': [], 'message': ''}
             state.setdefault('provider', 'doubao'); state.setdefault('image_kinds', list(IMAGE_KINDS))
+            state.setdefault('image_limits', dict.fromkeys(IMAGE_KINDS))
             state.setdefault('paid_calls', 0); state.setdefault('estimated_cost_upper', 0)
             for item in state['items']:
                 item.pop('aliyun_result', None)
