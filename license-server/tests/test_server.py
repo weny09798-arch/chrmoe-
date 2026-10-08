@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import sys
 import subprocess
+from threading import Event
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -387,3 +388,96 @@ def test_deployed_layout_without_git_accepts_external_private_state(tmp_path):
                             cwd=deployment, env=environment, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'configured'
+
+
+def run_after_sqlite_lock_wait(app, clock, release_time, operation, monkeypatch):
+    """Hold a real write lock until the worker attempts BEGIN IMMEDIATE."""
+    lock = sqlite3.connect(app.config['DATABASE'], isolation_level=None)
+    lock.execute('BEGIN IMMEDIATE')
+    attempting_lock = Event()
+    original_connect = sqlite3.connect
+
+    def traced_connect(*args, **kwargs):
+        connection = original_connect(*args, **kwargs)
+        connection.set_trace_callback(lambda statement: attempting_lock.set() if statement == 'BEGIN IMMEDIATE' else None)
+        return connection
+
+    with monkeypatch.context() as patch:
+        patch.setattr('licensing.database.sqlite3.connect', traced_connect)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(operation)
+            try:
+                assert attempting_lock.wait(timeout=5), 'Worker never attempted the transaction'
+                clock[0] = release_time
+            finally:
+                lock.commit()
+                lock.close()
+            return future.result(timeout=5)
+
+
+def test_validation_waiting_for_write_lock_denies_at_exact_expiry(tmp_path, monkeypatch):
+    app, clock, _ = setup_server(tmp_path)
+    _, code = create_code(app)
+    call(app, code)
+    clock[0] = NOW + MONTH - 1
+    result = run_after_sqlite_lock_wait(app, clock, NOW + MONTH,
+                                       lambda: app.extensions['licenses'].check(code, DEVICE_A, False), monkeypatch)
+    assert result[0] == 'expired'
+
+
+def test_first_activation_month_starts_after_write_lock_is_acquired(tmp_path, monkeypatch):
+    app, clock, _ = setup_server(tmp_path)
+    _, code = create_code(app)
+    result = run_after_sqlite_lock_wait(app, clock, NOW + 17,
+                                       lambda: app.extensions['licenses'].check(code, DEVICE_A, True), monkeypatch)
+    assert result[0] == 'allowed'
+    assert result[1]['expires_at'] == NOW + 17 + MONTH
+
+
+def test_expired_renewal_uses_time_after_write_lock_wait(tmp_path, monkeypatch):
+    app, clock, _ = setup_server(tmp_path)
+    license_id, code = create_code(app)
+    call(app, code)
+    clock[0] = NOW + MONTH + 1
+    run_after_sqlite_lock_wait(app, clock, NOW + MONTH + 21,
+                              lambda: mutate(app, license_id, 'renew'), monkeypatch)
+    assert call(app, code).get_json()['expires_at'] == NOW + 2 * MONTH + 21
+
+
+def test_response_and_signed_issue_time_follow_rate_limit_lock_wait(tmp_path, monkeypatch):
+    app, clock, key = setup_server(tmp_path)
+    _, code = create_code(app)
+    response = run_after_sqlite_lock_wait(app, clock, NOW + 17, lambda: call(app, code), monkeypatch)
+    assert response.status_code == 200
+    body = response.get_json()
+    payload_bytes = decode(body['credential']['payload'])
+    eddsa.new(key.public_key(), 'rfc8032').verify(payload_bytes, decode(body['credential']['signature']))
+    payload = json.loads(payload_bytes)
+    assert body['server_time'] == NOW + 17
+    assert payload['issued_at'] == NOW + 17
+    assert payload['expires_at'] == NOW + 17 + MONTH
+    assert payload['lease_until'] == NOW + 17 + 86400
+
+
+def test_rate_limit_window_begins_after_write_lock_wait(tmp_path, monkeypatch):
+    app, clock, _ = setup_server(tmp_path)
+    store = app.extensions['licenses']
+    assert run_after_sqlite_lock_wait(app, clock, NOW + 20,
+                                     lambda: store.consume_limit('contention', 'isolated', 1, 60), monkeypatch)
+    clock[0] = NOW + 70
+    assert not store.consume_limit('contention', 'isolated', 1, 60)
+
+
+@pytest.mark.parametrize('path', ['/admin/login', '/admin/create'])
+def test_non_ascii_csrf_is_controlled_rejection(tmp_path, path):
+    app, _, _ = setup_server(tmp_path, PROPAGATE_EXCEPTIONS=False)
+    with app.test_client() as client:
+        if path == '/admin/create':
+            login(client)
+        else:
+            client.get('/admin/login', base_url='https://license.test')
+        response = client.post(path, data={'csrf_token': '非法令牌', 'password': 'a-long-isolated-test-password'}, base_url='https://license.test')
+        assert response.status_code == 400
+        assert app.extensions['licenses'].list() == []
+        if path == '/admin/login':
+            assert client.get('/admin/', base_url='https://license.test').status_code == 302

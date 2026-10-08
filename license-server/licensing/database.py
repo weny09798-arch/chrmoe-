@@ -51,8 +51,8 @@ class LicenseStore:
             return [dict(row) for row in db.execute('SELECT * FROM licenses ORDER BY created_at DESC, id')]
 
     def admin_action(self, license_id, action, note=''):
-        now = int(self.clock())
         with self.transaction() as db:
+            now = int(self.clock())
             row = db.execute('SELECT * FROM licenses WHERE id = ?', (license_id,)).fetchone()
             if row is None:
                 raise KeyError('License not found')
@@ -71,33 +71,34 @@ class LicenseStore:
                 raise ValueError('Unknown administrator action')
 
     def check(self, code, device_hash, activate):
-        now = int(self.clock())
+        """Return status, row and a decision timestamp sampled under the write lock."""
         digest = hashlib.sha256(code.encode()).hexdigest()
         with self.transaction() as db:
+            now = int(self.clock())
             row = db.execute('SELECT * FROM licenses WHERE code_digest = ?', (digest,)).fetchone()
             if row is None:
-                return 'unknown_code', None
+                return 'unknown_code', None, now
             row = dict(row)
             if row['disabled']:
-                return 'disabled', row
+                return 'disabled', row, now
             if row['expires_at'] is not None and now >= row['expires_at']:
-                return 'expired', row
+                return 'expired', row, now
             if not row['device_hash']:
                 if not activate:
-                    return 'unbound', row
+                    return 'unbound', row, now
                 row['device_hash'] = device_hash
                 if row['expires_at'] is None:
                     row['expires_at'] = now + MONTH
                 db.execute('UPDATE licenses SET device_hash = ?, expires_at = ? WHERE id = ?',
                            (device_hash, row['expires_at'], row['id']))
             if row['device_hash'] != device_hash:
-                return 'device_mismatch', row
-            return 'allowed', row
+                return 'device_mismatch', row, now
+            return 'allowed', row, now
 
     def consume_limit(self, category, identity, limit, seconds):
-        now = int(self.clock())
         bucket = category + ':' + hashlib.sha256(identity.encode()).hexdigest()
         with self.transaction() as db:
+            now = int(self.clock())
             # Bound stored identities to the longest active rate window (15 minutes).
             db.execute('DELETE FROM rate_limits WHERE window_start <= ?', (now - 900,))
             row = db.execute('SELECT * FROM rate_limits WHERE bucket = ?', (bucket,)).fetchone()

@@ -22,7 +22,7 @@ def csrf_token():
 
 def check_csrf():
     supplied = request.form.get('csrf_token', '')
-    if not supplied or not hmac.compare_digest(supplied, session.get('csrf', '')):
+    if not re.fullmatch('[A-Za-z0-9_-]{43}', supplied) or not hmac.compare_digest(supplied, session.get('csrf', '')):
         abort(400)
 
 
@@ -63,16 +63,15 @@ def private_response(response):
 @routes.post('/v1/activate')
 @routes.post('/v1/validate')
 def license_request():
-    now = int(current_app.config['CLOCK']())
     if not store().consume_limit('license', request.remote_addr or 'unknown', current_app.config['ACTIVATION_LIMIT'], 60):
-        return jsonify(status='rate_limited', server_time=now, expires_at=None), 429, {'Retry-After': '60'}
+        return jsonify(status='rate_limited', server_time=int(current_app.config['CLOCK']()), expires_at=None), 429, {'Retry-After': '60'}
     body = request.get_json(silent=True)
     if (not isinstance(body, dict) or set(body) != {'code', 'device_hash', 'nonce'}
             or not isinstance(body['code'], str) or not 20 <= len(body['code']) <= 128
             or not isinstance(body['device_hash'], str) or not re.fullmatch('[0-9a-f]{64}', body['device_hash'])
             or not isinstance(body['nonce'], str) or not re.fullmatch('[A-Za-z0-9_-]{16,128}', body['nonce'])):
-        return jsonify(status='bad_request', server_time=now, expires_at=None), 400
-    status, row = store().check(body['code'], body['device_hash'], request.path.endswith('/activate'))
+        return jsonify(status='bad_request', server_time=int(current_app.config['CLOCK']()), expires_at=None), 400
+    status, row, now = store().check(body['code'], body['device_hash'], request.path.endswith('/activate'))
     result = dict(status=status, server_time=now, expires_at=row['expires_at'] if row else None)
     if status == 'allowed':
         result['credential'] = current_app.extensions['signer'].sign(dict(
