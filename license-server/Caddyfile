@@ -1,0 +1,7 @@
+{$LICENSE_HOST} {
+    # Automatic HTTPS. Do not enable request-body/debug/access logging of codes.
+    reverse_proxy app:8000 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}

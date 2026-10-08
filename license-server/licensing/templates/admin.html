@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>License administration</title>
+<h1>Licenses</h1>
+{% if error %}<p role="alert">{{ error }}</p>{% endif %}
+{% if new_code %}<p>Copy this code now. It is displayed only in this response.</p><code id="new-code">{{ new_code }}</code>{% endif %}
+<form method="post" action="{{ url_for('licensing.create') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<label>Note <input name="note" maxlength="2000"></label><button>Create license</button></form>
+<p>Times are UTC Unix seconds. A new license starts on its first activation. Renewal adds exactly 30 days from the later of now or expiry. Unbinding keeps expiry.</p>
+<table><thead><tr><th>ID / code SHA256</th><th>Note</th><th>Device SHA256</th><th>Expiry</th><th>State / actions</th></tr></thead><tbody>
+{% for license in licenses %}<tr>
+<td>{{ license.id }}<br>{{ license.code_digest }}</td><td>{{ license.note }}</td>
+<td>{{ license.device_hash or 'Unbound' }}</td><td>{{ license.expires_at or 'Not activated' }}</td>
+<td>{{ 'Disabled' if license.disabled else 'Enabled' }}
+<form method="post" action="{{ url_for('licensing.action', license_id=license.id, action='note') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input name="note" value="{{ license.note }}" maxlength="2000"><button>Save note</button></form>
+{% for action in ['renew', 'disable', 'enable', 'unbind'] %}
+<form method="post" action="{{ url_for('licensing.action', license_id=license.id, action=action) }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>{{ action }}</button></form>{% endfor %}
+</td></tr>{% endfor %}</tbody></table>
+<form method="post" action="{{ url_for('licensing.logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Sign out</button></form>
+</html>

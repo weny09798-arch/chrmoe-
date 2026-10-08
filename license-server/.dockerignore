@@ -1,0 +1,14 @@
+**/__pycache__
+**/.pytest_cache
+tests
+.venv
+.env*
+data
+private
+secrets
+**/*.pem
+**/*.key
+**/*.sqlite*
+**/*.db*
+**/config.json
+**/*admin*.json
