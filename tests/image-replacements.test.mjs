@@ -92,3 +92,18 @@ test('upload retry sends retry-upload while retaining the local completed image'
   await f.controller.poll();await f.controller.action('retry-upload',0);
   assert.deepEqual(f.requests.at(-1).body,{job_id:'batch',source_task_id:'source',action:'retry-upload',index:0});assert.equal(f.controller.job.items[0].result.output_path,'D:\\图片\\done.png');
 });
+
+test('limited batch accepts only selected published positions in XLSX and XLS while preserving prior overlays',async()=>{
+ const task=fixture(), all=buildImageManifest(task), prior=all.find(ref=>ref.kind==='sku'&&ref.order===2);
+ mergeImageReplacements(task,[{...prior,published_url:'https://bucket.oss-cn-shanghai.aliyuncs.com/old.png'}]);
+ let snapshot={id:'limited',kind:'collector',source_task_id:task.id,status:'paused',items:[]};
+ const client=new BridgeClient({extensionId:'extension',storage:null,fetch:async url=>response(url.endsWith('/capabilities')?{...caps,image_type_limits:true}:url.endsWith('/jobs')||url.includes('/state')?snapshot:{})});
+ const controller=new ConversionController({client,getTask:()=>task,onReplacements:async(_,refs)=>mergeImageReplacements(task,refs)});
+ await controller.connect('http://localhost:53121/#token=test');await controller.start(task,'',false,{imageLimits:{main:1,detail:1,sku:1}});
+ snapshot={...controller.job,status:'completed',items:[{status:'completed',refs:all.map(ref=>({...ref,published_url:published}))}]};await controller.poll();
+ for(const bytes of [workbookBytes(taskSheets(task)),workbookXlsBytes(taskSheets(task),XLSX)]){
+  const sheet=XLSX.read(bytes,{type:'array'}).Sheets['模版'];
+  assert.equal(sheet.D10.v,published+'，https://img.example/b.jpg');assert.equal(sheet.D12.v,original);
+  assert.equal(sheet.I10.v,published);assert.equal(sheet.S10.v,published);assert.equal(sheet.S11.v,'https://bucket.oss-cn-shanghai.aliyuncs.com/old.png');
+ }
+});

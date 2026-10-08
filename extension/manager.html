@@ -47,7 +47,8 @@
           <div class="input-group"><input id="conversion-code" type="password" placeholder="从本地工具复制完整连接码" autocomplete="off" spellcheck="false"><button id="conversion-connect" class="button" type="button">连接工具</button></div>
           <button id="conversion-forget" class="button subtle" type="button" hidden>忘记旧批次，使用新连接（保留采集商品）</button>
           <p class="muted">每次运行先打开本地图片工具，复制连接码后粘贴。连接信息只保存在当前管理页会话。</p>
-          <fieldset class="conversion-options"><legend>转换图片类型</legend><label><input id="conversion-kind-main" type="checkbox" checked> 主图</label><label><input id="conversion-kind-detail" type="checkbox" checked> 详情图</label><label><input id="conversion-kind-sku" type="checkbox" checked> SKU 图</label></fieldset>
+          <fieldset class="conversion-options"><legend>转换图片类型</legend><label><input id="conversion-kind-main" type="checkbox" checked> 主图</label><label>数量 <input id="conversion-limit-main" type="number" min="1" step="1" placeholder="不限" aria-label="主图数量" style="width:6em"></label><label><input id="conversion-kind-detail" type="checkbox" checked> 详情图</label><label>数量 <input id="conversion-limit-detail" type="number" min="1" step="1" placeholder="不限" aria-label="详情图数量" style="width:6em"></label><label><input id="conversion-kind-sku" type="checkbox" checked> SKU 图</label><label>数量 <input id="conversion-limit-sku" type="number" min="1" step="1" placeholder="不限" aria-label="SKU 图数量" style="width:6em"></label></fieldset>
+          <p class="muted">数量留空表示不限；各类型按整批商品顺序选取前 N 个图片位置，相同 URL 也占数量，生成时再去重。未选位置保留原图或此前已替换链接。</p>
           <p id="conversion-selection" class="muted" aria-live="polite"></p>
           <label class="conversion-paid-option"><input id="conversion-paid" type="checkbox"> 使用阿里云付费图片翻译（未勾选使用豆包免费模式）</label>
           <p id="conversion-provider-status" class="muted" role="status" aria-live="polite"></p>

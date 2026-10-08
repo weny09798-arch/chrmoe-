@@ -89,12 +89,12 @@ test('reload preserves owned products so deletion and global clear cancel before
     assert.equal(reloaded(f,fetch).job,null);
   }
 });
-test('owned session handle contains only unique product identities and removes synchronously even when cancel fails',async()=>{
+test('owned session handle preserves unique product identities and frozen batch metadata and removes synchronously even when cancel fails',async()=>{
   const pending=deferred(), task=fixture();
   const fetch=async(url)=>url.endsWith('/action')?pending.promise:response(url.endsWith('/jobs')?{id:'job-1',kind:'collector',source_task_id:task.id,status:'running',items:[]}:{});
   const f=setup(fetch);await f.controller.connect('http://localhost:53121/#token=secret');await f.controller.start(task,'D:\\图片',false);
   const handle=[...f.saved.values()].map(value=>JSON.parse(value)).find(value=>value.job_id);
-  assert.deepEqual(handle,{job_id:'job-1',source_task_id:task.id,products:[{platform:'pdd',product_id:'101'},{platform:'1688',product_id:'202'},{platform:'taobao',product_id:'303'}]});
+  assert.deepEqual({job_id:handle.job_id,source_task_id:handle.source_task_id,products:handle.products},{job_id:'job-1',source_task_id:task.id,products:[{platform:'pdd',product_id:'101'},{platform:'1688',product_id:'202'},{platform:'taobao',product_id:'303'}]});
   const controller=reloaded(f,fetch), clearing=controller.clear();
   assert.equal(reloaded(f,fetch).job,null);
   pending.resolve({ok:false,status:409});await clearing;
@@ -319,4 +319,41 @@ test('reconnection keeps original snapshot until capabilities and owned job both
   reconnecting=true;const connecting=f.controller.connect('http://localhost:54121/#token=new');await new Promise(resolve=>setImmediate(resolve));
   assert.equal(f.controller.job.paid_calls,1);await f.controller.clear();pending.resolve(response(capabilities));await connecting;
   assert.equal(f.controller.job,null);assert.equal(f.client.connection.token,'old');
+});
+
+test('per-kind limits select first positions globally before URL dedup for all seven kind combinations',()=>{
+ const task=fixture(), all=buildImageManifest(task), kinds=['main','detail','sku'];
+ for(let mask=1;mask<8;mask++){
+  const selected=kinds.filter((_,i)=>mask&(1<<i)), counts={};
+  const expected=all.filter(ref=>selected.includes(ref.kind)&&(counts[ref.kind]=(counts[ref.kind]||0)+1)<=({main:2,detail:1,sku:1}[ref.kind]));
+  assert.deepEqual(buildImageManifest(task,selected,{main:2,detail:1,sku:1}),expected);
+ }
+});
+test('selected invalid limits reject while unchecked limits are ignored and blanks are unlimited',()=>{
+ for(const value of [0,-1,1.5,Number.MAX_SAFE_INTEGER+1,'no']) assert.throws(()=>buildImageManifest(fixture(),['main'],{main:value}),/数量/);
+ assert.deepEqual(buildImageManifest(fixture(),['main'],{main:'',detail:-1}),buildImageManifest(fixture(),['main']));
+});
+test('limited controller submissions freeze limits and original available counts and recover ownership',async()=>{
+ const task=fixture(), bodies=[], f=setup(async(url,options)=>{if(url.endsWith('/capabilities'))return response({...capabilities,image_type_limits:true});if(url.endsWith('/jobs')){bodies.push(JSON.parse(options.body));return response({id:'limited',kind:'collector',source_task_id:task.id,status:'paused',items:[]});}return response({});});
+ await f.controller.connect('http://localhost:53121/#token=x');
+ const limits={main:2,detail:1,sku:1};await f.controller.start(task,'',false,{imageLimits:limits});limits.main=99;
+ assert.deepEqual(bodies[0].image_limits,{main:2,detail:1,sku:1});assert.equal(bodies[0].entries.length,4);
+ const restored=reloaded(f,async()=>response({...f.controller.job,items:[]}));
+ assert.deepEqual(restored.job.image_limits,{main:2,detail:1,sku:1});assert.deepEqual(restored.availableCounts,{main:4,detail:1,sku:3});assert.equal(restored.entries.length,4);
+});
+test('limits capability only gates limited new batches',async()=>{
+ const task=fixture(), f=setup(async url=>response(url.endsWith('/jobs')?{id:'old',kind:'collector',source_task_id:task.id,status:'completed',items:[]}:capabilities));await f.controller.connect('http://localhost:53121/#token=x');
+ await assert.rejects(f.controller.start(task,'',false,{imageLimits:{main:1}}),/1\.6\.4|升级/);
+ await f.controller.start(task,'',false);assert.equal(f.controller.job.id,'old');
+});
+
+test('paid pending limit snapshot ignores option and source mutations through submission and resume',async()=>{
+ const task=fixture(), pending=deferred(), bodies=[];let hold=false;
+ const f=setup(async(url,options)=>{if(url.endsWith('/capabilities'))return hold?pending.promise:response({...capabilities,image_type_limits:true});if(url.endsWith('/jobs')){bodies.push(JSON.parse(options.body));return response({id:'frozen',kind:'collector',source_task_id:task.id,status:'paused',items:[]});}if(url.endsWith('/action'))return response({...f.controller.job,status:'running',items:[]});return response({});});
+ await f.controller.connect('http://localhost:53121/#token=x');hold=true;
+ const limits={main:2}, kinds=['main'], starting=f.controller.start(task,'',false,{imageKinds:kinds,imageLimits:limits,provider:'aliyun',paidConfirmed:true});
+ assert.deepEqual(f.controller.pendingSource.availableCounts,{main:4,detail:1,sku:3});limits.main=4;kinds.push('sku');task.jobs[0].groups[1].best.galleryImages.push('https://img.pddpic.com/later.jpg');
+ pending.resolve(response({...capabilities,image_type_limits:true}));await starting;
+ assert.deepEqual(bodies[0].image_limits,{main:2,detail:null,sku:null});assert.equal(bodies[0].entries.length,2);assert.deepEqual(bodies[0].image_kinds,['main']);
+ await f.controller.action('continue');assert.deepEqual(f.controller.job.image_limits,{main:2,detail:null,sku:null});assert.equal(f.controller.entries.length,2);
 });

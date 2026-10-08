@@ -30,7 +30,7 @@ function fixture({configured=true,ossConfigured=true,replacement=true,cloudStora
     return {id:'job-1',kind:'collector',source_task_id:task.id,status,provider:batch.provider||'doubao',image_kinds:batch.image_kinds||['main','detail','sku'],paid_calls:batch.provider==='aliyun'?1:0,estimated_cost_upper:batch.provider==='aliyun'?groups.size*0.06:0,counts:{total:entries.length,unique:groups.size,downloaded:groups.size,converted:0,failed:1},items:[...groups.values()].map((refs,index)=>({index,...itemState,input_path:'input.png',refs}))};
   };
   const panel=createConversionPanel({document,extensionId:'test-extension',storage:{getItem:key=>saved.get(key),setItem:(key,val)=>saved.set(key,val),removeItem:key=>saved.delete(key)},getCollection:()=>({task,collecting,unavailable:false}),
-    fetch:async(url,options)=>{requests.push({url,options});if(fetchOverride)return fetchOverride(url,options);const body=options.body&&JSON.parse(options.body);let value={};if(url.endsWith('/capabilities'))value={providers:['doubao','aliyun'],oss_configured:ossConfigured,image_link_replacement:replacement,cloud_image_storage:cloudStorage,aliyun_configured:configured,aliyun_price_per_image:0.06};if(url.endsWith('/folder'))value={path:'D:\\图片'};if(url.endsWith('/jobs'))batch=body;if(url.endsWith('/jobs')||url.includes('/state'))value=snapshot();if(url.endsWith('/action')){actions.push(body);if(body.action==='continue')status='running';if(body.action==='stop')status='paused';value=snapshot();}return {ok:true,json:async()=>value,blob:async()=>new Blob(['preview'])};},
+    fetch:async(url,options)=>{requests.push({url,options});if(fetchOverride)return fetchOverride(url,options);const body=options.body&&JSON.parse(options.body);let value={};if(url.endsWith('/capabilities'))value={providers:['doubao','aliyun'],oss_configured:ossConfigured,image_link_replacement:replacement,cloud_image_storage:cloudStorage,image_type_limits:true,aliyun_configured:configured,aliyun_price_per_image:0.06};if(url.endsWith('/folder'))value={path:'D:\\图片'};if(url.endsWith('/jobs'))batch=body;if(url.endsWith('/jobs')||url.includes('/state'))value=snapshot();if(url.endsWith('/action')){actions.push(body);if(body.action==='continue')status='running';if(body.action==='stop')status='paused';value=snapshot();}return {ok:true,json:async()=>value,blob:async()=>new Blob(['preview'])};},
     setTimer:callback=>{timers.push(callback);return timers.length;},clearTimer:()=>{},download:async()=>{},confirm
   });
   const click=id=>document.getElementById(id).dispatchEvent(new window.Event('click'));
@@ -196,4 +196,24 @@ test('panel disables conversion while collection is active and clear removes old
   for(const callback of oldTimers)callback();await tick();
   assert.equal(f.requests.length,count);assert.equal(f.document.querySelectorAll('.conversion-item').length,0);
   assert.equal(f.panel.controller.job,null);
+});
+
+test('limit inputs validate selected kinds, quote the same selected manifest and freeze available counts',async()=>{
+ const f=fixture(), item=f.task.jobs[0].groups[0].best;item.galleryImages=[item.image,item.image,'https://img.pddpic.com/b.jpg'];item.detailImages=[item.image];item.skus=[{image:item.image},{image:'https://img.pddpic.com/s.jpg'}];
+ await connectFolder(f);
+ const input=f.document.getElementById('conversion-limit-main');assert.ok(input);
+ input.value='0';input.dispatchEvent(new f.window.Event('input'));assert.equal(f.document.getElementById('conversion-start').disabled,true);assert.match(f.document.getElementById('conversion-selection').textContent,/数量/);
+ f.change('conversion-kind-main',false);assert.equal(input.disabled,true);assert.equal(f.document.getElementById('conversion-start').disabled,false);
+ f.change('conversion-kind-main',true);input.value='2';input.dispatchEvent(new f.window.Event('input'));
+ const sku=f.document.getElementById('conversion-limit-sku');sku.value='1';sku.dispatchEvent(new f.window.Event('input'));
+ f.change('conversion-paid',true);assert.match(f.document.getElementById('conversion-start').textContent,/0\.06/);
+ assert.match(f.document.getElementById('conversion-selection').textContent,/主图 3.*选中 2.*SKU 图 2.*选中 1.*已选 4/);
+ f.click('conversion-start');await tick();const body=JSON.parse(f.requests.find(r=>r.url.endsWith('/jobs')).options.body);assert.deepEqual(body.image_limits,{main:2,detail:null,sku:1});assert.equal(body.entries.length,4);
+ const before=f.document.getElementById('conversion-selection').textContent;item.galleryImages=[];item.skus=[];f.panel.refresh();assert.equal(f.document.getElementById('conversion-selection').textContent,before);assert.equal(input.disabled,true);
+});
+test('older cloud tool allows unlimited selection but blocks limited selection with upgrade message',async()=>{
+ const f=fixture();await connectFolder(f);f.panel.controller.capabilities.image_type_limits=false;
+ const input=f.document.getElementById('conversion-limit-main');assert.ok(input);input.value='1';input.dispatchEvent(new f.window.Event('input'));
+ assert.equal(f.document.getElementById('conversion-start').disabled,true);assert.match(f.document.getElementById('conversion-provider-status').textContent,/1\.6\.4/);
+ input.value='';input.dispatchEvent(new f.window.Event('input'));assert.equal(f.document.getElementById('conversion-start').disabled,false);
 });
