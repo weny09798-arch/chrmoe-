@@ -8,6 +8,53 @@ import {Runner} from '../extension/lib/runner.mjs';
 const html = await readFile(new URL('../extension/manager.html', import.meta.url), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('manager reload restores owned batch before state fetch so clear cancels while recovery is pending',async()=>{
+  const originalFetch=globalThis.fetch,originalStorage=globalThis.sessionStorage,originalTimer=globalThis.setTimeout;
+  const savedSession=new Map(),requests=[];
+  let resolveState;
+  const state=new Promise(resolve=>{resolveState=resolve;});
+  try {
+    globalThis.sessionStorage={getItem:key=>savedSession.get(key),setItem:(key,value)=>savedSession.set(key,value),removeItem:key=>savedSession.delete(key)};
+    savedSession.set('collector-image-bridge',JSON.stringify({baseUrl:'http://localhost:53121',token:'secret'}));
+    globalThis.setTimeout=()=>1;
+    globalThis.fetch=async(url,options)=>{requests.push({url,body:options.body&&JSON.parse(options.body)});if(url.includes('/state'))return state;return {ok:true,json:async()=>({status:'idle'})};};
+    let taskId;
+    const f=await managerFixture(task=>{
+      taskId=task.id;task.status='stopped';task.jobs[0].status='stopped';task.jobs[0].groups=[{best:{id:'1',title:'相机',image:'https://img.pddpic.com/a.jpg',cents:100}}];
+      savedSession.set('collector-image-owned-job',JSON.stringify({job_id:'job-before-reload',source_task_id:task.id,products:[{platform:'pdd',product_id:'1'}]}));
+    });
+    assert.match(f.document.getElementById('conversion-status').textContent,/恢复/);
+    f.click('clear-all');await tick();await tick();
+    assert.equal(savedSession.has('collector-image-owned-job'),false);
+    assert.deepEqual(requests.map(r=>r.body).filter(Boolean),[{job_id:'job-before-reload',source_task_id:taskId,action:'cancel'}]);
+    resolveState({ok:true,json:async()=>({id:'job-before-reload',kind:'collector',source_task_id:taskId,status:'running',items:[{index:0,refs:[]}],counts:{total:1}})});await tick();await tick();
+    assert.equal(f.document.querySelectorAll('.conversion-item').length,0);assert.equal(f.saved.task,null);
+    assert.equal(savedSession.has('collector-image-owned-job'),false);
+  } finally {resolveState?.({ok:false,status:403});globalThis.fetch=originalFetch;globalThis.sessionStorage=originalStorage;globalThis.setTimeout=originalTimer;}
+});
+
+test('manager clear invalidates converter polls before collection storage clear, even when tool stop is offline', async () => {
+  const originalFetch=globalThis.fetch, originalStorage=globalThis.sessionStorage, originalTimer=globalThis.setTimeout;
+  const requests=[],timers=[];
+  try {
+    globalThis.sessionStorage={getItem:()=>JSON.stringify({baseUrl:'http://localhost:53121',token:'secret'}),setItem:()=>{},removeItem:()=>{}};
+    globalThis.setTimeout=callback=>{timers.push(callback);return timers.length;};
+    globalThis.fetch=async(url,options)=>{
+      requests.push(url);
+      if(url.endsWith('/action'))throw new Error('offline');
+      return {ok:true,json:async()=>url.endsWith('/folder')?{path:'D:\\图片'}:{id:'job-1',kind:'collector',source_task_id:options.body&&JSON.parse(options.body).source_task_id,status:'running',items:[{index:0,status:'queued',refs:[]}],counts:{total:1,unique:1}}};
+    };
+    const f=await managerFixture(task=>{task.status='stopped';task.jobs[0].status='stopped';task.jobs[0].groups=[{best:{id:'1',title:'相机',image:'https://img.pddpic.com/a.jpg',cents:100}}];});
+    f.click('conversion-folder');await tick();f.click('conversion-start');await tick();
+    assert.equal(f.document.querySelectorAll('.conversion-item').length,1);
+    f.click('clear-all');await tick();await tick();
+    assert.equal(f.document.querySelectorAll('.conversion-item').length,0);
+    const count=requests.length;
+    for(const callback of timers)callback();await tick();
+    assert.equal(requests.length,count);assert.equal(f.saved.task,null);
+  } finally {globalThis.fetch=originalFetch;globalThis.sessionStorage=originalStorage;globalThis.setTimeout=originalTimer;}
+});
+
 test('adding a name immediately queues collection and opens the collection tab', async () => {
   const { document, window } = parseHTML(html);
   const saved = { keywords: [], task: null };let tabCreates=0;

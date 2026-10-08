@@ -76,7 +76,7 @@ def test_poll_throttle_does_not_touch_dom_again(tmp_path):
     adapter._signals = lambda: (_ for _ in ()).throw(RuntimeError('DOM read'))
     assert adapter.poll() is None
 
-def test_started_stalled_download_is_cancelled_without_waiting_and_can_retry(tmp_path):
+def test_failed_direct_download_can_retry_without_starting_native_transfer(tmp_path):
     import io
     import time
     from PIL import Image
@@ -119,7 +119,7 @@ def test_started_stalled_download_is_cancelled_without_waiting_and_can_retry(tmp
     start = time.monotonic()
     with pytest.raises(NeedsUser): adapter.poll()
     assert time.monotonic() - start < 1
-    assert download.cancelled
+    assert not download.cancelled
     assert not download.path_called
     assert adapter.pending['identity'] == A
     adapter.context.request.fail = False; adapter._next_poll = 0
@@ -238,7 +238,7 @@ def test_actual_prepare_rejects_each_negative_readiness_condition_before_send(tm
             if failure in {'unloaded', 'progress'}: raise TimeoutError('upload readiness not satisfied')
     adapter = DoubaoBrowser(tmp_path); adapter.page = Page()
     prompt = 'line one  two\n第二行\nthird line'
-    if failure in {None, 'classic', 'persisted-mode', 'hydrating', 'guidance', 'paragraphs'}:
+    if failure in {None, 'classic', 'persisted-mode', 'hydrating', 'guidance', 'paragraphs', 'stale-composer'}:
         adapter.submit(tmp_path / 'a.png', prompt)
         assert sends == ['sent']
         assert adapter.pending is not None
@@ -382,10 +382,14 @@ def test_visible_chrome_launch_enables_os_sandbox(tmp_path, monkeypatch):
     assert launches[0]['headless'] is False
     assert launches[0]['channel'] == 'chrome'
 
-def test_stale_draft_reset_pause_includes_mode_structure_without_deleting_draft(tmp_path, monkeypatch):
+def test_draft_removal_failure_pauses_with_diagnostics_without_exposing_text(tmp_path, monkeypatch):
     clock = [0.0]
     monkeypatch.setattr('browser.time.monotonic', lambda: clock[0])
     class Node:
+        @property
+        def first(self): return self
+        def hover(self, **kwargs): pass
+        def fill(self, value): pass
         def filter(self, **kwargs): return self
         def count(self): return 1
         def click(self, **kwargs): pass
@@ -498,3 +502,92 @@ def test_cancel_gate_prevents_actual_adapter_click(tmp_path):
         adapter.submit(tmp_path/'a.png','convert',reject)
     assert clicks==[]
     assert adapter.pending is None
+def test_draft_reset_removes_leftover_text_and_attachments_using_real_dom(tmp_path):
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as runtime:
+        browser=runtime.chromium.launch(channel='chrome',headless=True,chromium_sandbox=True)
+        try:
+            page=browser.new_page()
+            page.set_content('''<main><div contenteditable="true">old draft</div>
+              <div data-testid="attachment-image-card">old image
+                <button data-testid="attachment-delete-btn" onclick="this.parentElement.remove()">delete</button></div>
+              <div data-testid="attachment-image-card">second image
+                <button data-testid="attachment-delete-btn" onclick="this.parentElement.remove()">delete</button></div>
+              <div data-testid="message_image_content">history stays</div></main>''')
+            adapter=DoubaoBrowser(tmp_path); adapter.page=page
+            main=page.get_by_role('main'); composer=main.locator('[contenteditable="true"]')
+            assert callable(getattr(adapter,'_clear_draft',None)), 'Retry must clear carried draft before uploading'
+            adapter._clear_draft(main,composer)
+            assert composer.inner_text().strip()==''
+            assert main.get_by_test_id('attachment-image-card').count()==0
+            assert main.get_by_test_id('message_image_content').inner_text()=='history stays'
+        finally: browser.close()
+
+def test_download_does_not_click_native_control_before_reading_image(tmp_path):
+    import io
+    from PIL import Image
+    stream=io.BytesIO(); Image.new('RGB',(8,8)).save(stream,'PNG')
+    clicked=[]
+    class Node:
+        def __init__(self,name): self.name=name
+        def is_visible(self): return True
+        def click(self,**kwargs): clicked.append(self.name)
+        def evaluate_all(self,js):
+            full=candidate();full['src']=f'https://example.test/rc_gen_image/{A}.jpeg?cgen=observed';return [full]
+    class Page:
+        def get_by_test_id(self,name):return Node(name)
+        def locator(self,name):return Node(name)
+        def wait_for_function(self,*args,**kwargs):pass
+        def expect_download(self,**kwargs):
+            class Event:
+                def __enter__(self):return self
+                def __exit__(self,*args):return False
+                class value:
+                    @staticmethod
+                    def cancel():pass
+            return Event()
+    class Response:
+        ok=True
+        def body(self):return stream.getvalue()
+    class Request:
+        def get(self,src,timeout):
+            assert not clicked,'Fetching an observed image must not start/cancel a native transfer first'
+            return Response()
+    class Context:request=Request()
+    adapter=DoubaoBrowser(tmp_path);adapter.page=Page();adapter.context=Context()
+    adapter.pending={'baseline':set(),'identity':A}
+    assert adapter._download()==stream.getvalue()
+
+def test_preview_close_failure_cannot_discard_downloaded_bytes(tmp_path):
+    import io
+    from PIL import Image
+    stream=io.BytesIO(); Image.new('RGB',(8,8)).save(stream,'PNG')
+    class Node:
+        def __init__(self,name):self.name=name
+        def is_visible(self):return self.name=='canvas_close_btn'
+        def click(self,**kwargs):raise RuntimeError('preview disappeared')
+        def evaluate_all(self,js):
+            full=candidate();full['src']=f'https://example.test/rc_gen_image/{A}.jpeg?cgen=observed';return [full]
+    class Page:
+        def get_by_test_id(self,name):return Node(name)
+        def locator(self,name):return Node(name)
+        def wait_for_function(self,*args,**kwargs):pass
+    class Response:
+        ok=True
+        def body(self):return stream.getvalue()
+    class Context:
+        class request:
+            @staticmethod
+            def get(src,timeout):return Response()
+    adapter=DoubaoBrowser(tmp_path);adapter.page=Page();adapter.context=Context()
+    adapter.pending={'baseline':set(),'identity':A}
+    assert adapter._download()==stream.getvalue()
+
+def test_closed_browser_pause_explains_recovery_without_resubmitting(tmp_path):
+    adapter=DoubaoBrowser(tmp_path)
+    class Page:
+        def is_closed(self):return True
+    adapter.page=Page();adapter.pending={'baseline':set(),'identity':A}
+    with pytest.raises(NeedsUser,match='专用 Chrome 已关闭'):
+        adapter.poll()
+    assert adapter.pending['identity']==A

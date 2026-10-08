@@ -4,7 +4,13 @@ import importlib.metadata
 import json
 from pathlib import Path
 
-PACKAGES = ['flask','werkzeug','jinja2','markupsafe','itsdangerous','click','blinker','pillow','playwright','pyee','greenlet','typing_extensions','colorama']
+PACKAGES = ['flask','werkzeug','jinja2','markupsafe','itsdangerous','click','blinker','pillow','playwright','pyee','greenlet','typing_extensions','colorama','openpyxl','et-xmlfile']
+PACKAGES += ['alibabacloud-alimt20181012','alibabacloud-tea-openapi','alibabacloud-tea-util',
+    'alibabacloud-credentials','alibabacloud-credentials-api','alibabacloud-endpoint-util',
+    'alibabacloud-openapi-util','alibabacloud-gateway-spi','alibabacloud-tea','alibabacloud-tea-fileform',
+    'alibabacloud-tea-xml','darabonba-core','cryptography','cffi','pycparser','requests','urllib3',
+    'certifi','charset-normalizer','idna','websocket-client','aiofiles','aiohttp','aiohappyeyeballs',
+    'aiosignal','attrs','frozenlist','multidict','propcache','yarl','APScheduler','tzlocal','tzdata']
 def collect(destination):
     destination = Path(destination); destination.mkdir(parents=True, exist_ok=True)
     records=[]

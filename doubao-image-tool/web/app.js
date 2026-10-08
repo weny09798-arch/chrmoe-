@@ -1,15 +1,26 @@
 'use strict';
-const token = new URLSearchParams(location.hash.slice(1)).get('token') || sessionStorage.getItem('doubao-token') || '';
+const suppliedCode = document.getElementById('connection-code').value;
+const token = new URLSearchParams(location.hash.slice(1)).get('token') || sessionStorage.getItem('doubao-token') || (suppliedCode ? new URLSearchParams(new URL(suppliedCode).hash.slice(1)).get('token') : '') || '';
 sessionStorage.setItem('doubao-token', token); history.replaceState(null, '', location.pathname);
 const $ = id => document.getElementById(id);
+$('connection-code').value = `${location.origin}${location.pathname}#token=${encodeURIComponent(token)}`;
+$('copy-code').onclick = async () => {
+ try {
+  if(navigator.clipboard?.writeText) await navigator.clipboard.writeText($('connection-code').value);
+  else { $('connection-code').select(); if(!document.execCommand('copy')) throw new Error('复制失败'); }
+  $('connection-message').textContent='已复制，请粘贴到采集插件';
+ } catch(e) { $('connection-message').textContent='请选中连接码，按 Ctrl+C 复制'; }
+};
 let busy = false, state = null, closed = false;
+let aliyunConfigured = false;
 const cards = new Map();
 let selectedUrls = [];
 const statuses = {idle:'尚未开始',running:'正在处理',stopped:'已停止后续提交',paused:'等待处理',completed:'全部已保存，请逐张检查', 'storage-error':'状态保存失败，必须重新启动'};
-const phases = {ready:'等待提交', submitting:'上传 / 提交',pending:'生成 / 下载',saving:'保存',done:'已保存',uncertain:'提交状态不确定'};
-async function api(path, body) {
+const phases = {downloading:'下载原图', 'download-failed':'原图下载失败', alias:'等待复用结果',ready:'等待提交', 'aliyun-ready':'等待阿里云付费提交', 'aliyun-downloading':'下载已有阿里云结果', 'aliyun-failed':'阿里云图片失败', submitting:'上传 / 提交',pending:'生成 / 下载',saving:'保存',done:'已保存',uncertain:'提交状态不确定'};
+async function api(path, body, method) {
   const opts = {headers:{'X-Tool-Token':token}};
   if (body) {opts.method='POST'; if(body instanceof FormData) opts.body=body; else {opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body);}}
+  if(method)opts.method=method;
   const r = await fetch(path,opts); const data=await r.json(); if(!r.ok) throw new Error(data.error || '操作失败');return data;
 }
 function node(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
@@ -17,11 +28,12 @@ function imageUrl(index,kind){return `/api/images/${encodeURIComponent(state.id)
 function render(){
  const running=state?.status==='running', terminal=state?.status==='storage-error';
  document.querySelectorAll('button').forEach(b=>b.disabled=busy || terminal);
- $('start').disabled=busy||terminal||!$('files').files.length||(state?.id&&state.status!=='completed');
+ $('start').disabled=busy||terminal||!$('files').files.length||(state?.id&&state.status!=='completed')||($('provider').value==='aliyun'&&!aliyunConfigured);
  $('stop').disabled=busy||terminal||!running;
  $('continue').disabled=busy||terminal||!state?.id||running||state.status==='completed'||state.items.some(i=>i.status==='needs-review'||i.phase==='uncertain');
  $('exit').disabled=busy; $('open').disabled=busy||terminal||state?.browser_busy;
- $('status').textContent= (statuses[state?.status]||'')+' · '+(state?.message||'');
+ $('reset').disabled=busy||!state?.id;
+ $('status').textContent= (statuses[state?.status]||'')+' · '+(state?.message||'')+(state?.provider==='aliyun'?` · 付费调用尝试 ${state.paid_calls||0} 次（含不确定请求），预计费用上限 ¥${Number(state.estimated_cost_upper||0).toFixed(2)}`:'');
  $('browser').textContent=state?.browser_message || state?.browser_stage || '';
  const items=state?.items||[]; $('progress').max=Math.max(1,items.length);$('progress').value=items.filter(i=>i.status==='completed').length;
  const keys = new Set();
@@ -30,31 +42,62 @@ function render(){
   let view = cards.get(key);
   if(!view){
    const card=node('article',undefined,'result'), title=node('h3'), detail=node('p'), pair=node('div',undefined,'pair');
-   const original=node('img');original.alt='原图';original.src=imageUrl(item.index,'original');
+   const original=node('img');original.alt='原图';original.hidden=true;
    const originalFigure=node('figure');originalFigure.append(node('figcaption','原图'),original);pair.append(originalFigure);
    const link=node('a','打开结果图片');link.target='_blank';link.rel='noopener';link.hidden=true;
-   const path=node('p',undefined,'path'), redo=node('button');card.append(title,detail,pair,link,path,redo);$('results').append(card);
-   view={card,title,detail,pair,link,path,redo,resultImage:null,resultVersion:null};cards.set(key,view);
+   const path=node('p',undefined,'path'), retry=node('button'), redo=node('button');card.append(title,detail,pair,link,path,retry,redo);$('results').append(card);
+   view={card,title,detail,pair,link,path,retry,redo,original,originalVersion:null,resultFigure:null,resultImage:null,resultVersion:null};cards.set(key,view);
   }
+  if(item.input_path && view.originalVersion!==item.input_path){view.originalVersion=item.input_path;view.original.src=imageUrl(item.index,'original');view.original.hidden=false;}
   view.title.textContent=`${item.index+1} · ${item.name}`;
   view.detail.textContent=`${phases[item.phase]||item.phase} · ${item.status==='running'||item.phase==='pending'?state.browser_stage:''} ${item.message||''}`;
   if(item.result){
-   if(!view.resultImage){const figure=node('figure');const img=node('img');img.alt='转换结果';figure.append(node('figcaption','转换结果'),img);view.pair.append(figure);view.resultImage=img;}
+   if(!view.resultImage){const figure=node('figure');const img=node('img');img.alt='转换结果';figure.append(node('figcaption','转换结果'),img);view.pair.append(figure);view.resultFigure=figure;view.resultImage=img;}
    if(view.resultVersion!==item.result.output_path){
     view.resultVersion=item.result.output_path;
     view.resultImage.src=imageUrl(item.index,'result')+`&version=${encodeURIComponent(item.result.output_path)}`;
     view.link.href=view.resultImage.src;
    }
    view.link.hidden=false;view.path.textContent=item.result.output_path;
+  }else{
+   if(view.resultFigure)view.resultFigure.remove();
+   view.resultFigure=null;view.resultImage=null;view.resultVersion=null;
+   view.link.hidden=true;view.path.textContent='';
   }
-  view.redo.textContent=item.status==='completed'?'单张重做':'明确重试此图';view.redo.disabled=busy||terminal||running;
-  view.redo.onclick=()=>act(item.status==='completed'?'redo':'retry',item.index);
+  view.retry.textContent=['pending','saving','aliyun-downloading'].includes(item.phase)?'继续获取此图':'继续处理此图';
+  view.retry.hidden=item.status==='completed'||item.status==='needs-review'||item.phase==='uncertain'||(state?.provider==='aliyun'&&['submitting','aliyun-failed'].includes(item.phase));
+  view.retry.disabled=busy||terminal||running;
+  view.retry.onclick=()=>act('retry',item.index);
+  view.redo.textContent='重新生成此图';view.redo.disabled=busy||terminal||running;
+  view.redo.onclick=()=>act('redo',item.index);
  }
  for(const [key,view] of cards){if(!keys.has(key)){view.card.remove();cards.delete(key);}}
 
 }
 async function command(fn){busy=true;$('error').textContent='';render();try{state=await fn();}catch(e){$('error').textContent=e.message;}finally{busy=false;render();}}
-function act(action,index){return command(()=>api('/api/action',{action,index}));}
+function act(action,index){
+ const paid=action==='redo'&&state?.provider==='aliyun';
+ if(paid&&!window.confirm('阿里云重新生成会再次按 ¥0.06/张计费，图片将上传阿里云；包装文字仍需逐张检查。确认再次付费？'))return;
+ return command(()=>api('/api/action',{action,index,...(paid?{paid_confirmed:true}:{})}));
+}
+async function refreshCredentials(){
+ const result=await api('/api/aliyun/credentials');aliyunConfigured=result.aliyun_configured===true;
+ $('aliyun-status').textContent=aliyunConfigured?'已配置（¥0.06/张）':'尚未配置，阿里云付费转换不可开始';render();
+}
+$('aliyun-save').onclick=async()=>{
+ busy=true;$('error').textContent='';render();
+ try{await api('/api/aliyun/credentials',{access_key_id:$('aliyun-key-id').value.trim(),access_key_secret:$('aliyun-key-secret').value.trim()});await refreshCredentials();}
+ catch(e){$('error').textContent=e.message;}
+ finally{$('aliyun-key-secret').value='';busy=false;render();}
+};
+$('aliyun-delete').onclick=async()=>{
+ busy=true;$('error').textContent='';render();
+ try{await api('/api/aliyun/credentials',undefined,'DELETE');$('aliyun-key-id').value='';await refreshCredentials();}
+ catch(e){$('error').textContent=e.message;}
+ finally{$('aliyun-key-secret').value='';busy=false;render();}
+};
+$('provider').onchange=render;
+refreshCredentials().catch(e=>{$('error').textContent=e.message;});
 function clearSelected(){for(const url of selectedUrls)URL.revokeObjectURL(url);selectedUrls=[];}
 $('files').onchange=()=>{
  clearSelected();$('selected').replaceChildren();
@@ -63,6 +106,14 @@ $('files').onchange=()=>{
 };
 window.addEventListener('beforeunload',clearSelected);
 $('open').onclick=()=>act('open-browser');$('stop').onclick=()=>act('stop');$('continue').onclick=()=>act('continue');
-$('start').onclick=()=>command(()=>{const form=new FormData();for(const f of $('files').files)form.append('files',f);form.append('output_dir',$('output').value);form.append('extra',$('extra').value);form.append('background',$('background').checked);form.append('typography',$('typography').checked);return api('/api/jobs',form);});
-$('exit').onclick=async()=>{try{await api('/api/exit',{});closed=true;clearSelected();$('error').textContent='';$('status').textContent='工具已关闭，可以关闭此页面';document.querySelectorAll('button').forEach(b=>b.disabled=true);}catch(e){$('error').textContent=e.message;}};
+$('reset').onclick=()=>command(async()=>{const empty=await api('/api/reset',{});$('files').value='';clearSelected();$('selected').replaceChildren();return empty;});
+$('start').onclick=()=>{
+ const provider=$('provider').value;
+ if(provider==='aliyun'){
+  if(!aliyunConfigured){$('error').textContent='请先配置阿里云 AccessKey';return;}
+  if(!window.confirm(`阿里云图片翻译按 ¥0.06/张计费，本批预计费用上限 ¥${($('files').files.length*0.06).toFixed(2)}。图片将上传阿里云，实体保护不能保证包装文字不变，请逐张检查。确认付费开始？`))return;
+ }
+ return command(()=>{const form=new FormData();for(const f of $('files').files)form.append('files',f);form.append('output_dir',$('output').value);form.append('provider',provider);if(provider==='aliyun')form.append('paid_confirmed','true');form.append('extra',$('extra').value);form.append('background',$('background').checked);form.append('typography',$('typography').checked);return api('/api/jobs',form);});
+};
+$('exit').onclick=async()=>{try{await api('/api/exit',{});closed=true;clearSelected();$('error').textContent='';$('status').textContent='工具正在关闭并清空任务，登录和已保存的图片保留，可以关闭此页面';document.querySelectorAll('button').forEach(b=>b.disabled=true);}catch(e){$('error').textContent=e.message;}};
 async function poll(){if(closed)return;if(!busy)try{const current=await api('/api/state');if(!closed){state=current;render();}}catch(e){if(!closed)$('error').textContent=e instanceof TypeError?'无法连接本机工具，请确认程序仍在运行；若已关闭，请重新启动。':e.message;}if(!closed)setTimeout(poll,1000);}poll();

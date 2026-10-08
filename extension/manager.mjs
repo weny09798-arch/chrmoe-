@@ -5,6 +5,7 @@ import { taskSheets, workbookBytes } from './lib/xlsx.mjs';
 import { resolveSite, sourceOrigin } from './lib/sites.mjs';
 import { productImage, removeProduct, prepareRefill } from './lib/products.mjs';
 import { createRefillScheduler } from './lib/refill.mjs';
+import { createConversionPanel } from './conversion-ui.mjs';
 
 const $ = id => document.getElementById(id);
 const installed = Boolean(globalThis.chrome?.runtime?.id);
@@ -15,6 +16,17 @@ const storage = installed ? chrome.storage.local : {
 let keywords = [], task = null, runner = null, busy = false, lockedOut = false, clearing = false, pendingResume = null, activeRun = null, exporting = false;
 let keywordWrites = Promise.resolve(), taskWrites = Promise.resolve();
 let refillAuto = false, refillWaiting = false;
+const conversion = createConversionPanel({
+  document, extensionId: globalThis.chrome?.runtime?.id,
+  getCollection: () => ({ task, collecting: busy || refillWaiting || Boolean(activeRun), unavailable: lockedOut || clearing }),
+  download: async (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    try {
+      if (installed) await chrome.downloads.download({ url, filename, saveAs: false });
+      else { const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); }
+    } finally { setTimeout(() => URL.revokeObjectURL(url), 60000); }
+  }
+});
 const refillScheduler = createRefillScheduler({
   settle: async () => { if (activeRun) await activeRun.catch(() => {}); },
   flush: async isCurrent => {
@@ -143,6 +155,7 @@ function renderTask() {
   $('links-panel').hidden = !totalLinks; $('links-count').textContent = `${totalLinks} 条`;
   // Avoid constructing every hyperlink on every checkpoint while collapsed.
   if ($('links-panel').open) renderLinks();
+  conversion.refresh();
 }
 function renderLinks() {
   $('link-rows').replaceChildren(...(task?.jobs || []).flatMap(job => selected(job).map(item => {
@@ -165,6 +178,7 @@ function renderLinks() {
     remove.disabled = lockedOut || clearing;
     remove.addEventListener('click', () => {
       if (lockedOut || clearing || !task?.jobs.includes(job) || !removeProduct(job, item.id, task)) return;
+      void conversion.removeProduct(task.id, item.site || job.site || 'pdd', item.id);
       const mayRestart = busy ? Boolean(runner && (!runner.intent || refillAuto)) : !['paused', 'blocked', 'stopped'].includes(task.status);
       refillAuto ||= mayRestart;
       refillWaiting = true;
@@ -271,6 +285,8 @@ $('add-form').addEventListener('submit', async event => {
 $('clear-all').addEventListener('click', async () => {
   if (lockedOut || clearing || (!keywords.length && !task)) return;
   clearing = true;
+  // Invalidate conversion callbacks synchronously, before awaiting collection cleanup.
+  void conversion.clear();
   cancelRefill();
   runner?.stop();
   if (pendingResume) { pendingResume.cancelled = true; pendingResume = null; }
@@ -368,6 +384,8 @@ async function initialize() {
   if (typeof saved.priceMax === 'string') $('price-max').value = saved.priceMax;
   task = recoverTask(saved.task);
   if (task) await saveTask(task);
+  // Match the restored owned batch to loaded collection before polling it.
+  void conversion.recover(task);
   renderKeywords(); renderTask();
   if (!installed) notice('界面预览：名称可以添加和保存。实际采集需将 extension 文件夹加载为 Chrome 扩展。');
   else if (task?.status === 'paused') notice('已恢复上次保存的进度，点击“继续”恢复采集。');

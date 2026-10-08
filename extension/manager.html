@@ -40,6 +40,29 @@
           <div id="result-table-wrap" class="table-wrap" hidden><table><thead><tr><th>商品名称</th><th>状态</th><th>已扫描</th><th>链接</th><th>说明</th><th>操作</th></tr></thead><tbody id="result-rows"></tbody></table></div>
         </section>
         <details class="panel links-panel" id="links-panel" hidden><summary>查看已收集的商品链接 <span id="links-count"></span></summary><p class="muted">点击 × 删除不需要的商品，稍后自动补齐数量；本次任务的所有搜索名称都会排除同平台的这个商品 ID。</p><div class="table-wrap"><table><thead><tr><th>搜索名称</th><th>商品图片</th><th>商品标题</th><th>展示价格</th><th>详情状态</th><th>详情说明</th><th>链接</th><th>操作</th></tr></thead><tbody id="link-rows"></tbody></table></div></details>
+        <section class="panel conversion-panel" aria-labelledby="conversion-heading">
+          <div class="section-heading"><h3 id="conversion-heading">本地图片转换</h3><span id="conversion-connected" class="badge">未连接</span></div>
+          <p class="muted">采集停止或结束后，选择本次可导出的图片交给本地工具。广告文字转为繁体，尽量保留包装文字、数字、品牌和图案；结果仍需人工对照原图检查。开始后新增商品留到下一批。</p>
+          <label for="conversion-code">本地工具连接码</label>
+          <div class="input-group"><input id="conversion-code" type="password" placeholder="从本地工具复制完整连接码" autocomplete="off" spellcheck="false"><button id="conversion-connect" class="button" type="button">连接工具</button></div>
+          <button id="conversion-forget" class="button subtle" type="button" hidden>忘记旧批次，使用新连接（保留采集商品）</button>
+          <p class="muted">每次运行先打开本地图片工具，复制连接码后粘贴。连接信息只保存在当前管理页会话。</p>
+          <fieldset class="conversion-options"><legend>转换图片类型</legend><label><input id="conversion-kind-main" type="checkbox" checked> 主图</label><label><input id="conversion-kind-detail" type="checkbox" checked> 详情图</label><label><input id="conversion-kind-sku" type="checkbox" checked> SKU 图</label></fieldset>
+          <p id="conversion-selection" class="muted" aria-live="polite"></p>
+          <label class="conversion-paid-option"><input id="conversion-paid" type="checkbox"> 使用阿里云付费图片翻译（未勾选使用豆包免费模式）</label>
+          <p id="conversion-provider-status" class="muted" role="status" aria-live="polite"></p>
+          <div class="actions"><a id="conversion-settings" class="text-button" target="_blank" rel="noopener noreferrer" hidden>打开本地工具配置阿里云密钥 ↗</a><button id="conversion-refresh-config" class="button" type="button" disabled>刷新配置状态</button></div>
+          <p id="conversion-cost" class="muted" hidden></p>
+          <div class="actions"><button id="conversion-folder" class="button" type="button" disabled>选择保存文件夹</button><button id="conversion-login" class="text-button" type="button" disabled>打开豆包登录 ↗</button></div>
+          <p class="conversion-folder-line">保存到：<span id="conversion-output">尚未选择文件夹</span></p>
+          <div id="conversion-message" class="notice" role="status" aria-live="polite" hidden></div>
+          <p id="conversion-status" class="conversion-status">等待连接本地工具</p>
+          <p id="conversion-counts" class="muted">图片位置 0 · 独立图片 0 · 已下载 0 · 已转换 0 · 失败 0</p>
+          <p id="conversion-current" class="muted"></p>
+          <div class="actions"><button id="conversion-start" class="button primary" type="button" disabled>开始图片转换</button><button id="conversion-stop" class="button subtle" type="button" disabled>停止转换</button><button id="conversion-continue" class="button" type="button" disabled>继续转换</button><button id="conversion-manifest" class="button" type="button" disabled>↓ 图片转换清单.xlsx</button></div>
+          <p class="muted">登录、验证或生成结果不确定时会暂停。豆包模式可检查浏览器页面后继续；阿里云模式不会自动切换到豆包。“继续获取此图”读取已有结果，“重新生成此图”会重新提交，阿里云模式可能再次计费。</p>
+          <details id="conversion-details"><summary>查看原图、结果与每张图片进度</summary><div id="conversion-items" class="conversion-items"></div></details>
+        </section>
         <footer>价格以本次扫描到的页面展示价为准，可能因规格或优惠条件不同而变化。图片采集失败会保留链接并显示原因。</footer>
       </section>
     </main>

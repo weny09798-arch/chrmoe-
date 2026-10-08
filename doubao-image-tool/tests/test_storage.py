@@ -48,3 +48,25 @@ def test_metadata_maps_original_name_despite_sanitized_duplicate_output(tmp_path
     for result in [first,second]:
         record=json.loads(Path(result['record_path']).read_text(encoding='utf-8'))
         assert record['original_name']==name
+
+def test_clear_task_state_removes_only_owned_cache_and_records(tmp_path):
+    from storage import clear_task_state
+    root=tmp_path/'state'; root.mkdir()
+    cache=root/('a'*32); cache.mkdir(); (cache/'input.png').write_bytes(png())
+    (cache/'download.result').write_bytes(png()); (root/'job.json').write_text('{}')
+    (root/'job.json.tmp').write_text('{}')
+    unrelated=root/'notes'; unrelated.mkdir(); (unrelated/'keep.txt').write_text('keep')
+    clear_task_state(root)
+    assert not cache.exists() and not (root/'job.json').exists()
+    assert not (root/'job.json.tmp').exists()
+    assert (unrelated/'keep.txt').read_text()=='keep'
+
+def test_clear_rejects_linked_cache_before_deleting_other_caches(tmp_path,monkeypatch):
+    from storage import clear_task_state
+    root=tmp_path/'state'; root.mkdir()
+    good=root/('a'*32); good.mkdir(); (good/'keep').write_text('keep')
+    linked=root/('b'*32); linked.mkdir()
+    original=Path.is_junction
+    monkeypatch.setattr(Path,'is_junction',lambda path:path==linked or original(path))
+    with pytest.raises(OSError,match='任务缓存路径异常'): clear_task_state(root)
+    assert (good/'keep').exists()

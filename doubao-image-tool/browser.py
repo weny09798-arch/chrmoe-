@@ -157,7 +157,9 @@ class DoubaoBrowser:
             return {'diagnostics': 'unavailable'}
 
     def _download_failure(self, exc):
-        names = {'TimeoutError', 'Error', 'ValueError', 'TypeError', 'AttributeError', 'RuntimeError',
+        if self.page is not None and callable(getattr(self.page,'is_closed',None)) and self.page.is_closed():
+            return NeedsUser('下载未完成：专用 Chrome 已关闭。点击“打开豆包”后“继续获取此图”，会取回同一结果，不重新生成。')
+        names = {'TimeoutError', 'Error', 'TargetClosedError', 'ValueError', 'TypeError', 'AttributeError', 'RuntimeError',
                  'OSError', 'UnidentifiedImageError', 'DecompressionBombError', 'AssertionError', 'NeedsUser'}
         name = type(exc).__name__ if type(exc).__name__ in names else 'Exception'
         return NeedsUser(f'{self.stage}：{name}，請檢查 Chrome 後繼續取得同一結果；下載結構診斷：' +
@@ -175,6 +177,9 @@ class DoubaoBrowser:
         self.stage = '開啟 Chrome'
         from playwright.sync_api import sync_playwright
         try:
+            if self.playwright:
+                try: self.close()
+                except Exception: pass
             self.profile_dir.mkdir(parents=True, exist_ok=True)
             self.playwright = sync_playwright().start()
             self.context = self.playwright.chromium.launch_persistent_context(
@@ -183,7 +188,10 @@ class DoubaoBrowser:
             self.context.set_default_timeout(10000)
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             self.page.goto('https://www.doubao.com/chat', wait_until='domcontentloaded')
-        except Exception:
+            if self.pending and self.pending.get('conversation_url'):
+                self.page.goto(self.pending['conversation_url'], wait_until='domcontentloaded')
+        except Exception as exc:
+            self._last_open_error = re.sub(r'https?://\S+','[URL]',str(exc))
             raise NeedsUser('開啟 Chrome：請確認已安裝 Chrome，並關閉使用本工具專用設定檔的其他視窗。') from None
 
     def close(self):
@@ -192,6 +200,23 @@ class DoubaoBrowser:
         finally:
             if self.playwright: self.playwright.stop()
             self.context = self.playwright = self.page = None
+
+    def is_open(self):
+        return self.page is not None and not self.page.is_closed()
+
+    def recovery_state(self):
+        if not self.pending: return {}
+        return {key:self.pending[key] for key in ('conversation_url','identity','fullsize_src') if self.pending.get(key)}
+
+    def resume_from(self, state):
+        url = state.get('conversation_url', '')
+        parsed = urlsplit(url)
+        if parsed.scheme != 'https' or parsed.netloc != 'www.doubao.com' or not re.fullmatch(r'/chat/\d+', parsed.path):
+            raise NeedsUser('恢复：缺少有效的豆包对话链接，请检查已有结果，不会重新提交。')
+        self.pending = {'baseline':set(), **{key:state[key] for key in ('identity','fullsize_src') if state.get(key)}, 'conversation_url':url}
+        self.pending.setdefault('identity', None)
+        self.page.goto(url, wait_until='domcontentloaded')
+        self._next_poll = 0
 
     def _signals(self):
         # Only visible dialogs/alerts; never scan historical conversation text.
@@ -241,6 +266,26 @@ class DoubaoBrowser:
         self._mode_diagnostic = ('未確認圖像生成；' if not entered else '') + '缺少唯一可見工具列：' + '、'.join(missing)
         return entered and not missing
 
+    def _clear_draft(self, main, composer):
+        # New conversation retains the composer draft. Use ordinary visible controls.
+        if composer.inner_text().strip(): composer.fill('')
+        cards = main.get_by_test_id('attachment-image-card').filter(visible=True)
+        while cards.count():
+            before = cards.count()
+            card = cards.first
+            card.hover(timeout=2000)
+            delete = card.get_by_test_id('attachment-delete-btn').filter(visible=True)
+            if delete.count() != 1:
+                raise self._mode_failure('重试准备：无法找到附件删除按钮，尚未发送；请手动移除输入框中的附件后继续。')
+            delete.click(timeout=5000)
+            deadline = time.monotonic() + 5
+            while cards.count() >= before:
+                if time.monotonic() >= deadline:
+                    raise self._mode_failure('重试准备：旧附件尚未移除，尚未发送；请检查 Chrome。')
+                self.page.wait_for_timeout(100)
+        if composer.inner_text().strip():
+            raise self._mode_failure('重试准备：旧文字尚未清空，尚未发送；请检查 Chrome。')
+
     def _prepare(self, path, prompt):
         self.stage = '登入與新對話'
         self._entered_image_mode = False
@@ -255,11 +300,7 @@ class DoubaoBrowser:
             raise NeedsUser('新對話：無法唯一辨識可見的新對話按鈕，請檢查 Chrome。')
         create.click(timeout=5000)
         composer = self._wait_composer(main)
-        reset_deadline = time.monotonic() + 5
-        while composer.inner_text().strip() or main.get_by_test_id('attachment-image-card').filter(visible=True).count():
-            if time.monotonic() >= reset_deadline:
-                raise self._mode_failure('新對話：輸入框或附件未清空，尚未發送；請檢查 Chrome。')
-            self.page.wait_for_timeout(250)
+        self._clear_draft(main, composer)
         self.stage = '上傳圖片'
         upload = main.get_by_test_id('upload_file_button').filter(visible=True)
         if upload.count() == 1:
@@ -321,10 +362,15 @@ class DoubaoBrowser:
 
     def poll(self):
         if not self.pending: raise NeedsUser('等待：沒有可追蹤的請求，請檢查 Chrome。')
+        if self.page is not None and callable(getattr(self.page,'is_closed',None)) and self.page.is_closed():
+            raise NeedsUser('专用 Chrome 已关闭：点击“打开豆包”，再点“继续获取此图”；会继续下载同一结果，不重新生成。')
         if time.monotonic() < self._next_poll: return None
         self._next_poll = time.monotonic() + 1
         try:
             self._signals()
+            conversation = getattr(self.page, 'url', '')
+            if isinstance(conversation,str) and re.fullmatch(r'https://www\.doubao\.com/chat/\d+', conversation):
+                self.pending['conversation_url'] = conversation
             if not self.pending['identity']:
                 result = select_result(self.page.locator(RESULT_SELECTOR).evaluate_all(IMAGE_OBSERVATION), self.pending['baseline'])
                 if result is None: return None
@@ -366,29 +412,18 @@ class DoubaoBrowser:
         self.pending.pop('fullsize_deadline', None)
         self.stage = '下載：讀取完整尺寸圖片位置'
         src = select_fullsize(self.page.locator('img').evaluate_all(IMAGE_OBSERVATION), identity)
-        data = None
-        button = self.page.get_by_test_id('edit_image_download_button')
-        if button.is_visible():
-            self.stage = '下載：確認原生下載事件'
-            try:
-                with self.page.expect_download(timeout=3000) as download:
-                    button.click(timeout=3000)
-                # Sync path/save_as wait indefinitely for completion. Cancel the
-                # native transfer immediately and use the bounded request below
-                # for the already observed full-size DOM media instead.
-                download.value.cancel()
-            except Exception:
-                # Exact URL observed in the live DOM, never assembled from a thumbnail.
-                data = None
-        if data is None:
-            self.stage = '下載：取得已觀察的圖片資料'
-            response = self.context.request.get(src, timeout=8000)
-            if not response.ok: raise NeedsUser('下載：完整尺寸圖片取得失敗，重試會繼續使用同一結果。')
-            data = response.body()
+        self.pending['fullsize_src'] = src
+        self.stage = '下載：取得已觀察的圖片資料'
+        response = self.context.request.get(src, timeout=8000)
+        if not response.ok: raise NeedsUser('下載：完整尺寸圖片取得失敗，重試會繼續使用同一結果。')
+        data = response.body()
         self.stage = '下載：驗證圖片資料'
         with Image.open(io.BytesIO(data)) as image:
             image.verify()
         self.stage = '下載：關閉圖片預覽'
-        if close.is_visible(): close.click(timeout=3000)
+        # UI cleanup must never turn valid downloaded bytes into a failed job.
+        try:
+            if close.is_visible(): close.click(timeout=3000)
+        except Exception: pass
         return data
 

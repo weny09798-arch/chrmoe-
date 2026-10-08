@@ -2,9 +2,24 @@
 import io
 import json
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from PIL import Image
+
+def clear_task_state(state_dir):
+    """Delete only owned task records/caches, never Chrome profiles or output directories."""
+    root = Path(state_dir).resolve()
+    folders = []
+    for child in root.iterdir():
+        if not re.fullmatch(r'[0-9a-f]{32}', child.name): continue
+        if child.is_symlink() or child.is_junction() or child.resolve().parent != root:
+            raise OSError('任务缓存路径异常，未清理该目录')
+        if child.is_dir(): folders.append(child)
+    # Validate every target before recursively removing any of them.
+    for folder in folders: shutil.rmtree(folder)
+    for name in ('job.json', 'job.json.tmp'):
+        (root / name).unlink(missing_ok=True)
 
 def validate_inputs(files):
     if not 1 <= len(files) <= 20: raise ValueError('請選擇 1–20 張圖片')

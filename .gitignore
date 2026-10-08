@@ -1,5 +1,6 @@
 node_modules/
 artifacts/
+交付包/
 *.zip
 tmp_xls_reader/
 .superpowers/sdd/

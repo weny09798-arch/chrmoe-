@@ -94,6 +94,25 @@ def test_default_redesign_options_are_off(client):
     assert set(parser.inputs)=={'background','typography'}
     assert all('checked' not in attrs for attrs in parser.inputs.values())
 
+@pytest.mark.parametrize('background,typography', [(False,False),(True,False),(False,True),(True,True)])
+def test_submitted_job_protects_product_text_in_all_edit_modes(client, tmp_path, background, typography):
+    response = client.post('/api/jobs', headers={'X-Tool-Token':'secret'}, data={
+        'files':(io.BytesIO(png()), 'product.png'), 'output_dir':str(tmp_path/'out'),
+        'background':str(background).lower(), 'typography':str(typography).lower(),
+        'extra':'把包装也改成繁体',
+    })
+    assert response.status_code == 200
+    prompt = client.get('/api/state', headers={'X-Tool-Token':'secret'}).json['prompt']
+    assert '僅將商品本體與包裝以外的廣告文字' in prompt
+    assert '逐字原樣保留，不轉繁體' in prompt
+    assert '不得重繪商品或包裝' in prompt
+    assert '只檢查商品外廣告文字' in prompt
+    assert prompt.rindex('額外要求不得覆蓋') > prompt.index('把包装也改成繁体')
+    if background:
+        assert '重新設計背景' in prompt and '不得改動商品區域' in prompt
+    if typography:
+        assert '僅優化商品外廣告文字' in prompt
+
 def test_exit_acknowledgement_cancels_unsent_preparation_before_server_shutdown(tmp_path):
     import threading
     entered,release=threading.Event(),threading.Event()
@@ -116,3 +135,23 @@ def test_exit_acknowledgement_cancels_unsent_preparation_before_server_shutdown(
         assert sends==[]
         assert q.snapshot()['items'][0]['phase']=='ready'
     finally:release.set();q.close()
+
+def test_reset_discards_paused_job_and_accepts_new_images(client, tmp_path):
+    q=client.application.extensions['queue']
+    q.start([('old.png',png())],tmp_path/'out','convert'); q.action('stop')
+    old_id=q.snapshot()['id']; old_input=q.snapshot()['items'][0]['input_path']
+    response=client.post('/api/reset',headers={'X-Tool-Token':'secret'},json={})
+    assert response.status_code==200
+    assert response.json['status']=='idle' and response.json['items']==[]
+    assert not __import__('pathlib').Path(old_input).exists()
+    result=client.post('/api/jobs',headers={'X-Tool-Token':'secret'},data={
+        'files':(io.BytesIO(png()),'new.png'),'output_dir':str(tmp_path/'out')})
+    assert result.status_code==200
+    assert result.json['id']!=old_id and result.json['items'][0]['name']=='new.png'
+
+def test_exit_without_launcher_clears_saved_state(client,tmp_path):
+    q=client.application.extensions['queue']
+    q.start([('a.png',png())],tmp_path/'out','convert'); q.action('stop')
+    response=client.post('/api/exit',headers={'X-Tool-Token':'secret'},json={})
+    assert response.status_code==200
+    assert not list(q.state_dir.iterdir())

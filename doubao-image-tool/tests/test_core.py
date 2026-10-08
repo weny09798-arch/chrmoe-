@@ -312,3 +312,68 @@ def test_accepted_resume_clears_stale_job_error(tmp_path,command):
         service.action(command,0 if command=='retry' else None)
         assert service.snapshot()['message']=='', 'Accepted resume should remove old job error'
     finally:service.close()
+
+def test_explicit_close_clears_task_cache_but_keeps_login_and_outputs(tmp_path):
+    profile = tmp_path/'chrome-profile'; profile.mkdir(); (profile/'login').write_text('keep')
+    cloud=Cloud(); cloud.result=png(); root=tmp_path/'state'
+    service=QueueService(lambda:cloud,root)
+    service.start([('a.png',png())],tmp_path/'out','convert')
+    state=wait(service,lambda s:s['status']=='completed')
+    output=Path(state['items'][0]['result']['output_path'])
+    service.close(clear_state=True)
+    assert not list(root.iterdir())
+    assert output.exists() and output.with_suffix('.json').exists()
+    assert (profile/'login').read_text()=='keep'
+    restored=QueueService(lambda:Cloud(),root)
+    try: assert restored.snapshot()['status']=='idle'
+    finally: restored.close()
+
+def test_close_waits_for_inflight_work_before_clearing_cache(tmp_path):
+    entered,release=threading.Event(),threading.Event()
+    class Slow(Cloud):
+        def poll(self): entered.set(); release.wait(2); return png()
+    service=QueueService(lambda:Slow(),tmp_path/'state')
+    service.start([('a.png',png())],tmp_path/'out','convert'); assert entered.wait(1)
+    cache=Path(service.snapshot()['items'][0]['input_path'])
+    closer=threading.Thread(target=lambda:service.close(clear_state=True))
+    closer.start()
+    try:
+        time.sleep(.05); assert closer.is_alive() and cache.exists()
+        release.set(); closer.join(3)
+        assert not closer.is_alive()
+        assert not list((tmp_path/'state').iterdir())
+    finally: release.set(); service.close()
+
+def test_regenerate_submits_again_and_does_not_show_previous_output_as_new(tmp_path):
+    cloud=Cloud(); cloud.result=png(); service=QueueService(lambda:cloud,tmp_path/'state')
+    try:
+        service.start([('a.png',png())],tmp_path/'out','convert')
+        saved=wait(service,lambda s:s['status']=='completed')['items'][0]['result']['output_path']
+        cloud.result=None; service.action('redo',0)
+        pending=wait(service,lambda s:s['items'][0]['phase']=='pending')
+        assert pending['items'][0]['result'] is None
+        assert len(cloud.sends)==2
+        cloud.result=png(); result=wait(service,lambda s:s['status']=='completed')
+        assert result['items'][0]['result']['output_path']!=saved
+        assert Path(saved).exists()
+    finally: service.close()
+
+def test_restart_can_download_known_conversation_without_resubmitting(tmp_path):
+    import json
+    cloud=Cloud();service=QueueService(lambda:cloud,tmp_path/'state')
+    service.start([('a.png',png())],tmp_path/'out','convert')
+    wait(service,lambda s:s['items'][0]['phase']=='pending');service.close()
+    path=tmp_path/'state'/'job.json';job=json.loads(path.read_text(encoding='utf-8'))
+    job['items'][0]['download_recovery']={'conversation_url':'https://www.doubao.com/chat/12345678','identity':'a'*32}
+    path.write_text(json.dumps(job),encoding='utf-8')
+    class Recovered(Cloud):
+        def resume_from(self,state):self.restored=state
+        def poll(self):return png()
+    other=Recovered();restored=QueueService(lambda:other,tmp_path/'state')
+    try:
+        assert restored.snapshot()['items'][0]['status']=='paused'
+        restored.action('continue');result=wait(restored,lambda s:s['status']=='completed')
+        assert other.sends==[]
+        assert other.restored['conversation_url']=='https://www.doubao.com/chat/12345678'
+        assert Path(result['items'][0]['result']['output_path']).exists()
+    finally:restored.close()
