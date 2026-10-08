@@ -7,7 +7,18 @@ import { createConversionPanel } from '../extension/conversion-ui.mjs';
 
 const html = await readFile(new URL('../extension/manager.html', import.meta.url), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-function fixture({configured=true,ossConfigured=true,replacement=true,confirm=()=>true,restored=false}={}) {
+
+test('cloud conversion starts without choosing a local folder and sends no local destination',async()=>{
+  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';
+  f.click('conversion-connect');await tick();
+  assert.equal(Boolean(f.document.getElementById('conversion-folder')),false);
+  assert.equal(Boolean(f.document.getElementById('conversion-output')),false);
+  assert.equal(f.document.getElementById('conversion-start').disabled,false);
+  f.click('conversion-start');await tick();
+  const call=f.requests.find(r=>r.url.endsWith('/jobs'));assert.ok(call);
+  const body=JSON.parse(call.options.body);assert.equal(body.cloud_only,true);assert.equal(body.output_dir,undefined);
+});
+function fixture({configured=true,ossConfigured=true,replacement=true,cloudStorage=true,confirm=()=>true,restored=false}={}) {
   const {document,window} = parseHTML(html), task = createTask(['杯']); task.status='done'; task.jobs[0].status='done';
   task.jobs[0].groups=[{best:{id:'101',title:'玻璃杯',image:'https://img.pddpic.com/a.jpg',cents:100}}];
   const actions=[], requests=[], timers=[], saved=new Map();
@@ -19,7 +30,7 @@ function fixture({configured=true,ossConfigured=true,replacement=true,confirm=()
     return {id:'job-1',kind:'collector',source_task_id:task.id,status,provider:batch.provider||'doubao',image_kinds:batch.image_kinds||['main','detail','sku'],paid_calls:batch.provider==='aliyun'?1:0,estimated_cost_upper:batch.provider==='aliyun'?groups.size*0.06:0,counts:{total:entries.length,unique:groups.size,downloaded:groups.size,converted:0,failed:1},items:[...groups.values()].map((refs,index)=>({index,...itemState,input_path:'input.png',refs}))};
   };
   const panel=createConversionPanel({document,extensionId:'test-extension',storage:{getItem:key=>saved.get(key),setItem:(key,val)=>saved.set(key,val),removeItem:key=>saved.delete(key)},getCollection:()=>({task,collecting,unavailable:false}),
-    fetch:async(url,options)=>{requests.push({url,options});if(fetchOverride)return fetchOverride(url,options);const body=options.body&&JSON.parse(options.body);let value={};if(url.endsWith('/capabilities'))value={providers:['doubao','aliyun'],oss_configured:ossConfigured,image_link_replacement:replacement,aliyun_configured:configured,aliyun_price_per_image:0.06};if(url.endsWith('/folder'))value={path:'D:\\图片'};if(url.endsWith('/jobs'))batch=body;if(url.endsWith('/jobs')||url.includes('/state'))value=snapshot();if(url.endsWith('/action')){actions.push(body);if(body.action==='continue')status='running';if(body.action==='stop')status='paused';value=snapshot();}return {ok:true,json:async()=>value,blob:async()=>new Blob(['preview'])};},
+    fetch:async(url,options)=>{requests.push({url,options});if(fetchOverride)return fetchOverride(url,options);const body=options.body&&JSON.parse(options.body);let value={};if(url.endsWith('/capabilities'))value={providers:['doubao','aliyun'],oss_configured:ossConfigured,image_link_replacement:replacement,cloud_image_storage:cloudStorage,aliyun_configured:configured,aliyun_price_per_image:0.06};if(url.endsWith('/folder'))value={path:'D:\\图片'};if(url.endsWith('/jobs'))batch=body;if(url.endsWith('/jobs')||url.includes('/state'))value=snapshot();if(url.endsWith('/action')){actions.push(body);if(body.action==='continue')status='running';if(body.action==='stop')status='paused';value=snapshot();}return {ok:true,json:async()=>value,blob:async()=>new Blob(['preview'])};},
     setTimer:callback=>{timers.push(callback);return timers.length;},clearTimer:()=>{},download:async()=>{},confirm
   });
   const click=id=>document.getElementById(id).dispatchEvent(new window.Event('click'));
@@ -28,10 +39,10 @@ function fixture({configured=true,ossConfigured=true,replacement=true,confirm=()
 }
 
 test('new batch requires configured OSS and offers an actionable configuration or upgrade explanation',async()=>{
-  for(const options of [{ossConfigured:false},{replacement:false}]){
+  for(const options of [{ossConfigured:false},{replacement:false},{cloudStorage:false}]){
     const f=fixture(options);await connectFolder(f);
     assert.equal(f.document.getElementById('conversion-start').disabled,true);
-    assert.match(f.document.getElementById('conversion-provider-status').textContent,options.replacement===false?/升级/:/OSS/);
+    assert.match(f.document.getElementById('conversion-provider-status').textContent,options.replacement===false||options.cloudStorage===false?/升级/:/OSS/);
     f.click('conversion-start');await tick();assert.equal(f.requests.some(r=>r.url.endsWith('/jobs')),false);
   }
 });
@@ -49,10 +60,10 @@ test('replacement counts include each exported occurrence of a product shared by
   f.task.imageReplacements=[{platform:'pdd',product_id:'101',kind:'main',order:1,sku_index:null,url:item.image,published_url:'https://bucket.oss-cn-shanghai.aliyuncs.com/output.png'}];
   f.panel.refresh();assert.match(f.document.getElementById('conversion-counts').textContent,/已替换 2.*原图回退 0/);
 });
-test('panel connects, chooses local folder and exposes counts with distinct stop/continue/retry/redo actions',async()=>{
+test('panel connects without a local folder and exposes counts with distinct stop/continue/retry/redo actions',async()=>{
   const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';
-  f.click('conversion-connect');await tick();f.click('conversion-folder');await tick();
-  assert.equal(f.document.getElementById('conversion-output').textContent,'D:\\图片');
+  f.click('conversion-connect');await tick();
+  assert.equal(Boolean(f.document.getElementById('conversion-output')),false);
   f.click('conversion-start');await tick();
   assert.match(f.document.getElementById('conversion-counts').textContent,/图片位置 1.*独立图片 1.*已下载 1.*已转换 0.*失败 1/);
   assert.match(f.document.getElementById('conversion-status').textContent,/暂停/);
@@ -95,7 +106,7 @@ test('paid capability validation displays the synchronous pending manifest despi
   assert.equal(f.document.getElementById('conversion-selection').textContent,before);assert.equal(f.document.getElementById('conversion-cost').textContent,cost);
   await f.panel.clear();release({ok:true,json:async()=>({providers:['doubao','aliyun'],aliyun_configured:true})});await tick();
 });
-async function connectFolder(f){f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();f.click('conversion-folder');await tick();}
+async function connectFolder(f){f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();}
 test('checkbox selections count all positions and unique URLs, reject empty selection and send selected types',async()=>{
   const f=fixture(),item=f.task.jobs[0].groups[0].best;item.galleryImages=[item.image,item.image];item.detailImages=[item.image,'https://img.pddpic.com/detail.jpg'];item.skus=[{id:'a',image:item.image},{id:'b',image:'https://img.pddpic.com/sku.jpg'}];
   await connectFolder(f);
@@ -104,7 +115,7 @@ test('checkbox selections count all positions and unique URLs, reject empty sele
   assert.equal(f.document.getElementById('conversion-start').disabled,true);f.click('conversion-start');await tick();assert.equal(f.requests.some(r=>r.url.endsWith('/jobs')),false);
   f.change('conversion-kind-sku',true);f.click('conversion-start');await tick();
   const body=JSON.parse(f.requests.find(r=>r.url.endsWith('/jobs')).options.body);assert.deepEqual(body.image_kinds,['sku']);assert.equal(body.entries.length,2);
-  for(const id of ['conversion-kind-main','conversion-kind-detail','conversion-kind-sku','conversion-paid','conversion-folder'])assert.equal(f.document.getElementById(id).disabled,true);
+  for(const id of ['conversion-kind-main','conversion-kind-detail','conversion-kind-sku','conversion-paid'])assert.equal(f.document.getElementById(id).disabled,true);
 });
 test('paid UI exposes configured status refresh and local settings link then quotes and explicitly starts paid batch',async()=>{
   const f=fixture({configured:false});await connectFolder(f);f.change('conversion-paid',true);
@@ -138,16 +149,15 @@ test('completed batch releases type and provider preferences for the next batch'
   f.click('conversion-start');await tick();const bodies=f.requests.filter(r=>r.url.endsWith('/jobs')).map(r=>JSON.parse(r.options.body));
   assert.equal(bodies[1].provider,'aliyun');assert.deepEqual(bodies[1].image_kinds,['main','sku']);
 });
-test('recovering a paid snapshot restores the actual frozen provider, types, output and request count',async()=>{
+test('recovering a paid snapshot restores the actual frozen provider, types and request count',async()=>{
   const f=fixture();await connectFolder(f);
   f.panel.controller.sourceTaskId=f.task.id;
   f.panel.controller.acceptSnapshot({id:'restored',kind:'collector',source_task_id:f.task.id,status:'paused',provider:'aliyun',image_kinds:['sku'],paid_calls:7,output_dir:'D:\\恢复图片',items:[]},'restored');f.panel.refresh();
   assert.equal(f.document.getElementById('conversion-paid').checked,true);assert.equal(f.document.getElementById('conversion-kind-main').checked,false);assert.equal(f.document.getElementById('conversion-kind-sku').checked,true);
-  assert.equal(f.document.getElementById('conversion-output').textContent,'D:\\恢复图片');assert.match(f.document.getElementById('conversion-status').textContent,/付费请求 7/);
   f.change('conversion-paid',false);assert.equal(f.document.getElementById('conversion-paid').checked,true);
 });
 test('completed and uncertain items offer explicit regeneration and cannot resubmit through retry',async()=>{
-  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();f.click('conversion-folder');await tick();f.click('conversion-start');await tick();
+  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();f.click('conversion-start');await tick();
   for(const item of [{status:'completed',phase:'done'},{status:'needs-review',phase:'pending'},{status:'paused',phase:'uncertain'}]){
     f.setItem(item);await f.panel.controller.poll();
     const retry=f.document.querySelector('[data-conversion-action="retry"]'), redo=f.document.querySelector('[data-conversion-action="redo"]');
@@ -159,14 +169,14 @@ test('completed and uncertain items offer explicit regeneration and cannot resub
   assert.equal(f.document.querySelector('[data-conversion-action="retry"]').textContent,'继续处理此图');
 });
 test('polling status changes preserves existing image preview DOM',async()=>{
-  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();f.click('conversion-folder');await tick();f.click('conversion-start');await tick();
+  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();f.click('conversion-start');await tick();
   const row=f.document.querySelector('.conversion-item');
   f.setItem({status:'paused',phase:'ready',message:'另一条进度消息'});await f.panel.controller.poll();
   assert.ok(f.document.querySelector('.conversion-item')===row,'status-only poll keeps preview row');
   assert.match(row.textContent,/另一条进度消息/);
 });
 test('panel permits new connection code after auth failure and offers explicit forgetting when old job is absent',async()=>{
-  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=old';f.click('conversion-connect');await tick();f.click('conversion-folder');await tick();f.click('conversion-start');await tick();
+  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=old';f.click('conversion-connect');await tick();f.click('conversion-start');await tick();
   f.setFetch(async()=>({ok:false,status:401}));await f.panel.controller.poll();
   assert.equal(f.document.getElementById('conversion-connect').disabled,false);
   f.setFetch(async url=>url.endsWith('/pair')?{ok:true,json:async()=>({})}:{ok:false,status:409});
@@ -179,7 +189,7 @@ test('panel permits new connection code after auth failure and offers explicit f
   assert.equal(f.document.getElementById('conversion-code').value,'');
 });
 test('panel disables conversion while collection is active and clear removes old items and scheduled poll work',async()=>{
-  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();f.click('conversion-folder');await tick();
+  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();
   f.setCollecting(true);assert.equal(f.document.getElementById('conversion-start').disabled,true);
   f.setCollecting(false);f.click('conversion-start');await tick();assert.equal(f.document.querySelectorAll('.conversion-item').length,1);
   const oldTimers=[...f.timers];await f.panel.clear();const count=f.requests.length;

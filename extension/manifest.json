@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "拼多多 · 主图选品助手",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "采集拼多多、1688 和淘宝商品及 SKU，转换选中图片并上传 OSS，导出 Excel 自动使用转换图，保留本地结果。",
   "minimum_chrome_version": "116",
   "permissions": [

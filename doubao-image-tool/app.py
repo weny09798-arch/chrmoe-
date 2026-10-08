@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from flask import Flask, request, jsonify, send_file, render_template
 from core import QueueService, StorageFailure
 from prompts import build_prompt
+from cloud_images import image_response
 
 def create_app(browser_factory=None, state_dir=None, output_default=None, token=None, aliyun_factory=None, oss_factory=None):
     root = Path(state_dir or Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'DoubaoImageTool')
@@ -128,9 +129,7 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
         try:
             snap = queue.snapshot(job)
             item = snap['items'][index]
-            path = item.get('input_path') if kind == 'original' else (item.get('result') or {}).get('output_path') if kind == 'result' else None
-            if not path or not Path(path).is_file(): return jsonify(error='图片尚未生成'), 404
-            return send_file(path)
+            return image_response(snap,item,kind)
         except (KeyError, IndexError, TypeError): return jsonify(error='图片不存在'), 404
 
     @app.post('/api/exit')

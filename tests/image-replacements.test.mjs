@@ -5,7 +5,7 @@ import { buildImageManifest, BridgeClient, ConversionController, mergeImageRepla
 import { taskSheets, workbookBytes, workbookXlsBytes } from '../extension/lib/xlsx.mjs';
 
 const original='https://img.example/a.jpg', published='https://bucket.oss-cn-shanghai.aliyuncs.com/converted/a.png';
-const caps={providers:['doubao','aliyun'],oss_configured:true,image_link_replacement:true,aliyun_configured:true};
+const caps={providers:['doubao','aliyun'],oss_configured:true,image_link_replacement:true,cloud_image_storage:true,aliyun_configured:true};
 function fixture(){return {id:'source',status:'done',jobs:[{keyword:'杯',site:'pdd',groups:[{best:{id:'101',title:'玻璃杯',cents:1234,image:original,galleryImages:[original,'https://img.example/b.jpg'],detailImages:[original],skus:[{id:'duplicate',specs:['红'],image:original,cents:1500},{id:'duplicate',specs:['蓝'],image:original,cents:1600}]}}]},{keyword:'杯',site:'taobao',groups:[{best:{id:'101',site:'taobao',title:'保温杯',cents:2000,image:original}}]}]};}
 const response=value=>({ok:true,json:async()=>value});
 test('main-only replacement does not change the unselected fallback SKU image',()=>{
