@@ -174,7 +174,7 @@ def test_paired_capabilities_get_cors_and_configured_gate(tmp_path,monkeypatch):
             assert c.get('/api/bridge/capabilities',headers=h).status_code==403
             assert c.post('/api/bridge/pair',headers=h,json={'extension_id':ext}).status_code==200
             assert c.options('/api/bridge/capabilities',headers={'Origin':h['Origin'],'Access-Control-Request-Method':'GET','Access-Control-Request-Headers':'x-tool-token,x-extension-id'}).status_code==204
-            assert c.get('/api/bridge/capabilities',headers=h).json=={'version':'1.6.3','cloud_image_storage':True,'providers':['doubao','aliyun'],'image_kinds':['main','detail','sku'],'aliyun_configured':False,'aliyun_price_per_image':0.06,'oss_configured':False,'image_link_replacement':True}
+            assert c.get('/api/bridge/capabilities',headers=h).json=={'version':'1.6.4','cloud_image_storage':True,'image_type_limits':True,'providers':['doubao','aliyun'],'image_kinds':['main','detail','sku'],'aliyun_configured':False,'aliyun_price_per_image':0.06,'oss_configured':False,'image_link_replacement':True}
             job={'entries':entries(),'output_dir':str(tmp_path/'out'),'source_task_id':'source','provider':'aliyun','image_kinds':['detail'],'paid_confirmed':True}
             r=c.post('/api/bridge/jobs',headers=h,json=job)
             assert r.status_code==400 and app.extensions['queue'].snapshot()['id'] is None
