@@ -12,6 +12,7 @@ from storage import validate_inputs, save_result, clear_task_state
 from image_batch import build_items, counts, download_image, save_positions, write_report
 from aliyun_translation import AliyunError, validate_aliyun_image, download_aliyun_result, PRICE_PER_IMAGE
 from credentials import CredentialError
+from oss_storage import OSSError
 
 IMAGE_KINDS = ('main', 'detail', 'sku')
 
@@ -37,9 +38,10 @@ class QueueService:
     generation_timeout = 8 * 60
     poll_interval = .1
 
-    def __init__(self, browser_factory, state_dir, aliyun_factory=None):
+    def __init__(self, browser_factory, state_dir, aliyun_factory=None, oss_factory=None):
         self.factory = browser_factory
         self.aliyun_factory = aliyun_factory
+        self.oss_factory = oss_factory
         self.state_dir = Path(state_dir).resolve(); self.state_dir.mkdir(parents=True, exist_ok=True)
         self.cv = threading.Condition(threading.RLock()); self.closed = False; self.browser = None
         self.clear_on_close = False
@@ -53,8 +55,12 @@ class QueueService:
             self.job.setdefault('paid_calls', 0)
             self.job.setdefault('estimated_cost_upper', 0)
             for item in self.job['items']:
+                for ref in item.get('refs',[]):
+                    ref.setdefault('sku_index',ref['order']-1 if ref['kind']=='sku' else None)
                 if item['status'] not in {'completed', 'failed'}:
-                    if item.get('aliyun_result'):
+                    if item['phase'] in {'uploading','upload-failed'} and item.get('result'):
+                        item.update(phase='uploading',status='queued',message='已有本地转换图，继续只上传 OSS，不重新翻译。')
+                    elif item.get('aliyun_result'):
                         item['phase'] = 'saving' if item.get('cached_path') and Path(item['cached_path']).is_file() else 'aliyun-downloading'
                         item['status'] = 'queued'; item['message'] = '程序已重新启动，继续将获取已有阿里云结果，不重新提交。'
                     elif item['phase'] in {'ready', 'aliyun-ready', 'downloading', 'alias', 'saving'}:
@@ -117,6 +123,7 @@ class QueueService:
             self.aliyun_factory()  # Snapshot configuration only; never makes a paid call.
         if not isinstance(source_task_id, str) or not source_task_id: raise ValueError('缺少采集任务ID')
         output = Path(output_dir).expanduser().resolve()
+        publisher = self.oss_factory() if self.oss_factory else None
         if output.exists() and not output.is_dir(): raise ValueError('输出位置必须是目录')
         with self.cv:
             if self.closed: raise RuntimeError('服务已关闭')
@@ -128,9 +135,10 @@ class QueueService:
             run.mkdir()
             self.job = {'id': job_id, 'kind': 'collector', 'source_task_id': source_task_id,
                         'status': 'running', 'output_dir': str(output), 'run_dir': str(run),
-                        'manifest_path': str(run / '图片转换清单.xlsx'), 'mapping_path': str(run / '图片转换清单.json'),
+                        'mapping_path': str(run / '图片转换对应记录.json'),
                         'prompt': prompt, 'items': items, 'message': '', 'review_needed': True}
             self.job.update(provider=provider, image_kinds=kinds, paid_calls=0,
+                            upload_enabled=publisher is not None,oss_target_id=publisher.target_id if publisher else None,
                             estimated_cost_upper=round(len(items)*PRICE_PER_IMAGE, 2) if provider=='aliyun' else 0)
             self._persist(); self.cv.notify_all(); return job_id
 
@@ -174,6 +182,14 @@ class QueueService:
                 for i in self.job['items']:
                     if i['status'] == 'paused': i['status'] = 'queued'; i.pop('started', None)
                 self.job['status'] = 'running'; self.job['message'] = ''
+            elif command == 'retry-upload':
+                if index is None or not 0 <= index < len(self.job['items']):raise ValueError('请选择有效图片')
+                if self.job['status']=='running':raise ValueError('请先停止任务')
+                item=self.job['items'][index]
+                if 'alias_of' in item:item=self.job['items'][item['alias_of']]
+                if not self.job.get('upload_enabled') or not item.get('result') or not Path(item['result']['output_path']).is_file():raise ValueError('没有可上传的本地转换图')
+                self._publisher(self.job)
+                item.update(phase='uploading',status='queued',message='');self.job.update(status='running',message='')
             elif command in {'retry', 'redo'}:
                 if index is None or not 0 <= index < len(self.job['items']): raise ValueError('請選擇有效圖片')
                 item = self.job['items'][index]
@@ -201,6 +217,7 @@ class QueueService:
                     item['revision'] = item.get('revision', 0) + 1
                     item['phase'] = ('aliyun-ready' if aliyun else 'ready') if item.get('input_path') else 'downloading'
                     item['result'] = None
+                    item.pop('upload_result',None)
                     item.pop('cached_path', None)
                     item.pop('download_recovery', None)
                     item.pop('aliyun_result', None)
@@ -221,6 +238,19 @@ class QueueService:
         self._check_storage()
         item['status'] = 'paused'; item['message'] = message
         self.job['status'] = 'paused'; self.job['message'] = message; self._persist()
+
+    def _publisher(self, job):
+        if not job.get('upload_enabled'):return None
+        if self.oss_factory is None:raise OSSError('configuration')
+        publisher=self.oss_factory()
+        if publisher.target_id!=job.get('oss_target_id'):raise OSSError('configuration')
+        return publisher
+
+    def _publish_refs(self, item, published, revision):
+        item['upload_result']=copy.deepcopy(published)
+        for ref in item['refs']:
+            ref.update(published_url=published['url'],published_revision=revision)
+        item.update(status='completed',phase='done',message='转换图已保存本地并上传 OSS，可用于商品 Excel。')
 
     def _run(self):
         try:
@@ -251,6 +281,7 @@ class QueueService:
                     revision = item.get('revision', 0)
                     active_job = self.job
                 try:
+                    if phase in {'ready','aliyun-ready'}:self._publisher(active_job)
                     if phase == 'downloading':
                         data, extension = download_image(item['url'])
                         digest = hashlib.sha256(data).hexdigest()
@@ -267,18 +298,23 @@ class QueueService:
                     elif phase == 'alias':
                         with self.cv:
                             original = self.job['items'][item['alias_of']]
-                            if original['status']=='failed':
+                            if original['status']=='failed' and not original.get('result'):
                                 item.update(status='failed',phase='aliyun-failed' if active_job.get('provider')=='aliyun' else 'download-failed',message='相同图片的原任务失败，请检查原任务。')
                                 self._persist();continue
-                            if original['status'] != 'completed':
+                            if original['status'] not in {'completed','failed'}:
                                 self._pause(item, '请先继续或重试相同图片的原任务'); continue
                             refs = copy.deepcopy(item['refs'])
                             data = Path(original['result']['output_path']).read_bytes()
-                        result = save_positions(self.job, refs, data)
+                        result = save_positions(active_job, refs, data)
                         with self.cv:
                             self._check_storage()
-                            if item.get('revision', 0) != revision: continue
-                            item.update(refs=refs, result=result, status='completed', phase='done', message='已复用转换结果，请人工检查。')
+                            if self.closed or self.job is not active_job or item.get('revision', 0) != revision: continue
+                            item.update(refs=refs, result=result,status='completed',phase='done',message='已复用转换结果，请人工检查。')
+                            if active_job.get('upload_enabled'):
+                                if original.get('upload_result'):
+                                    self._publish_refs(item,original['upload_result'],original.get('revision',0))
+                                else:
+                                    item.update(status='failed',phase='upload-failed',message='相同图片的 OSS 上传失败，请重试上传。')
                             self._persist()
                     elif phase in {'aliyun-ready', 'ready'} and active_job.get('provider') == 'aliyun':
                         validate_aliyun_image(Path(item['input_path']).read_bytes(),item['name'])
@@ -287,6 +323,7 @@ class QueueService:
                         with self.cv:
                             self._check_storage()
                             if self.closed or self.job is not active_job or self.job['status'] != 'running' or item.get('revision',0) != revision: continue
+                            self._publisher(active_job)
                             item.update(phase='submitting',status='running')
                             self.job['paid_calls'] += 1
                             self._persist()
@@ -326,6 +363,7 @@ class QueueService:
                                 self._check_storage()
                                 if self.closed or self.job['status'] != 'running' or item.get('revision', 0) != revision:
                                     raise SubmissionCancelled()
+                                self._publisher(active_job)
                                 yield
                         self.browser.submit(Path(item['input_path']), self.job['prompt'], send_gate)
                         with self.cv:
@@ -376,9 +414,22 @@ class QueueService:
                                 continue
                             item['result'] = result
                             if refs: item['refs'] = refs
-                            item['status'] = 'completed'
-                            item['phase'] = 'done'
+                            item['status'] = 'queued' if active_job.get('upload_enabled') else 'completed'
+                            item['phase'] = 'uploading' if active_job.get('upload_enabled') else 'done'
                             item['message'] = '已儲存，請人工檢查。'
+                            self._persist()
+                    elif phase == 'uploading':
+                        publisher=self._publisher(active_job)
+                        with self.cv:
+                            if self.closed or self.job is not active_job or self.job['status']!='running' or item.get('revision',0)!=revision:continue
+                        published=publisher.publish(Path(item['result']['output_path']))
+                        with self.cv:
+                            self._check_storage()
+                            if self.closed or self.job is not active_job or item.get('revision',0)!=revision:continue
+                            self._publish_refs(item,published,revision)
+                            for dependent in active_job['items']:
+                                if dependent.get('alias_of')==item['index'] and dependent.get('result'):
+                                    self._publish_refs(dependent,published,revision)
                             self._persist()
                     else:
                         with self.cv: self._pause(item, '提交狀態不確定；請明確重試。')
@@ -390,6 +441,16 @@ class QueueService:
                             self._persist()
                 except StorageFailure:
                     raise
+                except OSSError as exc:
+                    with self.cv:
+                        if self.closed or self.job is not active_job or item.get('revision',0)!=revision:continue
+                        if phase=='uploading':item['phase']='upload-failed'
+                        elif item['phase']=='submitting':item['phase']=phase
+                        item['message']=str(exc)
+                        if exc.kind=='configuration' and self.job['status']=='running':self._pause(item,str(exc))
+                        else:
+                            item['status']='paused' if exc.kind=='configuration' else 'failed'
+                            self._persist()
                 except AliyunError as exc:
                     with self.cv:
                         self._check_storage()

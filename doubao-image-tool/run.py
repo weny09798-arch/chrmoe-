@@ -33,8 +33,12 @@ def main():
     parser.add_argument('--download-image', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--aliyun-translate', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--aliyun-result', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--oss-publish', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--state-dir', type=Path, help='Local profile/state directory (default LOCALAPPDATA/DoubaoImageTool)')
     args = parser.parse_args()
+    if args.oss_publish:
+        from oss_storage import oss_helper_main
+        return oss_helper_main()
     if args.aliyun_translate:
         from aliyun_translation import translate_helper_main
         return translate_helper_main()

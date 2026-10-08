@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify, send_file, render_template
 from core import QueueService, StorageFailure
 from prompts import build_prompt
 
-def create_app(browser_factory=None, state_dir=None, output_default=None, token=None, aliyun_factory=None):
+def create_app(browser_factory=None, state_dir=None, output_default=None, token=None, aliyun_factory=None, oss_factory=None):
     root = Path(state_dir or Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'DoubaoImageTool')
     if browser_factory is None:
         from browser import DoubaoBrowser
@@ -21,7 +21,11 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
     credentials = CredentialStore(root)
     aliyun_factory = aliyun_factory or (lambda: AliyunTranslator(credentials.load()))
     app.extensions['aliyun_credentials'] = credentials
-    queue = QueueService(browser_factory, root / 'state', aliyun_factory=aliyun_factory)
+    from oss_storage import OSSConfigStore,OSSPublisher
+    oss_config=OSSConfigStore(root,credentials.load)
+    oss_factory=oss_factory or (lambda:OSSPublisher(oss_config.load()))
+    app.extensions['oss_config']=oss_config
+    queue = QueueService(browser_factory, root / 'state', aliyun_factory=aliyun_factory,oss_factory=oss_factory)
     app.extensions['queue'] = queue
     lifecycle = threading.RLock()
 
@@ -60,7 +64,17 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
     def state(): return jsonify(queue.snapshot())
 
     def credential_status():
-        return {'aliyun_configured':credentials.configured(),'aliyun_price_per_image':PRICE_PER_IMAGE}
+        return {'aliyun_configured':credentials.configured(),'aliyun_price_per_image':PRICE_PER_IMAGE,
+                'oss_configured':oss_config.status()['oss_configured'],'image_link_replacement':True}
+
+    @app.route('/api/oss/config',methods=['GET','POST','DELETE'])
+    def oss_configuration():
+        if request.method=='POST':oss_config.save(request.get_json(silent=True))
+        elif request.method=='DELETE':oss_config.delete()
+        return jsonify(oss_config.status())
+
+    @app.post('/api/oss/check')
+    def oss_check():return jsonify(oss_factory().check())
 
     @app.route('/api/aliyun/credentials', methods=['GET','POST','DELETE'])
     def aliyun_credentials():
@@ -98,7 +112,7 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
         nonlocal queue
         with lifecycle:
             queue.close(clear_state=True)
-            queue = QueueService(browser_factory, root / 'state', aliyun_factory=aliyun_factory)
+            queue = QueueService(browser_factory, root / 'state', aliyun_factory=aliyun_factory,oss_factory=oss_factory)
             app.extensions['queue'] = queue
             return queue.snapshot()
 

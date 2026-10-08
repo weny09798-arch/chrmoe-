@@ -11,16 +11,56 @@ export function buildImageManifest(task, imageKinds = ['main','detail','sku']) {
     for (const item of products) {
       const common = { platform: item.site || job.site || 'pdd', product_id: String(item.id ?? ''), title: String(item.title || ''), product_url: String(item.url || '') };
       const append = (kind, urls, sku = '') => urls.forEach((url, index) => {
-        if (selected.has(kind) && typeof url === 'string' && url.trim()) entries.push(Object.freeze({ ...common, kind, sku, order: index + 1, url: url.trim() }));
+        if (selected.has(kind) && typeof url === 'string' && url.trim()) entries.push(Object.freeze({ ...common, kind, sku, order: index + 1, sku_index:null, url: url.trim() }));
       });
       append('main', Array.isArray(item.galleryImages) && item.galleryImages.some(url => typeof url === 'string' && url.trim()) ? item.galleryImages : [item.image]);
       append('detail', Array.isArray(item.detailImages) ? item.detailImages : []);
       (Array.isArray(item.skus) ? item.skus : []).forEach((sku, index) => {
-        if (selected.has('sku') && typeof sku?.image === 'string' && sku.image.trim()) entries.push(Object.freeze({ ...common, kind: 'sku', sku: String(sku.id || (sku.specs || []).join(' / ') || `SKU ${index + 1}`), order: index + 1, url: sku.image.trim() }));
+        if (selected.has('sku') && typeof sku?.image === 'string' && sku.image.trim()) entries.push(Object.freeze({ ...common, kind: 'sku', sku: String(sku.id || (sku.specs || []).join(' / ') || `SKU ${index + 1}`), order: index + 1, sku_index:index, url: sku.image.trim() }));
       });
     }
   }
   return Object.freeze(entries);
+}
+
+export function imagePositionKey(ref) {
+  if (!ref || !['main','detail','sku'].includes(ref.kind) || !Number.isInteger(ref.order) || ref.order < 1 || typeof ref.url !== 'string' || !ref.url.trim()) return null;
+  const skuIndex = ref.kind === 'sku' ? ref.sku_index === undefined ? ref.order - 1 : ref.sku_index : ref.sku_index === undefined ? null : ref.sku_index;
+  if (ref.kind === 'sku' ? !Number.isInteger(skuIndex) || skuIndex < 0 || skuIndex !== ref.order - 1 : skuIndex !== null) return null;
+  return JSON.stringify([ref.platform,String(ref.product_id),ref.kind,ref.order,skuIndex,ref.url.trim()]);
+}
+
+export function validPublishedUrl(value) {
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.port && !url.search && !url.hash && url.pathname.length > 1 && /^[a-z0-9][a-z0-9-]*\.oss-[a-z0-9-]+\.aliyuncs\.com$/.test(url.hostname);
+  } catch { return false; }
+}
+
+export function matchingImageReplacements(task, refs) {
+  const positions = new Set(buildImageManifest(task).map(imagePositionKey)), accepted = new Map();
+  for (const ref of Array.isArray(refs) ? refs : []) {
+    const key = imagePositionKey(ref);
+    if (!key || !positions.has(key) || !validPublishedUrl(ref.published_url)) continue;
+    if (ref.published_revision !== undefined && (!Number.isSafeInteger(ref.published_revision) || ref.published_revision < 0)) continue;
+    accepted.set(key,{ ...ref, sku_index:ref.kind === 'sku' ? ref.sku_index ?? ref.order - 1 : null, url:ref.url.trim() });
+  }
+  return [...accepted.values()];
+}
+
+// Overlay storage is independent of the scraped product objects and local batches.
+export function mergeImageReplacements(task, refs) {
+  const existing = matchingImageReplacements(task,task.imageReplacements), merged = new Map(existing.map(ref => [imagePositionKey(ref),ref]));
+  for (const ref of matchingImageReplacements(task,refs)) {
+    const key = imagePositionKey(ref), previous = merged.get(key);
+    if (previous?.job_id === ref.job_id && previous?.published_revision !== undefined && (ref.published_revision ?? -1) < previous.published_revision) continue;
+    merged.set(key,ref);
+  }
+  const replacements = [...merged.values()];
+  if (JSON.stringify(task.imageReplacements || []) === JSON.stringify(replacements)) return false;
+  task.imageReplacements = replacements;
+  return true;
 }
 
 export function parseConnectionCode(code) {
@@ -65,8 +105,9 @@ export class BridgeClient {
 }
 
 export class ConversionController {
-  constructor({ client, onChange = () => {} }) {
+  constructor({ client, onChange = () => {}, getTask, onReplacements = async () => {} }) {
     this.client = client; this.onChange = onChange; this.epoch = 0;
+    this.getTask = getTask || (() => this.currentTask); this.onReplacements = onReplacements; this.publishedSignature = '';
     this.job = null; this.entries = null; this.sourceTaskId = null; this.pendingSource = null;
     this.outputDir = ''; this.working = false; this.error = '';
     this.reconnectCandidate = null;
@@ -93,6 +134,7 @@ export class ConversionController {
     if (!this.restored) return;
     this.restored = false;
     if (this.sourceTaskId !== task?.id) { await this.clear(); return; }
+    this.currentTask = task;
     await this.poll();
   }
   view() { return { job: this.job, capabilities: this.capabilities, connected: Boolean(this.client.connection), outputDir: this.outputDir, working: this.working, error: this.error, canForget: Boolean(this.reconnectCandidate) }; }
@@ -114,7 +156,17 @@ export class ConversionController {
     this.job = { ...snapshot, provider: snapshot.provider || 'doubao', image_kinds: snapshot.image_kinds || ['main','detail','sku'], paid_calls: snapshot.paid_calls || 0 };
     if (typeof snapshot.output_dir === 'string') this.outputDir = snapshot.output_dir;
     const refs = snapshot.items?.flatMap(item => item.refs || []);
-    if (refs?.length) this.entries = Object.freeze(refs.map(ref => Object.freeze({ ...ref })));
+    if (refs?.length && !this.entries?.some(ref => ref.kind && ref.url)) this.entries = Object.freeze(refs.map(ref => Object.freeze({ ...ref })));
+    const task = this.getTask();
+    if (task?.id !== this.sourceTaskId) return;
+    const owned = new Set((this.entries || []).map(imagePositionKey).filter(Boolean));
+    const published = matchingImageReplacements(task,(snapshot.items || []).filter(item => item.status === 'completed')
+      .flatMap(item => (item.refs || []).filter(ref => item.url === undefined || item.url === ref.url)))
+      .filter(ref => owned.has(imagePositionKey(ref))).map(ref => ({ ...ref, job_id:jobId }));
+    const signature = JSON.stringify(published);
+    if (!published.length || signature === this.publishedSignature) return;
+    const epoch = this.epoch;
+    return Promise.resolve(this.onReplacements(this.sourceTaskId,published)).then(() => { if (this.current(epoch) && this.job?.id === jobId) this.publishedSignature = signature; });
   }
   forgetStale() {
     if (!this.reconnectCandidate || this.working) throw new Error('请先使用新连接码验证本地工具。');
@@ -156,7 +208,8 @@ export class ConversionController {
         if (!this.current(epoch)) return;
         const capabilities = await this.readCapabilities(connection);
         if (!this.current(epoch)) return;
-        this.acceptSnapshot(snapshot, ownedJob.id);
+        await this.acceptSnapshot(snapshot, ownedJob.id);
+        if (!this.current(epoch)) return;
         this.capabilities = capabilities; this.client.remember(connection); this.persistOwnership(); this.restored = false; this.emit();
         return;
       }
@@ -182,17 +235,21 @@ export class ConversionController {
     const entries = buildImageManifest(task, imageKinds);
     if (!entries.length) throw new Error('当前可导出的商品没有图片。');
     const sourceTaskId = task.id, connection = this.client.connection;
+    this.currentTask = task;
     this.pendingSource = { id: sourceTaskId, entries };
     return this.guarded(async epoch => {
       let snapshot;
       try {
+        let capabilities = this.capabilities;
         if (provider === 'aliyun') {
-          const capabilities = await this.readCapabilities(connection);
+          capabilities = await this.readCapabilities(connection);
           if (!this.current(epoch)) return;
           this.capabilities = capabilities; this.emit();
           if (!capabilities.providers?.includes('aliyun')) throw new Error('本地工具需升级到支持阿里云的版本。');
           if (capabilities.aliyun_configured !== true) throw new Error('请先在本地工具配置阿里云密钥，再刷新配置状态。');
         }
+        if (capabilities?.image_link_replacement !== true) throw new Error('本地工具需升级到支持 OSS 图片链接自动替换的版本。');
+        if (capabilities.oss_configured !== true) throw new Error('请先在本地工具配置 OSS，再刷新配置状态。');
         if (!this.current(epoch)) return;
         snapshot = await this.client.request('jobs', { body: { source_task_id: sourceTaskId, output_dir: outputDir, entries, provider, image_kinds:imageKinds, paid_confirmed:paidConfirmed }, connection });
       }
@@ -203,7 +260,9 @@ export class ConversionController {
       }
       if (snapshot?.kind !== 'collector' || snapshot.source_task_id !== sourceTaskId || !snapshot.id) throw new Error('本地任务与当前图片批次不一致，请在本地工具中检查。');
       this.entries = entries; this.sourceTaskId = sourceTaskId; this.outputDir = outputDir;
-      this.acceptSnapshot({ ...snapshot, provider:snapshot.provider || provider, image_kinds:snapshot.image_kinds || imageKinds }, snapshot.id);
+      this.publishedSignature = '';
+      await this.acceptSnapshot({ ...snapshot, provider:snapshot.provider || provider, image_kinds:snapshot.image_kinds || imageKinds }, snapshot.id);
+      if (!this.current(epoch)) return;
       this.persistOwnership(); this.emit();
     });
   }
@@ -213,7 +272,8 @@ export class ConversionController {
     try {
       const snapshot = await this.client.request(`state?job_id=${encodeURIComponent(jobId)}`);
       if (this.current(epoch) && this.job?.id === jobId) {
-        this.acceptSnapshot(snapshot, jobId);
+        await this.acceptSnapshot(snapshot, jobId);
+        if (!this.current(epoch) || this.job?.id !== jobId) return;
         this.error = ''; this.emit();
       }
     } catch (error) { if (this.current(epoch) && this.job?.id === jobId) { this.error = error.message; this.emit(); } }
@@ -227,7 +287,7 @@ export class ConversionController {
     if (job?.provider === 'aliyun' && action === 'retry' && ['uncertain','submitting','aliyun-failed'].includes(item?.phase)) throw new Error('请检查结果并使用已确认付费的重新生成。');
     return this.guarded(async epoch => {
       const snapshot = await this.client.request('action', { body: { job_id: job?.id || null, source_task_id: this.sourceTaskId || taskId || null, action, ...(index === undefined ? {} : { index }), ...(paidRedo ? {paid_confirmed:true} : {}) } });
-      if (this.current(epoch) && job && this.job?.id === job.id) { this.acceptSnapshot(snapshot, job.id); this.emit(); }
+      if (this.current(epoch) && job && this.job?.id === job.id) { await this.acceptSnapshot(snapshot, job.id); if (this.current(epoch) && this.job?.id === job.id) this.emit(); }
     });
   }
   async clear() {

@@ -52,7 +52,7 @@ def test_credentials_routes_guard_status_and_no_secret(tmp_path):
             h={'X-Tool-Token':'token'}
             assert c.post('/api/aliyun/credentials',headers={**h,'Origin':'https://evil.test'},json={'access_key_id':'id','access_key_secret':'s'}).status_code==403
             r=c.post('/api/aliyun/credentials',headers=h,json={'access_key_id':'id','access_key_secret':'s'})
-            assert r.status_code==200 and r.json=={'aliyun_configured':True,'aliyun_price_per_image':0.06}
+            assert r.status_code==200 and r.json=={'aliyun_configured':True,'aliyun_price_per_image':0.06,'oss_configured':False,'image_link_replacement':True}
             assert c.get('/api/aliyun/credentials',headers=h).json==r.json
             assert c.post('/api/reset',headers=h,json={}).status_code==200
             assert c.get('/api/aliyun/credentials',headers=h).json['aliyun_configured']
@@ -174,13 +174,18 @@ def test_paired_capabilities_get_cors_and_configured_gate(tmp_path,monkeypatch):
             assert c.get('/api/bridge/capabilities',headers=h).status_code==403
             assert c.post('/api/bridge/pair',headers=h,json={'extension_id':ext}).status_code==200
             assert c.options('/api/bridge/capabilities',headers={'Origin':h['Origin'],'Access-Control-Request-Method':'GET','Access-Control-Request-Headers':'x-tool-token,x-extension-id'}).status_code==204
-            assert c.get('/api/bridge/capabilities',headers=h).json=={'version':'1.6.1','providers':['doubao','aliyun'],'image_kinds':['main','detail','sku'],'aliyun_configured':False,'aliyun_price_per_image':0.06}
+            assert c.get('/api/bridge/capabilities',headers=h).json=={'version':'1.6.2','providers':['doubao','aliyun'],'image_kinds':['main','detail','sku'],'aliyun_configured':False,'aliyun_price_per_image':0.06,'oss_configured':False,'image_link_replacement':True}
             job={'entries':entries(),'output_dir':str(tmp_path/'out'),'source_task_id':'source','provider':'aliyun','image_kinds':['detail'],'paid_confirmed':True}
             r=c.post('/api/bridge/jobs',headers=h,json=job)
             assert r.status_code==400 and app.extensions['queue'].snapshot()['id'] is None
             assert c.post('/api/aliyun/credentials',headers={'X-Tool-Token':'token'},json={'access_key_id':'id','access_key_secret':'secret'}).status_code==200
             assert c.get('/api/bridge/capabilities',headers=h).json['aliyun_configured']
             assert c.post('/api/bridge/jobs',headers=h,json={**job,'paid_confirmed':'true'}).status_code==400
+            assert c.post('/api/bridge/jobs',headers=h,json=job).status_code==400
+            assert app.extensions['queue'].snapshot()['id'] is None
+            assert c.post('/api/oss/config',headers={'X-Tool-Token':'token'},json={
+                'bucket':'collector-test','region':'cn-hangzhou','credential_mode':'translation'}).status_code==200
+            assert c.get('/api/bridge/capabilities',headers=h).json['oss_configured']
             s=c.post('/api/bridge/jobs',headers=h,json=job).json
             assert s['provider']=='aliyun' and s['counts']['total']==1
     finally:app.extensions['queue'].close(clear_state=True)

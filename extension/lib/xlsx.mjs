@@ -4,6 +4,7 @@ import { TEMPLATE_HEADERS, TEMPLATE_INSTRUCTIONS } from './template.mjs';
 import { outputLimit, validProductTitle } from './core.mjs';
 import { fallbackSku } from './detail.mjs';
 import { matchTemplateXls } from './xls-biff.mjs';
+import { buildImageManifest, imagePositionKey, matchingImageReplacements } from './image-conversion.mjs';
 const LINK_HEADERS = new Set(['商品链接', '主图地址', '货源链接', '产品主图']);
 
 function xml(value) {
@@ -183,15 +184,25 @@ export function productRows(item, fallbackNumber = 0) {
 
 export function taskSheets(task) {
   const rows = [[TEMPLATE_INSTRUCTIONS], [], [], [], [], [], [], [], [...TEMPLATE_HEADERS]];
+  const replacements = new Map(matchingImageReplacements(task,task.imageReplacements).map(ref => [imagePositionKey(ref),ref.published_url]));
+  const manifest = buildImageManifest(task);
+  const replaced = manifest.filter(ref => replacements.has(imagePositionKey(ref))).length;
+  const overlay = (item,job) => {
+    const common = {platform:item.site || job.site || 'pdd',product_id:String(item.id ?? '')};
+    const replace = (url,kind,index) => replacements.get(imagePositionKey({...common,kind,order:index + 1,sku_index:kind === 'sku' ? index : null,url})) || url;
+    return {...item, image:replace(item.image,'main',0), galleryImages:Array.isArray(item.galleryImages) ? item.galleryImages.map((url,index) => replace(url,'main',index)) : item.galleryImages,
+      detailImages:Array.isArray(item.detailImages) ? item.detailImages.map((url,index) => replace(url,'detail',index)) : item.detailImages,
+      skus:Array.isArray(item.skus) && item.skus.length ? item.skus.map((sku,index) => ({...sku,image:replace(sku?.image,'sku',index)})) : [fallbackSku(item)]};
+  };
   let productNumber = 0;
   for (const job of task.jobs) {
     const chosen = (job.groups || []).map(group => group.best).filter(item => item && validProductTitle(item.title, job.keyword)).slice(0, outputLimit(job));
     for (const item of chosen) {
       productNumber++;
-      rows.push(...productRows(item, productNumber));
+      rows.push(...productRows(overlay(item,job), productNumber));
     }
   }
   const widths = Array(22).fill(8.3);
   widths[8] = 39.166; widths[9] = 35.984; widths[10] = 31.256; widths[13] = 20.71;
-  return [{ name: '模版', rows, headerRow: 8, template: true, merge: ['A1:L8'], widths }];
+  return [{ name: '模版', rows, headerRow: 8, template: true, merge: ['A1:L8'], widths, imageReplacementCounts:{replaced,fallback:manifest.length-replaced,total:manifest.length} }];
 }

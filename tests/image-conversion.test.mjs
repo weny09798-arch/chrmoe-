@@ -5,7 +5,7 @@ import { taskSheets, workbookBytes } from '../extension/lib/xlsx.mjs';
 import { buildImageManifest, parseConnectionCode, BridgeClient, ConversionController } from '../extension/lib/image-conversion.mjs';
 
 const image = 'https://img.pddpic.com/main.jpg?size=100';
-const capabilities = { providers:['doubao','aliyun'], image_kinds:['main','detail','sku'], aliyun_configured:true, aliyun_price_per_image:0.06 };
+const capabilities = { providers:['doubao','aliyun'], image_kinds:['main','detail','sku'], oss_configured:true, image_link_replacement:true, aliyun_configured:true, aliyun_price_per_image:0.06 };
 function fixture() {
   const task = createTask(['杯']); task.status = 'done';
   task.jobs[0].limit = 1; task.jobs[0].status = 'done';
@@ -59,7 +59,16 @@ const response = value => ({ ok: true, json: async () => value });
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 function setup(fetch) {
   const saved = new Map(), storage = { getItem:key=>saved.get(key), setItem:(key,value)=>saved.set(key,value), removeItem:key=>saved.delete(key) };
-  const client = new BridgeClient({ extensionId: 'test-extension', fetch, storage });
+  // Legacy lifecycle fixtures use a generic response for routes they do not exercise.
+  // Give their capability route the new complete tool contract; explicit capability
+  // fixtures and HTTP failures remain unchanged.
+  const fixtureFetch = async (url,options) => {
+    const result = await fetch(url,options);
+    if (!url.endsWith('/capabilities') || !result.ok) return result;
+    const value = await result.json();
+    return response(value.providers ? value : capabilities);
+  };
+  const client = new BridgeClient({ extensionId: 'test-extension', fetch:fixtureFetch, storage });
   const updates = [];
   const controller = new ConversionController({ client, onChange: state => updates.push(state) });
   return { client, controller, updates, saved };
@@ -265,13 +274,13 @@ test('paid start validates capabilities and confirmation and freezes selected en
   await assert.rejects(f.controller.action('redo',0),/付费/);
   await f.controller.action('redo',0,undefined,{paidConfirmed:true});
 });
-test('old tool capability 404 permits selected free entries but never silently substitutes a paid provider',async()=>{
+test('old tool capability 404 requires an upgrade for both integrated free and paid entries',async()=>{
   const task=fixture(),jobs=[];
   const f=setup(async(url,options)=>{if(url.endsWith('/capabilities'))return {ok:false,status:404};if(url.endsWith('/jobs')){jobs.push(JSON.parse(options.body));return response({id:'free-1',kind:'collector',source_task_id:task.id,status:'completed',items:[]});}return response({});});
   await f.controller.connect('http://localhost:53121/#token=x');
   await assert.rejects(f.controller.start(task,'D:\\图片',false,{provider:'aliyun',paidConfirmed:true}),/升级/);
-  assert.equal(jobs.length,0);await f.controller.start(task,'D:\\图片',false,{imageKinds:['detail']});
-  assert.equal(jobs[0].entries.length,1);assert.equal(jobs[0].entries[0].kind,'detail');assert.equal(jobs[0].provider,'doubao');
+  await assert.rejects(f.controller.start(task,'D:\\图片',false,{imageKinds:['detail']}),/升级/);
+  assert.equal(jobs.length,0);
 });
 test('capability refresh rejects unconfigured paid start and late status cannot overwrite a reconnected tool',async()=>{
   const pending=deferred();let hold=false,configured=false;

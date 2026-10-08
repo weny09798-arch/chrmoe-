@@ -1,12 +1,13 @@
-"""Whole HTTP-to-worker-to-XLSX flow; only external image/cloud I/O is replaced."""
+"""Whole HTTP-to-worker-to-published-mapping flow with external I/O replaced."""
 import io
+import json
 import time
 from pathlib import Path
 from contextlib import nullcontext
 from PIL import Image
-from openpyxl import load_workbook
 from app import create_app
 from core import NeedsUser
+from oss_fakes import FakePublisher
 
 
 def image(color):
@@ -48,7 +49,7 @@ def test_paired_mixed_product_batch_recovers_same_generation_and_exports_mapping
     import core
     monkeypatch.setattr(core, 'download_image', lambda url: (image('red'), '.png'))
     cloud = Cloud()
-    app = create_app(lambda: cloud, tmp_path / 'private', token='test-secret')
+    app = create_app(lambda: cloud, tmp_path / 'private', token='test-secret', oss_factory=FakePublisher)
     extension = 'a' * 32
     headers = {'X-Tool-Token': 'test-secret', 'X-Extension-Id': extension,
                'Origin': f'chrome-extension://{extension}'}
@@ -75,19 +76,22 @@ def test_paired_mixed_product_batch_recovers_same_generation_and_exports_mapping
                 'job_id': job_id, 'source_task_id': 'mixed-products', 'action': 'continue'}).status_code == 200
             complete = wait(queue, lambda s: s['status'] == 'completed')
             assert cloud.submissions == 1  # Both URL and byte dedup reuse this result.
-            assert complete['counts'] == {'total': 3, 'unique': 1, 'downloaded': 1, 'converted': 1, 'failed': 0}
+            assert complete['counts'] == {'total': 3, 'unique': 1, 'downloaded': 1, 'converted': 1, 'failed': 0, 'uploaded': 1, 'upload_failed': 0}
             result = client.get('/api/bridge/manifest?job_id=' + job_id, headers=headers)
-            assert result.status_code == 200
-            rows = list(load_workbook(io.BytesIO(result.data)).active.values)
-            assert [row[0:2] for row in rows[1:]] == [('pdd', '001'), ('taobao', '002'), ('1688', '003')]
-            assert [row[3] for row in rows[1:]] == ['main', 'detail', 'sku']
-            assert rows[3][4] == '透明/大号'
-            assert rows[1][6] == 'https://img.pddpic.com/a.png?signature=keep'
-            assert all(Path(row[7]).is_file() for row in rows[1:])
+            assert result.status_code == 410
+            rows = json.loads(Path(complete['mapping_path']).read_text(encoding='utf-8'))['rows']
+            assert [(row['platform'], row['product_id']) for row in rows] == [('pdd', '001'), ('taobao', '002'), ('1688', '003')]
+            assert [row['kind'] for row in rows] == ['main', 'detail', 'sku']
+            assert rows[2]['sku'] == '透明/大号' and rows[2]['sku_index'] == 0
+            assert rows[0]['url'] == 'https://img.pddpic.com/a.png?signature=keep'
+            assert all(Path(row['output_path']).is_file() for row in rows)
+            assert all(row['published_url'].startswith('https://collector-test.oss-cn-hangzhou.aliyuncs.com/converted-images/') for row in rows)
+            assert len({row['published_url'] for row in rows}) == 1
             assert client.get(f'/api/bridge/images/{job_id}/0/result', headers=headers).status_code == 200
             assert client.post('/api/reset', headers={'X-Tool-Token': 'test-secret'}, json={}).status_code == 200
             assert client.get('/api/bridge/state?job_id=' + job_id, headers=headers).status_code == 409
-            assert all(Path(row[7]).is_file() for row in rows[1:])
-            assert Path(complete['manifest_path']).is_file()
+            assert all(Path(row['output_path']).is_file() for row in rows)
+            assert Path(complete['mapping_path']).is_file()
+            assert not list(Path(complete['run_dir']).rglob('*.xlsx'))
     finally:
         app.extensions['queue'].close(clear_state=True)

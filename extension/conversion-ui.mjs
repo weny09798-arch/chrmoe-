@@ -1,7 +1,7 @@
-import { BridgeClient, ConversionController, buildImageManifest } from './lib/image-conversion.mjs';
+import { BridgeClient, ConversionController, buildImageManifest, imagePositionKey, matchingImageReplacements } from './lib/image-conversion.mjs';
 
 const STATUS = { recovering:'正在恢复本批进度', running:'转换中', queued:'等待', pending:'等待', paused:'已暂停', stopped:'已停止', blocked:'等待处理', 'needs-review':'请检查结果', completed:'本批已结束', done:'本批已结束', failed:'失败' };
-const PHASE = { downloading:'正在下载原图', ready:'原图就绪', submitting:'正在提交', pending:'等待生成结果', saving:'正在保存结果', alias:'复用相同图片', done:'已完成', 'download-failed':'原图下载失败', uncertain:'请检查生成结果', 'aliyun-ready':'等待阿里云翻译', 'aliyun-downloading':'正在下载阿里云结果', 'aliyun-failed':'阿里云翻译失败，重新生成可能再次计费' };
+const PHASE = { downloading:'正在下载原图', ready:'原图就绪', submitting:'正在提交', pending:'等待生成结果', saving:'正在保存结果', uploading:'正在上传 OSS', 'upload-failed':'OSS 上传失败，导出保留原图', alias:'复用相同图片', done:'已完成', 'download-failed':'原图下载失败', uncertain:'请检查生成结果', 'aliyun-ready':'等待阿里云翻译', 'aliyun-downloading':'正在下载阿里云结果', 'aliyun-failed':'阿里云翻译失败，重新生成可能再次计费' };
 const KIND = { main:'主图', detail:'详情图', sku:'SKU 图' };
 function retryLabel(item, provider) {
   if (!item || ['completed','needs-review'].includes(item.status) || item.phase === 'uncertain') return '';
@@ -13,11 +13,11 @@ function retryLabel(item, provider) {
   return '';
 }
 
-export function createConversionPanel({ document, extensionId, getCollection, storage = globalThis.sessionStorage, fetch = globalThis.fetch?.bind(globalThis), setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout, download, confirm = text => globalThis.confirm?.(text) === true } = {}) {
+export function createConversionPanel({ document, extensionId, getCollection, onReplacements = async () => {}, storage = globalThis.sessionStorage, fetch = globalThis.fetch?.bind(globalThis), setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout, confirm = text => globalThis.confirm?.(text) === true } = {}) {
   const $ = id => document.getElementById(id);
   const node = (tag, text, className = '') => { const el = document.createElement(tag); el.textContent = text; el.className = className; return el; };
   const client = new BridgeClient({ extensionId, storage, fetch });
-  const controller = new ConversionController({ client, onChange: render });
+  const controller = new ConversionController({ client, onChange: render, getTask:() => getCollection().task, onReplacements });
   let timer = null, scheduledEpoch = null, itemSignature = '', objectUrls = [], disposed = false;
   let renderedEpoch = controller.epoch;
   let imageKinds = ['main','detail','sku'], provider = 'doubao', quoteSignature = '', batchOptionsSignature = '';
@@ -81,7 +81,7 @@ export function createConversionPanel({ document, extensionId, getCollection, st
         }));
         controls.append(button);
       }
-      for (const [action, label] of [['retry','继续处理此图'], ['redo','重新生成此图']]) {
+      for (const [action, label] of [['retry','继续处理此图'], ['retry-upload','重试上传（不重新生成）'], ['redo','重新生成此图']]) {
         const button = node('button', label, 'button'); button.type = 'button'; button.dataset.conversionAction = action; button.dataset.index = String(index);
         button.disabled = controller.working || !['failed','needs-review','paused','completed'].includes(item.status) || !['paused','stopped','blocked','completed','done'].includes(job.status);
         button.addEventListener('click', () => { if (!button.disabled) void run(() => {
@@ -109,7 +109,9 @@ export function createConversionPanel({ document, extensionId, getCollection, st
     const chosen = displayedSelection(task), allEntries = chosen.frozen ? chosen.entries : buildImageManifest(task);
     if (!chosen.frozen) quoteSignature = chosen.signature;
     $('conversion-selection').textContent = allEntries ? `${Object.entries(KIND).map(([kind,label]) => `${label} ${allEntries.filter(entry => entry.kind === kind).length}`).join(' · ')} · 已选 ${chosen.count} 个位置 · 独立 URL ${chosen.unique}` : chosen.count === null ? '本批清单正在恢复，图片数量和费用待本地快照确认。' : `本批已选 ${chosen.count} 个位置 · 独立 URL 待恢复`;
-    $('conversion-provider-status').textContent = !connected ? '连接本地工具后可查询阿里云配置状态。' : !capabilities ? '请刷新配置状态。' : !capabilities.providers?.includes('aliyun') ? '当前工具仅支持豆包免费模式；阿里云付费模式需要升级本地工具。' : capabilities.aliyun_configured === true ? '阿里云密钥已在本机配置（尚未验证云端服务）。' : '请在本地工具配置阿里云密钥，返回后点击“刷新配置状态”。';
+    const ossReady = capabilities?.image_link_replacement === true && capabilities.oss_configured === true;
+    const ossStatus = !connected ? '连接本地工具后可查询 OSS 和阿里云配置状态。' : !capabilities ? '请刷新配置状态。' : capabilities.image_link_replacement !== true ? '请升级本地工具，以支持 OSS 图片链接自动替换。' : capabilities.oss_configured !== true ? '请在本地工具配置 OSS，返回后点击“刷新配置状态”。' : 'OSS 已配置，上传成功的图片将自动替换商品 Excel 链接。';
+    $('conversion-provider-status').textContent = ossStatus + (ossReady ? !capabilities.providers?.includes('aliyun') ? ' 阿里云付费模式需要升级本地工具。' : capabilities.aliyun_configured === true ? ' 阿里云密钥已在本机配置（尚未验证云端服务）。' : ' 请在本地工具配置阿里云密钥，返回后点击“刷新配置状态”。' : '');
     $('conversion-settings').hidden = !connected;
     if (connected) $('conversion-settings').setAttribute('href',`${client.connection.baseUrl}/#token=${encodeURIComponent(client.connection.token)}`);
     else $('conversion-settings').removeAttribute('href');
@@ -124,16 +126,17 @@ export function createConversionPanel({ document, extensionId, getCollection, st
     $('conversion-login').disabled = !connected || working;
     $('conversion-login').hidden = paid;
     $('conversion-start').textContent = paid ? chosen.amount === null ? '付费开始转换（费用待恢复）' : `付费开始转换（上限 ¥${chosen.amount.toFixed(2)}）` : '开始图片转换（豆包免费）';
-    $('conversion-start').disabled = !extensionId || !connected || working || !state.outputDir || collecting || !task || !['done','stopped','error','short'].includes(task.status) || frozen || !chosen.count || (paid && (!capabilities?.providers?.includes('aliyun') || capabilities.aliyun_configured !== true));
+    $('conversion-start').disabled = !extensionId || !connected || !ossReady || working || !state.outputDir || collecting || !task || !['done','stopped','error','short'].includes(task.status) || frozen || !chosen.count || (paid && (!capabilities?.providers?.includes('aliyun') || capabilities.aliyun_configured !== true));
     $('conversion-stop').disabled = working || !job || ['completed','done','paused','stopped'].includes(job.status);
     $('conversion-continue').disabled = working || !job || !['paused','stopped','blocked'].includes(job.status);
-    $('conversion-manifest').disabled = working || !job;
     $('conversion-output').textContent = state.outputDir || '尚未选择文件夹';
     $('conversion-status').textContent = job ? `${STATUS[job.status] || job.status} · ${job.provider === 'aliyun' ? '阿里云付费' : '豆包免费'} · ${(job.image_kinds || ['main','detail','sku']).map(kind => KIND[kind]).join('、')} · 付费请求 ${job.paid_calls || 0}${job.provider === 'aliyun' ? '（包含不确定请求，以实际账单为准）' : ''}${job.browser_message ? ` · ${job.browser_message}` : ''}` : collecting || (task && !['done','stopped','error','short'].includes(task.status)) ? '请先停止采集或等待采集结束' : connected ? '已连接，选择保存文件夹后开始转换' : '等待连接本地工具';
     const counts = job?.counts || {};
-    $('conversion-counts').textContent = `图片位置 ${counts.total || 0} · 独立图片 ${counts.unique || 0} · 已下载 ${counts.downloaded || 0} · 已转换 ${counts.converted || 0} · 失败 ${counts.failed || 0}`;
+    const replacedKeys = new Set(matchingImageReplacements(task,task?.imageReplacements).map(imagePositionKey)), exportManifest = buildImageManifest(task);
+    const replaced = exportManifest.filter(ref => replacedKeys.has(imagePositionKey(ref))).length, total = exportManifest.length;
+    $('conversion-counts').textContent = `图片位置 ${counts.total || 0} · 独立图片 ${counts.unique || 0} · 已下载 ${counts.downloaded || 0} · 已转换 ${counts.converted || 0} · 已上传 ${counts.uploaded || 0} · 已替换 ${replaced} · 原图回退 ${total-replaced} · 上传失败 ${counts.upload_failed || 0} · 失败 ${counts.failed || 0}`;
     const active = job?.items?.find(item => item.status === 'running') || job?.items?.find(item => ['paused','needs-review'].includes(item.status));
-    $('conversion-current').textContent = active ? `当前图片 ${(active.index ?? 0) + 1}：${PHASE[active.phase] || active.phase || STATUS[active.status]}${active.message ? ` · ${active.message}` : ''}` : job ? '每张完成的结果会保存到本地；转换清单记录每个原始图片位置。' : '本批使用与原商品 Excel 相同的标题筛选与数量限制。';
+    $('conversion-current').textContent = active ? `当前图片 ${(active.index ?? 0) + 1}：${PHASE[active.phase] || active.phase || STATUS[active.status]}${active.message ? ` · ${active.message}` : ''}` : job ? '上传成功的图片已保存到商品任务，点击“导出 Excel”即可使用；未完成的位置保留原图。' : '本批使用与原商品 Excel 相同的标题筛选与数量限制。';
     if (state.error) message(state.error,true);
     renderItems(job);
     for (const row of $('conversion-items').querySelectorAll('.conversion-item')) {
@@ -142,8 +145,11 @@ export function createConversionPanel({ document, extensionId, getCollection, st
       const label = retryLabel(item, job?.provider);
       for (const button of row.querySelectorAll('[data-conversion-action]')) {
         const retry = button.dataset.conversionAction === 'retry';
+        const uploadRetry = button.dataset.conversionAction === 'retry-upload';
+        const canUploadRetry = item?.phase === 'upload-failed' && Boolean(item.result?.output_path || item.result_path);
         if (retry) { button.textContent = label || '无需重试'; button.hidden = !label; }
-        button.disabled = working || !['paused','stopped','blocked','completed','done'].includes(job?.status) || !['failed','needs-review','paused','completed'].includes(item?.status) || (retry && !label);
+        if (uploadRetry) button.hidden = !canUploadRetry;
+        button.disabled = working || !['paused','stopped','blocked','completed','done'].includes(job?.status) || !['failed','needs-review','paused','completed'].includes(item?.status) || (retry && !label) || (uploadRetry && !canUploadRetry);
       }
     }
     if (!job) { stopPoll(); $('conversion-details').open = false; }
@@ -175,10 +181,6 @@ export function createConversionPanel({ document, extensionId, getCollection, st
   }));
   $('conversion-stop').addEventListener('click', () => void run(() => controller.action('stop')));
   $('conversion-continue').addEventListener('click', () => void run(() => controller.action('continue')));
-  $('conversion-manifest').addEventListener('click', () => void run(async () => {
-    const blob = await controller.manifest();
-    if (blob) await download(blob, '图片转换清单.xlsx');
-  }));
   render();
   return {
     controller, refresh: render,

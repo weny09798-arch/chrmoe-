@@ -12,11 +12,11 @@ $('copy-code').onclick = async () => {
  } catch(e) { $('connection-message').textContent='请选中连接码，按 Ctrl+C 复制'; }
 };
 let busy = false, state = null, closed = false;
-let aliyunConfigured = false;
+let aliyunConfigured = false, ossConfigured = false;
 const cards = new Map();
 let selectedUrls = [];
 const statuses = {idle:'尚未开始',running:'正在处理',stopped:'已停止后续提交',paused:'等待处理',completed:'全部已保存，请逐张检查', 'storage-error':'状态保存失败，必须重新启动'};
-const phases = {downloading:'下载原图', 'download-failed':'原图下载失败', alias:'等待复用结果',ready:'等待提交', 'aliyun-ready':'等待阿里云付费提交', 'aliyun-downloading':'下载已有阿里云结果', 'aliyun-failed':'阿里云图片失败', submitting:'上传 / 提交',pending:'生成 / 下载',saving:'保存',done:'已保存',uncertain:'提交状态不确定'};
+const phases = {uploading:'上传 OSS / 验证图片链接', 'upload-failed':'OSS 上传失败（已有本地结果）',downloading:'下载原图', 'download-failed':'原图下载失败', alias:'等待复用结果',ready:'等待提交', 'aliyun-ready':'等待阿里云付费提交', 'aliyun-downloading':'下载已有阿里云结果', 'aliyun-failed':'阿里云图片失败', submitting:'上传 / 提交',pending:'生成 / 下载',saving:'保存',done:'已保存',uncertain:'提交状态不确定'};
 async function api(path, body, method) {
   const opts = {headers:{'X-Tool-Token':token}};
   if (body) {opts.method='POST'; if(body instanceof FormData) opts.body=body; else {opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body);}}
@@ -33,6 +33,11 @@ function render(){
  $('continue').disabled=busy||terminal||!state?.id||running||state.status==='completed'||state.items.some(i=>i.status==='needs-review'||i.phase==='uncertain');
  $('exit').disabled=busy; $('open').disabled=busy||terminal||state?.browser_busy;
  $('reset').disabled=busy||!state?.id;
+ const fixedTarget=state?.upload_enabled&&state?.id&&state.status!=='completed';
+ $('oss-bucket').disabled=busy||fixedTarget;$('oss-region').disabled=busy||fixedTarget;
+ $('oss-delete').disabled=busy||fixedTarget;$('oss-save').disabled=busy||running;
+ $('oss-check').disabled=busy||running||!ossConfigured;
+ $('oss-key-id').disabled=busy||$('oss-mode').value==='translation';$('oss-key-secret').disabled=busy||$('oss-mode').value==='translation';
  $('status').textContent= (statuses[state?.status]||'')+' · '+(state?.message||'')+(state?.provider==='aliyun'?` · 付费调用尝试 ${state.paid_calls||0} 次（含不确定请求），预计费用上限 ¥${Number(state.estimated_cost_upper||0).toFixed(2)}`:'');
  $('browser').textContent=state?.browser_message || state?.browser_stage || '';
  const items=state?.items||[]; $('progress').max=Math.max(1,items.length);$('progress').value=items.filter(i=>i.status==='completed').length;
@@ -64,10 +69,10 @@ function render(){
    view.resultFigure=null;view.resultImage=null;view.resultVersion=null;
    view.link.hidden=true;view.path.textContent='';
   }
-  view.retry.textContent=['pending','saving','aliyun-downloading'].includes(item.phase)?'继续获取此图':'继续处理此图';
+  view.retry.textContent=item.phase==='upload-failed'?'重试上传（不重新翻译）':['pending','saving','aliyun-downloading'].includes(item.phase)?'继续获取此图':'继续处理此图';
   view.retry.hidden=item.status==='completed'||item.status==='needs-review'||item.phase==='uncertain'||(state?.provider==='aliyun'&&['submitting','aliyun-failed'].includes(item.phase));
   view.retry.disabled=busy||terminal||running;
-  view.retry.onclick=()=>act('retry',item.index);
+  view.retry.onclick=()=>act(item.phase==='upload-failed'?'retry-upload':'retry',item.index);
   view.redo.textContent='重新生成此图';view.redo.disabled=busy||terminal||running;
   view.redo.onclick=()=>act('redo',item.index);
  }
@@ -96,6 +101,32 @@ $('aliyun-delete').onclick=async()=>{
  catch(e){$('error').textContent=e.message;}
  finally{$('aliyun-key-secret').value='';busy=false;render();}
 };
+async function refreshOSS(){
+ const result=await api('/api/oss/config');ossConfigured=result.oss_configured===true;
+ $('oss-status').textContent=ossConfigured?`已配置 · ${result.bucket} · ${result.region}（请点击检查确认权限及链接）`:'尚未配置，插件自动替换图片不可开始';
+ if(ossConfigured){$('oss-bucket').value=result.bucket;$('oss-region').value=result.region;$('oss-mode').value=result.credential_mode;}
+ render();
+}
+$('oss-mode').onchange=render;
+$('oss-save').onclick=async()=>{
+ busy=true;$('error').textContent='';render();
+ try{await api('/api/oss/config',{bucket:$('oss-bucket').value.trim(),region:$('oss-region').value.trim(),credential_mode:$('oss-mode').value,...($('oss-mode').value==='independent'?{access_key_id:$('oss-key-id').value.trim(),access_key_secret:$('oss-key-secret').value.trim()}:{})});await refreshOSS();}
+ catch(e){$('error').textContent=e.message;}
+ finally{$('oss-key-secret').value='';busy=false;render();}
+};
+$('oss-delete').onclick=async()=>{
+ busy=true;$('error').textContent='';render();
+ try{await api('/api/oss/config',undefined,'DELETE');$('oss-key-id').value='';await refreshOSS();}
+ catch(e){$('error').textContent=e.message;}
+ finally{$('oss-key-secret').value='';busy=false;render();}
+};
+$('oss-check').onclick=async()=>{
+ busy=true;$('error').textContent='';render();
+ try{const result=await api('/api/oss/check',{});$('oss-status').textContent=result.message||'OSS 上传及公开读取正常';}
+ catch(e){$('error').textContent=e.message;}
+ finally{busy=false;render();}
+};
+refreshOSS().catch(e=>{$('error').textContent=e.message;});
 $('provider').onchange=render;
 refreshCredentials().catch(e=>{$('error').textContent=e.message;});
 function clearSelected(){for(const url of selectedUrls)URL.revokeObjectURL(url);selectedUrls=[];}

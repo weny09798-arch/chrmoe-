@@ -165,7 +165,7 @@ class PublicHTTPSConnection(http.client.HTTPSConnection):
         try:self.sock=self._context.wrap_socket(raw,server_hostname=self.host)
         except BaseException:raw.close();raise
 
-def _result_transport(url):
+def _result_transport(url, max_bytes=MAX_DOWNLOAD_BYTES):
     current=url
     for hop in range(6):
         parsed=_result_url_parts(current);addresses=_public_addresses(parsed.hostname)
@@ -182,13 +182,13 @@ def _result_transport(url):
                 current=urljoin(current,location);continue
             if response.status!=200:raise OSError('结果下载失败')
             length=response.getheader('Content-Length')
-            if length and int(length)>MAX_DOWNLOAD_BYTES:raise ValueError('结果图片过大')
+            if length and int(length)>max_bytes:raise ValueError('结果图片过大')
             chunks=[];size=0
             while True:
-                chunk=response.read1(min(65536,MAX_DOWNLOAD_BYTES+1-size))
+                chunk=response.read1(min(65536,max_bytes+1-size))
                 if not chunk:break
                 size+=len(chunk)
-                if size>MAX_DOWNLOAD_BYTES:raise ValueError('结果图片过大')
+                if size>max_bytes:raise ValueError('结果图片过大')
                 chunks.append(chunk)
             data=b''.join(chunks)
             with Image.open(io.BytesIO(data)) as im:extension={'PNG':'.png','JPEG':'.jpg','WEBP':'.webp'}.get(im.format)

@@ -14,8 +14,6 @@ from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from PIL import Image
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
 
 from storage import save_result, validate_inputs
 
@@ -24,8 +22,6 @@ MAX_DOWNLOAD_BYTES = 16 * 1024 * 1024
 DOWNLOAD_TIMEOUT = 4
 DOWNLOAD_ATTEMPT_SECONDS = 8
 DOWNLOAD_PROCESS_SECONDS = 18
-HEADERS = ['平台', '商品ID', '商品标题', '图片类型', 'SKU', '顺序', '原图URL', '本地转换路径', '状态', '原因']
-FIELDS = ['platform', 'product_id', 'title', 'kind', 'sku', 'order', 'url', 'output_path', 'status', 'reason']
 
 
 def validate_image_url(url):
@@ -153,6 +149,9 @@ def build_items(entries):
         if ref.get('kind') not in ('main', 'detail', 'sku') or type(ref.get('order')) is not int or ref['order'] < 1:
             raise ValueError('图片类型或顺序无效')
         ref.update(position=position, output_path=None)
+        ref.setdefault('sku_index',ref['order']-1 if ref['kind']=='sku' else None)
+        if ref['sku_index'] is not None and (type(ref['sku_index']) is not int or ref['sku_index']<0):raise ValueError('SKU 行索引无效')
+        ref.pop('published_url',None);ref.pop('published_revision',None)
         item = by_url.get(ref['url'])
         if item is None:
             item = {'index': len(items), 'name': f'image_{len(items) + 1}.png', 'url': ref['url'],
@@ -167,7 +166,9 @@ def counts(job):
     unique = [item for item in job['items'] if 'alias_of' not in item]
     return {'total': sum(len(item['refs']) for item in job['items']), 'unique': len(unique),
             'downloaded': sum(bool(item.get('sha256')) for item in unique),
-            'converted': sum(item['status'] == 'completed' for item in unique),
+            'converted': sum(bool(item.get('result')) for item in unique),
+            'uploaded': sum(bool(item.get('upload_result')) for item in unique),
+            'upload_failed': sum(item['phase']=='upload-failed' for item in unique),
             'failed': sum(item['status'] == 'failed' for item in unique)}
 
 
@@ -205,18 +206,3 @@ def write_report(job):
     temp.write_text(json.dumps({'job_id': job['id'], 'source_task_id': job['source_task_id'],
         'status': job['status'], 'counts': counts(job), 'rows': rows}, ensure_ascii=False, indent=2), encoding='utf-8')
     temp.replace(mapping)
-    book = Workbook(); sheet = book.active; sheet.title = '图片转换清单'
-    sheet.append(HEADERS)
-    for row in rows:
-        sheet.append([row.get(key) for key in FIELDS])
-        for cell in sheet[sheet.max_row]:
-            if isinstance(cell.value, str): cell.data_type = 's'
-            cell.alignment = Alignment(vertical='top', wrap_text=True)
-        sheet.row_dimensions[sheet.max_row].height = 42
-    for cell in sheet[1]:
-        cell.font = Font(bold=True, color='FFFFFF'); cell.fill = PatternFill('solid', fgColor='24476A')
-    for column, width in zip('ABCDEFGHIJ', (14, 22, 40, 14, 28, 10, 55, 65, 18, 42)):
-        sheet.column_dimensions[column].width = width
-    sheet.freeze_panes = 'A2'; sheet.auto_filter.ref = sheet.dimensions
-    path = Path(job['manifest_path']); pending = path.with_suffix('.xlsx.tmp')
-    book.save(pending); pending.replace(path)

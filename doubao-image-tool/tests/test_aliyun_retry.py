@@ -4,6 +4,7 @@ import pytest
 from app import create_app
 from core import QueueService
 from test_aliyun import Translator, entries, image, never_browser, wait
+from oss_fakes import FakePublisher
 
 @pytest.fixture
 def completed_queue(tmp_path, monkeypatch):
@@ -106,7 +107,7 @@ def test_stale_http_retry_of_completed_original_returns_400(tmp_path, monkeypatc
     monkeypatch.setattr(core, 'download_image', lambda url: (image(), '.png'))
     monkeypatch.setattr(core, 'download_aliyun_result', download_result)
     translator = Translator()
-    app = create_app(never_browser, tmp_path / 'private', token='token', aliyun_factory=lambda: translator)
+    app = create_app(never_browser, tmp_path / 'private', token='token', aliyun_factory=lambda: translator, oss_factory=FakePublisher)
     queue = app.extensions['queue']
     try:
         with app.test_client() as client:

@@ -6,6 +6,7 @@ import { resolveSite, sourceOrigin } from './lib/sites.mjs';
 import { productImage, removeProduct, prepareRefill } from './lib/products.mjs';
 import { createRefillScheduler } from './lib/refill.mjs';
 import { createConversionPanel } from './conversion-ui.mjs';
+import { mergeImageReplacements } from './lib/image-conversion.mjs';
 
 const $ = id => document.getElementById(id);
 const installed = Boolean(globalThis.chrome?.runtime?.id);
@@ -19,12 +20,17 @@ let refillAuto = false, refillWaiting = false;
 const conversion = createConversionPanel({
   document, extensionId: globalThis.chrome?.runtime?.id,
   getCollection: () => ({ task, collecting: busy || refillWaiting || Boolean(activeRun), unavailable: lockedOut || clearing }),
-  download: async (blob, filename) => {
-    const url = URL.createObjectURL(blob);
-    try {
-      if (installed) await chrome.downloads.download({ url, filename, saveAs: false });
-      else { const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); }
-    } finally { setTimeout(() => URL.revokeObjectURL(url), 60000); }
+  onReplacements: async (sourceTaskId, refs) => {
+    if (lockedOut || clearing || task?.id !== sourceTaskId) return;
+    const current=task, candidate=structuredClone(current);
+    mergeImageReplacements(candidate,refs);
+    await saveTask(candidate);
+    if (!clearing && task===current) {
+      mergeImageReplacements(current,refs);
+      // A deletion or collection save may have queued an older mapping while
+      // the first write was pending. Persist the current products after it.
+      if (JSON.stringify(current)!==JSON.stringify(candidate)) await saveTask(current);
+    }
   }
 });
 const refillScheduler = createRefillScheduler({
@@ -358,8 +364,10 @@ $('export').addEventListener('click', async () => {
   button.textContent = '正在生成…';
   notice('正在生成 Excel…');
   try {
+    const snapshot = structuredClone(task);
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const sheets = taskSheets(task);
+    const sheets = taskSheets(snapshot);
+    const { replaced, fallback } = sheets[0].imageReplacementCounts;
     const bytes = workbookBytes(sheets);
     const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
@@ -367,7 +375,7 @@ $('export').addEventListener('click', async () => {
     try {
       if (installed) await chrome.downloads.download({ url, filename, saveAs: false });
       else { const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); }
-      notice(`已开始下载「${filename}」。请打开浏览器右上角的下载列表。这次固定为 .xlsx，避免旧版 .xls 把页面撑到内存不足。`, 'success');
+      notice(`已开始下载「${filename}」：已替换 ${replaced} 个图片位置，原图回退 ${fallback} 个。请打开浏览器右上角的下载列表。`, 'success');
     } finally { setTimeout(() => URL.revokeObjectURL(url), 60000); }
   } catch (error) { notice(`导出失败：${error.message}`, 'error'); }
   finally { exporting = false; button.textContent = '↓ 导出 Excel'; renderTask(); }

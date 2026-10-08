@@ -1,7 +1,10 @@
 """Bridge boundaries use no network or live cloud browser."""
 import pytest
+import json
+from pathlib import Path
 from app import create_app
 from core import NeedsUser
+from oss_fakes import FakePublisher
 
 EXT = 'a' * 32
 OTHER = 'b' * 32
@@ -13,7 +16,7 @@ class Browser:
 
 @pytest.fixture
 def client(tmp_path):
-    app = create_app(Browser, tmp_path/'private', tmp_path/'out', 'secret')
+    app = create_app(Browser, tmp_path/'private', tmp_path/'out', 'secret', oss_factory=FakePublisher)
     app.config['TESTING'] = True
     with app.test_client() as c:
         yield c
@@ -29,7 +32,7 @@ def collector(c, tmp_path):
     out=tmp_path/'out';out.mkdir(exist_ok=True)
     with q.cv:
         q.job = {'id':'job', 'kind':'collector', 'source_task_id':'source', 'status':'stopped',
-                 'output_dir':str(out),'run_dir':str(out),'manifest_path':str(out/'图片转换清单.xlsx'),'mapping_path':str(out/'图片转换清单.json'),
+                 'output_dir':str(out),'run_dir':str(out),'mapping_path':str(out/'图片转换对应记录.json'),
                  'prompt':'convert', 'items':[{'index':0,'phase':'ready','status':'queued','result':None,'message':'',
                  'refs':[{'platform':'pdd','product_id':'1','title':'product','kind':'main','sku':'','order':1,'url':'https://img.pddpic.com/a.png','product_url':'','position':0,'output_path':None}]}], 'message':''}
     return q
@@ -80,7 +83,7 @@ def test_manual_queue_cannot_be_read_stopped_or_replaced(client,tmp_path):
     assert client.post('/api/bridge/jobs',headers=HEADERS,json={'source_task_id':'source','output_dir':str(tmp_path/'out'),'entries':[]}).status_code==409
     assert q.snapshot()['status']=='stopped'
 
-def test_collector_start_uses_protected_prompt_and_writes_manifest(client,tmp_path,monkeypatch):
+def test_collector_start_uses_protected_prompt_and_writes_internal_mapping(client,tmp_path,monkeypatch):
     import core
     def fail_download(url): raise ValueError('offline fixture')
     monkeypatch.setattr(core,'download_image',fail_download)
@@ -96,7 +99,10 @@ def test_collector_start_uses_protected_prompt_and_writes_manifest(client,tmp_pa
     assert '保留原有背景' in r.json['prompt'] and '保留原有排版' in r.json['prompt']
     assert '改变包装' not in r.json['prompt']
     manifest=client.get('/api/bridge/manifest?job_id='+r.json['id'],headers=HEADERS)
-    assert manifest.status_code==200 and manifest.data.startswith(b'PK')
+    assert manifest.status_code==410
+    rows=json.loads(Path(r.json['mapping_path']).read_text(encoding='utf-8'))['rows']
+    assert rows[0]['product_id']=='p1' and rows[0]['output_path'] is None
+    assert not list(Path(r.json['run_dir']).rglob('*.xlsx'))
 
 def test_folder_cancel_invalid_and_private_paths(client,tmp_path,monkeypatch):
     pair(client)
@@ -108,7 +114,7 @@ def test_folder_cancel_invalid_and_private_paths(client,tmp_path,monkeypatch):
         assert client.post('/api/bridge/folder',headers=HEADERS,json={}).status_code==400
         assert client.post('/api/bridge/jobs',headers=HEADERS,json={'source_task_id':'source','output_dir':path,'entries':[]}).status_code==400
 
-def test_manifest_and_download_pending_preview(client,tmp_path):
+def test_retired_manifest_and_download_pending_preview(client,tmp_path):
     pair(client); q=collector(client,tmp_path)
     assert client.get('/api/bridge/images/job/0/original',headers=HEADERS).status_code==404
     assert client.get('/api/images/job/0/original?token=secret').status_code==404
@@ -118,7 +124,7 @@ def test_manifest_and_download_pending_preview(client,tmp_path):
     with q.cv:
         q.job['manifest_path']=str(manifest)
         q.job['items'][0]['result']={'output_path':str(image)}
-    assert client.get('/api/bridge/manifest?job_id=job',headers=HEADERS).data==b'mapping'
+    assert client.get('/api/bridge/manifest?job_id=job',headers=HEADERS).status_code==410
     assert client.get('/api/bridge/images/job/0/result',headers=HEADERS).data==b'image'
     assert client.get(f'/api/bridge/images/job/0/result?token=secret&extension_id={EXT}').data==b'image'
     assert client.get('/api/bridge/images/old/0/result',headers=HEADERS).status_code==409
@@ -171,7 +177,7 @@ def test_cancel_clears_owned_temp_keeps_output_login_pairing_and_accepts_new_job
         old.job['id']=old_id
         old._persist()
     output=tmp_path/'out'/'saved.png';output.write_bytes(b'saved output')
-    mapping=tmp_path/'out'/'图片转换清单.xlsx';mapping_bytes=mapping.read_bytes()
+    mapping=tmp_path/'out'/'图片转换对应记录.json';mapping_bytes=mapping.read_bytes()
     profile=tmp_path/'private'/'chrome-profile';profile.mkdir()
     login=profile/'login-test';login.write_bytes(b'login fixture')
     r=client.post('/api/bridge/action',headers=HEADERS,json={'job_id':old_id,'source_task_id':'source','action':'cancel'})

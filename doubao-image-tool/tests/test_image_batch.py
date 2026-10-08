@@ -6,7 +6,6 @@ from urllib.error import HTTPError
 
 import pytest
 from PIL import Image
-from openpyxl import load_workbook
 
 from core import QueueService
 from test_core import Cloud, wait
@@ -39,7 +38,7 @@ def test_url_queue_groups_positions_keeps_order_and_writes_all_outputs(tmp_path,
         entries[0]['title'] = 'mutated'
         state = wait(service, lambda s:s['status']=='completed')
         assert state['kind']=='collector' and state['source_task_id']=='source-1'
-        assert state['counts']=={'total':3,'unique':1,'downloaded':1,'converted':1,'failed':0}
+        assert state['counts']=={'total':3,'unique':1,'downloaded':1,'converted':1,'failed':0,'uploaded':0,'upload_failed':0}
         refs = state['items'][0]['refs']
         assert [r['position'] for r in refs] == [0,1,2]
         assert refs[0]['title']=='示例/商品'
@@ -47,12 +46,13 @@ def test_url_queue_groups_positions_keeps_order_and_writes_all_outputs(tmp_path,
         assert len(set(paths)) == 3 and all(p.exists() for p in paths)
         assert 'main_001' in paths[0].name and 'detail_002' in paths[1].name and 'sku_001_红_色' in paths[2].name
         assert downloads==[(entry()['url'], cloud.owner)] and len(cloud.sends)==1
-        rows = list(load_workbook(state['manifest_path']).active.values)
-        assert len(rows)==4 and rows[1][1]=='001' and rows[3][4]=='红/色'
-        assert rows[1][7] == str(paths[0])
-        manifest = Path(state['manifest_path']); mapping = Path(state['mapping_path'])
+        mapping = Path(state['mapping_path'])
+        rows = json.loads(mapping.read_text(encoding='utf-8'))['rows']
+        assert len(rows)==3 and rows[0]['product_id']=='001' and rows[2]['sku']=='红/色'
+        assert rows[0]['output_path'] == str(paths[0])
+        assert not list(Path(state['run_dir']).rglob('*.xlsx'))
     finally: service.close(clear_state=True)
-    assert manifest.exists() and mapping.exists()
+    assert mapping.exists()
     assert len(json.loads(mapping.read_text(encoding='utf-8'))['rows'])==3
 
 
@@ -71,11 +71,11 @@ def test_more_than_twenty_urls_byte_dedup_and_failed_download_retry(tmp_path, mo
         state=wait(service,lambda s:s['status']=='completed')
         assert state['items'][0]['status']=='failed'
         assert len(cloud.sends)==1
-        assert state['counts']=={'total':22,'unique':2,'downloaded':1,'converted':1,'failed':1}
+        assert state['counts']=={'total':22,'unique':2,'downloaded':1,'converted':1,'failed':1,'uploaded':0,'upload_failed':0}
         assert state['items'][2]['alias_of']==1
         assert all(i['status']=='completed' for i in state['items'][1:])
-        rows=list(load_workbook(state['manifest_path']).active.values)
-        assert rows[1][8]=='failed' and rows[1][9]=='bad image'
+        rows=json.loads(Path(state['mapping_path']).read_text(encoding='utf-8'))['rows']
+        assert rows[0]['status']=='failed' and rows[0]['reason']=='bad image'
         failed=False; service.action('retry',0)
         state=wait(service,lambda s:s['status']=='completed')
         assert state['counts']['failed']==0 and state['counts']['converted']==2
@@ -107,8 +107,8 @@ def test_pending_report_and_collector_restart_never_automatically_resend(tmp_pat
     cloud=Cloud();service=QueueService(lambda:cloud,tmp_path/'state')
     service.start_urls([entry(),entry('https://img.pddpic.com/b.png')],tmp_path/'out','prompt','source')
     state=wait(service,lambda s:s['items'][0]['phase']=='pending');service.close()
-    rows=list(load_workbook(state['manifest_path']).active.values)
-    assert len(rows)==3 and rows[2][8]=='queued' and rows[2][7] is None
+    rows=json.loads(Path(state['mapping_path']).read_text(encoding='utf-8'))['rows']
+    assert len(rows)==2 and rows[1]['status']=='queued' and rows[1]['output_path'] is None
     other=Cloud();restored=QueueService(lambda:other,tmp_path/'state')
     try:
         assert restored.snapshot()['items'][1]['phase']=='downloading'
@@ -256,7 +256,7 @@ def test_collector_restart_can_resume_known_generation_and_preserves_terminal_do
     finally:restored.close()
 
 
-def test_stopped_downloader_cannot_submit_and_manifest_treats_formula_text_as_text(tmp_path,monkeypatch):
+def test_stopped_downloader_cannot_submit_and_mapping_preserves_metadata_text(tmp_path,monkeypatch):
     import core
     entered=threading.Event();release=threading.Event()
     def download(url):entered.set();release.wait(2);return picture(),'.png'
@@ -268,8 +268,8 @@ def test_stopped_downloader_cannot_submit_and_manifest_treats_formula_text_as_te
         service.action('stop');release.set()
         state=service.snapshot()
         assert state['status']=='stopped' and cloud.sends==[]
-        book=load_workbook(state['manifest_path'])
-        assert book.active['C2'].data_type=='s' and book.active['B2'].value=='001'
+        rows=json.loads(Path(state['mapping_path']).read_text(encoding='utf-8'))['rows']
+        assert rows[0]['title']=='=HYPERLINK("https://bad.invalid")' and rows[0]['product_id']=='001'
     finally:release.set();service.close()
 
 

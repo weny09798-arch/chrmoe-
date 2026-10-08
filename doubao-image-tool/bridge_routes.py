@@ -95,7 +95,7 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
 
     @app.get('/api/bridge/capabilities')
     def capabilities():
-        return jsonify(version='1.6.1',providers=['doubao','aliyun'],image_kinds=['main','detail','sku'],
+        return jsonify(version='1.6.2',providers=['doubao','aliyun'],image_kinds=['main','detail','sku'],
                        **(credential_status() if credential_status else {'aliyun_configured':False,'aliyun_price_per_image':0.06}))
 
     @app.post('/api/bridge/folder')
@@ -130,7 +130,7 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
     def action():
         data = body()
         command = data.get('action')
-        if command not in {'stop','continue','retry','redo','open-browser','cancel'}: raise ValueError('未知操作')
+        if command not in {'stop','continue','retry','retry-upload','redo','open-browser','cancel'}: raise ValueError('未知操作')
         index = data.get('index')
         if index is not None and (not isinstance(index,int) or isinstance(index,bool) or index < 0): raise ValueError('请选择有效图片')
         with lifecycle:
@@ -148,9 +148,7 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
     def manifest():
         with lifecycle:
             snap = owned(request.args.get('job_id'))
-            path = snap.get('manifest_path')
-            if not path or not Path(path).is_file(): return jsonify(error='清单尚未生成'), 404
-            return send_file(path,as_attachment=True,download_name='图片转换清单.xlsx')
+            return jsonify(error='请使用插件的商品 Excel 导出，已取消独立图片清单'),410
 
     @app.get('/api/bridge/images/<job>/<int:index>/<kind>', endpoint='bridge_image')
     def image(job,index,kind):

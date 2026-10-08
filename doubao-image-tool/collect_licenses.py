@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 PACKAGES = ['flask','werkzeug','jinja2','markupsafe','itsdangerous','click','blinker','pillow','playwright','pyee','greenlet','typing_extensions','colorama','openpyxl','et-xmlfile']
+PACKAGES += ['alibabacloud-oss-v2','crcmod-plus','pycryptodome']
 PACKAGES += ['alibabacloud-alimt20181012','alibabacloud-tea-openapi','alibabacloud-tea-util',
     'alibabacloud-credentials','alibabacloud-credentials-api','alibabacloud-endpoint-util',
     'alibabacloud-openapi-util','alibabacloud-gateway-spi','alibabacloud-tea','alibabacloud-tea-fileform',
