@@ -18,14 +18,14 @@
 
 ## 真实免费豆包与 OSS
 
-真实单图验收记录为 `artifacts/accept-doubao-164/verification.json`。通过豆包免费网页完成一张主图生成，限制为主图 1 张。首次 OSS 公开读取校验遇到临时 fakeDNS 网络故障；网络恢复后通过正常生产 `OSSPublisher` 仅重试上传，最终 uploaded=1、upload_failed=0、failed=0，phase=done、retry_phase=done，regenerated=false、paid_calls=0。JSON 的 initial_phase=upload-failed 记录首次失败。
+真实单图验收记录为 `artifacts/accept-doubao-164/verification.json`。通过实际专用 Chrome 中的豆包免费网页完成一张主图生成，限制为主图 1 张。首次 OSS 公开读取校验遇到临时 fakeDNS 网络故障；网络恢复后通过正常生产 `OSSPublisher` 仅重试上传，最终 uploaded=1、upload_failed=0、failed=0，phase=done、retry_phase=done，regenerated=false、paid_calls=0。JSON 的 initial_phase=upload-failed 记录首次失败。
 
 人工查看结果：商品外广告文字由简体转换为繁体，商品展示的数字“120”保留，免费网页 AI 水印保留。单图观察不保证其他图片均能完整保护包装细节，仍需逐张核对。原有已停止的付费批次文件逐字节保持不变。本轮没有新增付费翻译请求。
 
 `node artifacts/verify_real_oss_export_164.mjs` 退出码 0：将上述真实已完成队列快照通过模拟桥接传输交给实际控制器，再生成并解码实际 XLSX 和 BIFF8 XLS。选中的主图位置 1 使用真实 OSS 链接；超出限制的主图位置 2 即使原网址相同也保持原链接，源商品数据不变。此检查没有网络请求或费用，仍不等同于真实安装扩展或 hhn 导入验收。
 
-## Chrome 中的模拟插件界面
+## Chromium（Codex 内置浏览器）中的模拟插件界面
 
-在实际 Chrome 浏览器中加载了模拟接口和状态的插件页面，验证主图 20 张设置限制 10、取消详情图和 SKU 后显示选中 10 张及 ¥0.60；输入 0 禁止开始；原生数字输入 `1e` 对应空 value 与 badInput=true，也禁止开始。未勾选类型的非法输入忽略，重新勾选后禁止开始，改正为 10 后恢复。`artifacts/ui-164.png` 只记录模拟界面，不是实时付费任务截图。
+在 Chromium（Codex 内置浏览器）中加载了模拟接口和状态的插件页面，使用真实原生数字输入控件，验证主图 20 张设置限制 10、取消详情图和 SKU 后显示选中 10 张及 ¥0.60；输入 0 禁止开始；原生数字输入 `1e` 对应空 value 与 badInput=true，也禁止开始。未勾选类型的非法输入忽略，重新勾选后禁止开始，改正为 10 后恢复。`artifacts/ui-164.png` 只记录模拟界面，不是实时付费任务截图。
 
 上述浏览器检查没有覆盖真实安装扩展与本机工具的完整联动，也没有覆盖 hhn 网站导入或实际付费阿里云翻译。真实免费单图验证覆盖工具队列、生成及 OSS 发布，不能等同于这些未执行的端到端流程。
