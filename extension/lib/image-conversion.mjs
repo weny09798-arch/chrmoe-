@@ -1,8 +1,24 @@
 import { outputLimit, validProductTitle } from './core.mjs';
 
+export function normalizeImageLimits(imageKinds, values = {}) {
+  const limits = {};
+  for (const kind of ['main','detail','sku']) {
+    const value = values?.[kind];
+    if (!imageKinds.includes(kind) || value === null || value === undefined || (typeof value === 'string' && !value.trim())) { limits[kind] = null; continue; }
+    const number = typeof value === 'number' ? value : typeof value === 'string' && /^[0-9]+$/.test(value.trim()) ? Number(value.trim()) : NaN;
+    if (!Number.isSafeInteger(number) || number < 1) throw new Error('图片数量必须为空（不限）或安全范围内的正整数。');
+    limits[kind] = number;
+  }
+  return Object.freeze(limits);
+}
+export function imageKindCounts(entries) {
+  return Object.freeze(Object.fromEntries(['main','detail','sku'].map(kind => [kind,entries.filter(entry => entry.kind === kind).length])));
+}
+
 // Match taskSheets' filter-before-limit selection. Source objects are never edited.
-export function buildImageManifest(task, imageKinds = ['main','detail','sku']) {
+export function buildImageManifest(task, imageKinds = ['main','detail','sku'], imageLimits = {}) {
   if (!Array.isArray(imageKinds) || imageKinds.some(kind => !['main','detail','sku'].includes(kind))) throw new Error('图片类型无效。');
+  const limits = normalizeImageLimits(imageKinds,imageLimits), counts = {main:0,detail:0,sku:0};
   const selected = new Set(imageKinds);
   const entries = [];
   for (const job of task?.jobs || []) {
@@ -20,7 +36,7 @@ export function buildImageManifest(task, imageKinds = ['main','detail','sku']) {
       });
     }
   }
-  return Object.freeze(entries);
+  return Object.freeze(entries.filter(entry => ++counts[entry.kind] <= (limits[entry.kind] ?? Infinity)));
 }
 
 export function imagePositionKey(ref) {
@@ -112,15 +128,16 @@ export class ConversionController {
     this.outputDir = ''; this.working = false; this.error = '';
     this.reconnectCandidate = null;
     this.restored = false;
-    this.capabilities = null;
+    this.capabilities = null; this.availableCounts = null;
     // Restore ownership synchronously: deletion/clear must work before the first GET.
     try {
       const handle = JSON.parse(client.storage?.getItem(OWNED_JOB_KEY) || 'null');
       if (handle) {
         if (!client.connection || typeof handle.job_id !== 'string' || !handle.job_id || typeof handle.source_task_id !== 'string' || !handle.source_task_id || !Array.isArray(handle.products) || !handle.products.length || handle.products.some(product => !['pdd','1688','taobao'].includes(product?.platform) || typeof product.product_id !== 'string' || !product.product_id)) throw new Error('Invalid owned handle');
-        this.job = { id: handle.job_id, kind: 'collector', source_task_id: handle.source_task_id, status: 'recovering', items: [] };
+        this.job = { id: handle.job_id, kind: 'collector', source_task_id: handle.source_task_id, status: 'recovering', items: [], provider:handle.provider || 'doubao', image_kinds:handle.image_kinds || ['main','detail','sku'], image_limits:normalizeImageLimits(handle.image_kinds || ['main','detail','sku'],handle.image_limits) };
         this.sourceTaskId = handle.source_task_id;
-        this.entries = Object.freeze(handle.products.map(product => Object.freeze({ platform: product.platform, product_id: product.product_id })));
+        this.availableCounts = handle.available_counts || null;
+        this.entries = handle.entries?.length ? Object.freeze(handle.entries.map(ref => Object.freeze({...ref}))) : Object.freeze(handle.products.map(product => Object.freeze({ platform: product.platform, product_id: product.product_id })));
         this.restored = true;
       }
     } catch { client.storage?.removeItem(OWNED_JOB_KEY); }
@@ -128,7 +145,7 @@ export class ConversionController {
   persistOwnership() {
     const products = new Map();
     for (const entry of this.entries || []) products.set(JSON.stringify([entry.platform,entry.product_id]), { platform: entry.platform, product_id: entry.product_id });
-    this.client.storage?.setItem(OWNED_JOB_KEY, JSON.stringify({ job_id: this.job.id, source_task_id: this.sourceTaskId, products: [...products.values()] }));
+    this.client.storage?.setItem(OWNED_JOB_KEY, JSON.stringify({ job_id: this.job.id, source_task_id: this.sourceTaskId, products: [...products.values()], entries:this.entries?.filter(ref => ref.kind && ref.url), available_counts:this.availableCounts, provider:this.job.provider, image_kinds:this.job.image_kinds, image_limits:this.job.image_limits }));
   }
   async restoreForTask(task) {
     if (!this.restored) return;
@@ -153,7 +170,7 @@ export class ConversionController {
   canReconnect() { return !this.pendingSource && (!this.job || ['completed','done','paused','stopped','blocked'].includes(this.job.status) || Boolean(this.error)); }
   acceptSnapshot(snapshot, jobId) {
     if (snapshot?.id !== jobId || snapshot.kind !== 'collector' || snapshot.source_task_id !== this.sourceTaskId) throw new Error('本地任务与当前图片批次不一致，请在本地工具中检查。');
-    this.job = { ...snapshot, provider: snapshot.provider || 'doubao', image_kinds: snapshot.image_kinds || ['main','detail','sku'], paid_calls: snapshot.paid_calls || 0 };
+    this.job = { ...snapshot, provider: snapshot.provider || this.job?.provider || 'doubao', image_kinds: snapshot.image_kinds || this.job?.image_kinds || ['main','detail','sku'], image_limits: normalizeImageLimits(snapshot.image_kinds || this.job?.image_kinds || ['main','detail','sku'],snapshot.image_limits || this.job?.image_limits), paid_calls: snapshot.paid_calls || 0 };
     if (typeof snapshot.output_dir === 'string') this.outputDir = snapshot.output_dir;
     const refs = snapshot.items?.flatMap(item => item.refs || []);
     if (refs?.length && !this.entries?.some(ref => ref.kind && ref.url)) this.entries = Object.freeze(refs.map(ref => Object.freeze({ ...ref })));
@@ -231,11 +248,12 @@ export class ConversionController {
     const provider = options.provider ?? 'doubao', paidConfirmed = options.paidConfirmed === true;
     if (!['doubao','aliyun'].includes(provider)) throw new Error('图片转换模式无效。');
     if (provider === 'aliyun' && !paidConfirmed) throw new Error('请确认付费后开始阿里云转换。');
-    const entries = buildImageManifest(task, imageKinds);
+    const imageLimits = normalizeImageLimits(imageKinds,options.imageLimits);
+    const entries = buildImageManifest(task, imageKinds,imageLimits), availableCounts = imageKindCounts(buildImageManifest(task));
     if (!entries.length) throw new Error('当前可导出的商品没有图片。');
     const sourceTaskId = task.id, connection = this.client.connection;
     this.currentTask = task;
-    this.pendingSource = { id: sourceTaskId, entries };
+    this.pendingSource = { id: sourceTaskId, entries, imageKinds, imageLimits, provider, availableCounts };
     return this.guarded(async epoch => {
       let snapshot;
       try {
@@ -247,11 +265,12 @@ export class ConversionController {
           if (!capabilities.providers?.includes('aliyun')) throw new Error('本地工具需升级到支持阿里云的版本。');
           if (capabilities.aliyun_configured !== true) throw new Error('请先在本地工具配置阿里云密钥，再刷新配置状态。');
         }
+        if (Object.values(imageLimits).some(value => value !== null) && capabilities?.image_type_limits !== true) throw new Error('本地工具需升级到 1.6.4 或更新版本，才能限制图片数量。');
         if (capabilities?.image_link_replacement !== true) throw new Error('本地工具需升级到支持 OSS 图片链接自动替换的版本。');
         if (capabilities.cloud_image_storage !== true) throw new Error('本地工具需升级到 1.6.3 或更新版本，才能直接保存到 OSS。');
         if (capabilities.oss_configured !== true) throw new Error('请先在本地工具配置 OSS，再刷新配置状态。');
         if (!this.current(epoch)) return;
-        snapshot = await this.client.request('jobs', { body: { source_task_id: sourceTaskId, cloud_only:true, entries, provider, image_kinds:imageKinds, paid_confirmed:paidConfirmed }, connection });
+        snapshot = await this.client.request('jobs', { body: { source_task_id: sourceTaskId, cloud_only:true, entries, provider, image_kinds:imageKinds, image_limits:imageLimits, paid_confirmed:paidConfirmed }, connection });
       }
       finally { if (this.current(epoch)) this.pendingSource = null; }
       if (!this.current(epoch)) {
@@ -259,9 +278,9 @@ export class ConversionController {
         return;
       }
       if (snapshot?.kind !== 'collector' || snapshot.source_task_id !== sourceTaskId || !snapshot.id) throw new Error('本地任务与当前图片批次不一致，请在本地工具中检查。');
-      this.entries = entries; this.sourceTaskId = sourceTaskId; this.outputDir = outputDir;
+      this.availableCounts = availableCounts; this.entries = entries; this.sourceTaskId = sourceTaskId; this.outputDir = outputDir;
       this.publishedSignature = '';
-      await this.acceptSnapshot({ ...snapshot, provider:snapshot.provider || provider, image_kinds:snapshot.image_kinds || imageKinds }, snapshot.id);
+      await this.acceptSnapshot({ ...snapshot, provider:snapshot.provider || provider, image_kinds:snapshot.image_kinds || imageKinds, image_limits:imageLimits }, snapshot.id);
       if (!this.current(epoch)) return;
       this.persistOwnership(); this.emit();
     });
