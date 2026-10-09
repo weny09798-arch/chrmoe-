@@ -122,3 +122,32 @@ test('denial during the final in-flight detail saves it once and leaves the job 
   assert.equal(selected(task.jobs[0])[0].descriptionText,'最终详情');assert.equal(task.jobs[0].status,'paused');assert.deepEqual(searches,['相机']);assert.equal(task.jobs[1].status,'pending');
   assert.equal(task.jobs[0].scanned,1);assert.ok(savedDetails.length>0);
 });
+
+for(const lifecycle of ['clear','capability reset','clear cleanup'])for(const failure of ['423','transport','401','403'])test(`old ${failure} after ${lifecycle} cannot pause a new authorized collection on the same pair`,async()=>{
+  let release,reject,announce;const entered=new Promise(resolve=>{announce=resolve;}),pending=new Promise((resolve,rejectPromise)=>{release=resolve;reject=rejectPromise;});
+  const client=new BridgeClient({extensionId:'isolated-license-test',storage:null,fetch:async url=>{
+    if(lifecycle==='clear cleanup'?url.endsWith('/action'):url.includes('/state?job_id=old-job')){announce();return pending;}
+    return {ok:true,json:async()=>url.includes('/license/')?allowed:url.endsWith('/capabilities')?{licensing:true}:{}};
+  }});
+  client.remember({baseUrl:'http://localhost:53121',token:'same-pair'});const connection=client.connection,controller=new ConversionController({client});await controller.requireLicense();
+  controller.sourceTaskId='old-task';controller.job={id:'old-job',kind:'collector',source_task_id:'old-task',status:'paused',items:[]};const oldPoll=lifecycle==='clear cleanup'?controller.clear():controller.poll();await entered;
+  if(lifecycle==='clear')await controller.clear();else if(lifecycle==='capability reset')await controller.refreshCapabilities();
+  await controller.requireLicense({refresh:true});assert.equal(client.connection,connection);
+  const task=createTask(['new task']),job=task.jobs[0];task.status='paused';job.site='1688';job.status='paused';job.phase='detail';job.searchStatus='done';
+  job.groups=['101','102'].map(id=>({best:{id,title:'product',image:'https://img.example.test/product.jpg',cents:100,detailStatus:'pending'}}));
+  let finish,start;const detail=new Promise(resolve=>{finish=resolve;}),started=new Promise(resolve=>{start=resolve;});const details=[],saved=[];
+  const runner=new Runner(task,ports({authorize:()=>controller.requireLicense(),subscribeLicense:listener=>controller.subscribeLicense(listener),save:async current=>saved.push(structuredClone(current)),setTimer:()=>1,clearTimer(){},enrich:async item=>{details.push(item.id);start();return detail;}}));
+  const running=runner.run();await started;
+  if(failure==='transport')reject(new Error('obsolete failure'));else release({ok:false,status:Number(failure),json:async()=>({license:{allowed:false,status:'expired',message:'obsolete task denial'}})});
+  await oldPoll;finish({descriptionText:'saved new detail'});await running;
+  assert.equal(client.connection,connection);assert.equal(controller.view().license.allowed,true);assert.equal(controller.view().error,'');assert.equal(runner.licenseStop,null);assert.deepEqual(details,['101','102']);assert.equal(task.status,'done');
+  assert.equal(job.groups[0].best.descriptionText,'saved new detail');assert.equal(job.groups[1].best.detailStatus,'done');assert.ok(saved.some(value=>value.jobs[0].groups[0].best.descriptionText==='saved new detail'));
+});
+for(const failure of [401,403])test(`current native ${failure} still pauses after saving the in-flight detail`,async()=>{
+  const f=fixture();await f.controller.connect('http://localhost:53121/#token=pair');f.controller.sourceTaskId='source';f.controller.job={id:'current-job',kind:'collector',source_task_id:'source',status:'paused',items:[]};
+  const task=createTask(['current task']),job=task.jobs[0];job.site='1688';job.phase='detail';job.searchStatus='done';job.groups=['101','102'].map(id=>({best:{id,title:'product',cents:100,detailStatus:'pending'}}));
+  let finish,announce;const pending=new Promise(resolve=>{finish=resolve;}),started=new Promise(resolve=>{announce=resolve;});const details=[];
+  const runner=new Runner(task,ports({authorize:()=>f.controller.requireLicense(),subscribeLicense:listener=>f.controller.subscribeLicense(listener),setTimer:()=>1,clearTimer(){},enrich:async item=>{details.push(item.id);announce();return pending;}}));const running=runner.run();await started;
+  f.client.fetch=async()=>({ok:false,status:failure,json:async()=>({})});await f.controller.poll();finish({descriptionText:'current detail saved'});await running;
+  assert.equal(f.controller.view().license.allowed,false);assert.deepEqual(details,['101']);assert.equal(task.status,'paused');assert.equal(job.groups[0].best.descriptionText,'current detail saved');assert.equal(job.groups[1].best.detailStatus,'pending');
+});

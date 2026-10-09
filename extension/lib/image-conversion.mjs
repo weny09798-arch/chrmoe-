@@ -103,7 +103,7 @@ export function conversionActionNeedsLicense(job, action, index) {
 }
 export class BridgeClient {
   constructor({ extensionId, fetch = globalThis.fetch?.bind(globalThis), storage = globalThis.sessionStorage } = {}) {
-    this.extensionId = extensionId; this.fetch = fetch; this.storage = storage; this.connection = null; this.denialListeners = new Set();
+    this.extensionId = extensionId; this.fetch = fetch; this.storage = storage; this.connection = null; this.denialListeners = new Set(); this.requestGeneration = 0;
     try {
       const saved = JSON.parse(storage?.getItem(SESSION_KEY) || 'null');
       if (saved) this.connection = parseConnectionCode(`${saved.baseUrl}/#token=${encodeURIComponent(saved.token)}`);
@@ -114,11 +114,13 @@ export class BridgeClient {
     this.storage?.setItem(SESSION_KEY, JSON.stringify(connection));
   }
   subscribeDenial(listener) { this.denialListeners.add(listener); return () => this.denialListeners.delete(listener); }
-  reportDenial(status, connection) { if (connection === this.connection) for (const listener of this.denialListeners) listener(status); }
-  async request(route, { body, blob = false, connection = this.connection } = {}) {
+  invalidateRequests() { ++this.requestGeneration; }
+  reportDenial(status, connection, generation) { if (connection === this.connection && generation === this.requestGeneration) for (const listener of this.denialListeners) listener(status); }
+  async request(route, { body, blob = false, connection = this.connection, generation = this.requestGeneration } = {}) {
+    const failure = error => { error.staleRequest = generation !== this.requestGeneration; return error; };
     if (!connection || !this.extensionId) {
       const message = '请先在 Chrome 扩展中连接本地图片工具。';
-      this.reportDenial({allowed:false,status:'disconnected',message},connection); throw new Error(message);
+      this.reportDenial({allowed:false,status:'disconnected',message},connection,generation); throw failure(new Error(message));
     }
     const headers = { 'X-Tool-Token': connection.token, 'X-Extension-Id': this.extensionId };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -126,20 +128,20 @@ export class BridgeClient {
     try { response = await this.fetch(`${connection.baseUrl}/api/bridge/${route}`, { method: body === undefined ? 'GET' : 'POST', headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), cache: 'no-store', redirect: 'error', credentials: 'omit' }); }
     catch {
       const message = '无法连接本地图片工具，请确认工具仍在运行并重新复制连接码。';
-      this.reportDenial({allowed:false,status:'disconnected',message},connection); throw new Error(message);
+      this.reportDenial({allowed:false,status:'disconnected',message},connection,generation); throw failure(new Error(message));
     }
     if (!response.ok) {
       if (response.status === 423) {
         const value = await response.json().catch(() => ({}));
         const denied = {...value.license,allowed:false};
-        this.reportDenial(denied,connection);
-        const error = licenseError(denied); error.status = 423; throw error;
+        this.reportDenial(denied,connection,generation);
+        const error = licenseError(denied); error.status = 423; throw failure(error);
       }
       // Never surface a server URL/body that could accidentally include credentials.
       const messages = {401:'连接码已失效，请重新连接。',403:'本地工具未授权此扩展，请使用同一管理页的连接码重新连接。',409:'本地工具正在处理其他任务，或任务已失效，请先在工具中处理。',404:'本地任务或图片尚不可用。'};
       const error = new Error(messages[response.status] || `本地工具请求失败（${response.status}）。`);
-      if ([401,403].includes(response.status)) this.reportDenial({allowed:false,status:'disconnected',message:error.message},connection);
-      error.status = response.status; throw error;
+      if ([401,403].includes(response.status)) this.reportDenial({allowed:false,status:'disconnected',message:error.message},connection,generation);
+      error.status = response.status; throw failure(error);
     }
     return blob ? response.blob() : response.json();
   }
@@ -235,7 +237,7 @@ export class ConversionController {
     const epoch = this.epoch;
     this.working = true; this.error = ''; this.emit();
     try { return await operation(epoch); }
-    catch (error) { if (this.current(epoch)) { if (error.licenseDenied && error.license && this.licenseAuthority.status !== error.license) this.licenseAuthority.accept(error.license); this.error = error.message; this.emit(); } throw error; }
+    catch (error) { if (this.current(epoch) && !error.staleRequest) { if (error.licenseDenied && error.license && this.licenseAuthority.status !== error.license) this.licenseAuthority.accept(error.license); this.error = error.message; this.emit(); } throw error; }
     finally { if (this.current(epoch)) { this.working = false; this.emit(); } }
   }
   async connect(code) {
@@ -288,7 +290,7 @@ export class ConversionController {
     const imageLimits = normalizeImageLimits(imageKinds,options.imageLimits);
     const entries = buildImageManifest(task, imageKinds,imageLimits), availableCounts = imageKindCounts(buildImageManifest(task));
     if (!entries.length) throw new Error('当前可导出的商品没有图片。');
-    const sourceTaskId = task.id, connection = this.client.connection;
+    const sourceTaskId = task.id, connection = this.client.connection, generation = this.client.requestGeneration;
     this.currentTask = task;
     this.pendingSource = { id: sourceTaskId, entries, imageKinds, imageLimits, provider, availableCounts };
     return this.guarded(async epoch => {
@@ -313,7 +315,7 @@ export class ConversionController {
       }
       finally { if (this.current(epoch)) this.pendingSource = null; }
       if (!this.current(epoch)) {
-        if (snapshot?.id) await this.client.request('action', { body: { job_id: snapshot.id, source_task_id: sourceTaskId, action: 'cancel' }, connection }).catch(() => {});
+        if (snapshot?.id) await this.client.request('action', { body: { job_id: snapshot.id, source_task_id: sourceTaskId, action: 'cancel' }, connection, generation }).catch(() => {});
         return;
       }
       if (snapshot?.kind !== 'collector' || snapshot.source_task_id !== sourceTaskId || !snapshot.id) throw new Error('本地任务与当前图片批次不一致，请在本地工具中检查。');
@@ -334,7 +336,7 @@ export class ConversionController {
         if (!this.current(epoch) || this.job?.id !== jobId) return;
         this.error = ''; this.emit();
       }
-    } catch (error) { if (this.current(epoch) && this.job?.id === jobId) { this.error = error.message; this.emit(); } }
+    } catch (error) { if (this.current(epoch) && this.job?.id === jobId && !error.staleRequest) { this.error = error.message; this.emit(); } }
   }
   async action(action, index, taskId, options = {}) {
     const job = this.job;
@@ -351,13 +353,13 @@ export class ConversionController {
     });
   }
   async clear() {
-    const job = this.job, sourceTaskId = this.sourceTaskId, connection = this.client.connection;
+    const job = this.job, sourceTaskId = this.sourceTaskId, connection = this.client.connection, generation = this.client.requestGeneration;
     ++this.epoch;
     this.licenseAuthority.invalidate();
     this.job = null; this.entries = null; this.sourceTaskId = null; this.pendingSource = null;
     this.restored = false; this.reconnectCandidate = null; this.client.storage?.removeItem(OWNED_JOB_KEY);
     this.working = false; this.error = ''; this.emit();
-    if (job) await this.client.request('action', { body: { job_id: job.id, source_task_id: sourceTaskId, action: 'cancel' }, connection }).catch(() => {});
+    if (job) await this.client.request('action', { body: { job_id: job.id, source_task_id: sourceTaskId, action: 'cancel' }, connection, generation }).catch(() => {});
   }
   async removeProduct(taskId, platform, productId) {
     const entries = this.pendingSource?.entries || this.entries;

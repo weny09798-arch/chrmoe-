@@ -9,8 +9,8 @@ export class LicenseAuthority {
     this.client = client; this.onChange = onChange; this.status = null; this.capabilities = null; this.revision = 0; this.listeners = new Set();
     client.subscribeDenial(status => this.accept(status));
   }
-  reset(capabilities = null) { ++this.revision; this.capabilities = capabilities; this.accept({allowed:false,status:'unavailable',message:'本地工具授权状态待检查，请检查授权后手动继续采集。'}); }
-  invalidate() { ++this.revision; }
+  reset(capabilities = null) { this.invalidate(); this.capabilities = capabilities; this.accept({allowed:false,status:'unavailable',message:'本地工具授权状态待检查，请检查授权后手动继续采集。'}); }
+  invalidate() { ++this.revision; this.client.invalidateRequests(); }
   subscribe(listener) { this.listeners.add(listener); if (this.status) listener(this.status); return () => this.listeners.delete(listener); }
   accept(status) {
     this.status = status && typeof status === 'object' ? status : {allowed:false,status:'unavailable'};
