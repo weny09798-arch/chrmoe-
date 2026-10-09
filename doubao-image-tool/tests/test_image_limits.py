@@ -1,3 +1,4 @@
+from license_fakes import PermittingAuthority
 import itertools
 import json
 
@@ -16,7 +17,7 @@ UNLIMITED = dict.fromkeys(KINDS)
 
 def stopped_queue(tmp_path, monkeypatch):
     monkeypatch.setattr(QueueService, '_run', lambda self: None)
-    return QueueService(Cloud, tmp_path / 'state')
+    return QueueService(Cloud, tmp_path / 'state', license_authority=PermittingAuthority())
 
 
 @pytest.mark.parametrize('kinds', [list(c) for n in (1, 2, 3) for c in itertools.combinations(KINDS, n)])
@@ -146,7 +147,7 @@ def test_bridge_passes_limits_and_rejects_invalid_before_start(tmp_path, monkeyp
     from oss_fakes import FakePublisher
     from test_bridge import HEADERS, pair
     monkeypatch.setattr(QueueService, '_run', lambda self: None)
-    app = create_app(Cloud, tmp_path / 'private', token='secret', oss_factory=FakePublisher)
+    app = create_app(Cloud, tmp_path / 'private', token='secret', oss_factory=FakePublisher, license_authority=PermittingAuthority())
     try:
         with app.test_client() as client:
             pair(client)

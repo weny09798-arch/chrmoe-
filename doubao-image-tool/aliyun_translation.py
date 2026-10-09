@@ -16,9 +16,11 @@ from urllib.parse import urlsplit,urljoin,urlencode
 from urllib.request import Request,build_opener
 from PIL import Image
 from storage import validate_inputs
+from license_authority import LicenseAuthority, LicenseRequiredError, LicenseStatus, MESSAGES as LICENSE_MESSAGES
 from image_batch import MAX_DOWNLOAD_BYTES, _download_launcher, NoRedirect
 
-PAID_PROCESS_SECONDS=24
+# License startup connect/read (5+15s), SDK connect/read (4+18s), process overhead.
+PAID_PROCESS_SECONDS=48
 RESULT_PROCESS_SECONDS=18
 PRICE_PER_IMAGE=0.06
 FAKE_DNS_NETWORK=ipaddress.ip_network('198.18.0.0/15')
@@ -115,7 +117,20 @@ def _public_addresses(host):
 def validate_result_url(url):
     parsed=_result_url_parts(url);_public_addresses(parsed.hostname);return url
 
-def sdk_translate(credentials,path,client_factory=None):
+def sdk_translate(credentials,path,client_factory=None, *, license_authority=None, profile_root=None):
+    authority = license_authority
+    owned = authority is None
+    if owned:
+        root = Path(profile_root) if profile_root is not None else Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'DoubaoImageTool'
+        authority = LicenseAuthority(root)
+        authority.startup()
+    try:
+        return _licensed_sdk_translate(credentials, path, client_factory, authority)
+    finally:
+        if owned: authority.close()
+
+
+def _licensed_sdk_translate(credentials,path,client_factory,authority):
     from alibabacloud_alimt20181012.client import Client
     from alibabacloud_alimt20181012.models import TranslateImageRequest
     from alibabacloud_tea_openapi.models import Config
@@ -125,34 +140,44 @@ def sdk_translate(credentials,path,client_factory=None):
     request=TranslateImageRequest(image_base_64=base64.b64encode(data).decode('ascii'),source_language='zh',target_language='zh-tw',field='e-commerce',ext=json.dumps({'ignoreEntityRecognize':'false'}))
     runtime=RuntimeOptions(autoretry=False,connect_timeout=4000,read_timeout=18000)
     try:
-        body=(client_factory or Client)(config).translate_image_with_options(request,runtime).body
+        client = (client_factory or Client)(config)
+        authority.require_new_work(force_refresh=False)
+        body=client.translate_image_with_options(request,runtime).body
         if str(body.code)!='200':raise AliyunError(classify_error(body.code))
         url=getattr(getattr(body,'data',None),'final_image_url',None)
         request_id=getattr(body,'request_id',None)
         _result_url_parts(url)
         if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',request_id):raise AliyunError()
         return {'request_id':request_id,'final_image_url':url}
-    except AliyunError:raise
+    except (AliyunError, LicenseRequiredError):raise
     except Exception as exc:
         raise AliyunError(classify_error(getattr(exc,'code',None),getattr(exc,'statusCode',getattr(exc,'status_code',None)))) from None
 
 class AliyunTranslator:
-    def __init__(self,credentials):self.credentials=dict(credentials)
+    def __init__(self,credentials, *, profile_root=None):
+        self.credentials=dict(credentials)
+        self.profile_root=str(profile_root) if profile_root is not None else None
     def translate(self,path):
         try:
-            r=subprocess.run(_download_launcher()+['--aliyun-translate'],input=json.dumps({'credentials':self.credentials,'input_path':str(path)}),capture_output=True,text=True,encoding='utf-8',timeout=PAID_PROCESS_SECONDS,creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+            r=subprocess.run(_download_launcher()+['--aliyun-translate'],input=json.dumps({'credentials':self.credentials,'input_path':str(path),'profile_root':self.profile_root}),capture_output=True,text=True,encoding='utf-8',timeout=PAID_PROCESS_SECONDS,creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
             value=json.loads(r.stdout)
+            if value.get('error') == 'license':
+                state = value.get('license_status')
+                if state not in LICENSE_MESSAGES or state == 'allowed': state = 'invalid_response'
+                raise LicenseRequiredError(LicenseStatus(False, state, message=LICENSE_MESSAGES[state]))
             if r.returncode or 'error' in value:raise AliyunError(value.get('error'))
             _result_url_parts(value['final_image_url'])
             if not isinstance(value.get('request_id'),str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',value['request_id']):raise AliyunError()
             return {'request_id':value['request_id'],'final_image_url':value['final_image_url']}
-        except AliyunError:raise
+        except (AliyunError, LicenseRequiredError):raise
         except Exception:raise AliyunError() from None
 
 def translate_helper_main():
     try:
         payload=json.loads(sys.stdin.read())
-        print(json.dumps(sdk_translate(payload['credentials'],payload['input_path'])),flush=True);return 0
+        print(json.dumps(sdk_translate(payload['credentials'],payload['input_path'],profile_root=payload.get('profile_root'))),flush=True);return 0
+    except LicenseRequiredError as exc:
+        print(json.dumps({'error':'license','license_status':exc.status.state}),flush=True);return 1
     except Exception as exc:
         print(json.dumps({'error':exc.kind if isinstance(exc,AliyunError) else 'uncertain'}),flush=True);return 1
 

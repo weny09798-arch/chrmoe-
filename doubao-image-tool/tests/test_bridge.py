@@ -1,3 +1,4 @@
+from license_fakes import PermittingAuthority
 """Bridge boundaries use no network or live cloud browser."""
 import pytest
 import json
@@ -16,7 +17,7 @@ class Browser:
 
 @pytest.fixture
 def client(tmp_path):
-    app = create_app(Browser, tmp_path/'private', tmp_path/'out', 'secret', oss_factory=FakePublisher)
+    app = create_app(Browser, tmp_path/'private', tmp_path/'out', 'secret', oss_factory=FakePublisher, license_authority=PermittingAuthority())
     app.config['TESTING'] = True
     with app.test_client() as c:
         yield c

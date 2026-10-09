@@ -1,3 +1,4 @@
+from license_fakes import PermittingAuthority
 import io
 import json
 import threading
@@ -30,7 +31,7 @@ def test_url_queue_groups_positions_keeps_order_and_writes_all_outputs(tmp_path,
         return picture(), '.png'
     monkeypatch.setattr(core, 'download_image', download, raising=False)
     cloud = Cloud(); cloud.result = picture('blue')
-    service = QueueService(lambda: cloud, tmp_path/'state')
+    service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     entries = [entry(), {**entry(), 'kind':'detail', 'order':2},
                {**entry(), 'platform':'1688', 'product_id':'002', 'kind':'sku', 'sku':'红/色'}]
     try:
@@ -63,7 +64,7 @@ def test_more_than_twenty_urls_byte_dedup_and_failed_download_retry(tmp_path, mo
         if '/bad' in url and failed: raise ValueError('bad image')
         return picture('green' if '/bad' in url else 'red'), '.png'
     monkeypatch.setattr(core,'download_image',download,raising=False)
-    cloud=Cloud(); cloud.result=picture('blue'); service=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Cloud(); cloud.result=picture('blue'); service=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     entries=[{**entry(f'https://img.pddpic.com/{i}.png'), 'order':i+1} for i in range(21)]
     entries.insert(0,entry('https://img.pddpic.com/bad.png'))
     try:
@@ -86,7 +87,7 @@ def test_more_than_twenty_urls_byte_dedup_and_failed_download_retry(tmp_path, mo
 def test_redo_byte_alias_refreshes_dependents_without_overwrite(tmp_path,monkeypatch):
     import core
     monkeypatch.setattr(core,'download_image',lambda url:(picture(),'.png'),raising=False)
-    cloud=Cloud();cloud.result=picture('blue');service=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Cloud();cloud.result=picture('blue');service=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start_urls([entry(),entry('https://img.pddpic.com/b.png')],tmp_path/'out','prompt','source')
         state=wait(service,lambda s:s['status']=='completed')
@@ -104,12 +105,12 @@ def test_redo_byte_alias_refreshes_dependents_without_overwrite(tmp_path,monkeyp
 def test_pending_report_and_collector_restart_never_automatically_resend(tmp_path,monkeypatch):
     import core
     monkeypatch.setattr(core,'download_image',lambda url:(picture(),'.png'),raising=False)
-    cloud=Cloud();service=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Cloud();service=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     service.start_urls([entry(),entry('https://img.pddpic.com/b.png')],tmp_path/'out','prompt','source')
     state=wait(service,lambda s:s['items'][0]['phase']=='pending');service.close()
     rows=json.loads(Path(state['mapping_path']).read_text(encoding='utf-8'))['rows']
     assert len(rows)==2 and rows[1]['status']=='queued' and rows[1]['output_path'] is None
-    other=Cloud();restored=QueueService(lambda:other,tmp_path/'state')
+    other=Cloud();restored=QueueService(lambda:other,tmp_path/'state', license_authority=PermittingAuthority())
     try:
         assert restored.snapshot()['items'][1]['phase']=='downloading'
         assert restored.snapshot()['items'][1]['status']=='queued'
@@ -166,7 +167,7 @@ def test_alias_of_later_retried_download_can_redo_without_deadlock(tmp_path,monk
         if '/a.' in url and fail:raise OSError('offline')
         return picture(),'.png'
     monkeypatch.setattr(core,'download_image',download)
-    cloud=Cloud();cloud.result=picture('blue');service=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Cloud();cloud.result=picture('blue');service=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start_urls([entry('https://img.pddpic.com/a.png'),entry('https://img.pddpic.com/b.png')],tmp_path/'out','prompt','source')
         wait(service,lambda s:s['status']=='completed')
@@ -187,7 +188,7 @@ def test_alias_save_retry_reuses_canonical_generated_result(tmp_path,monkeypatch
         if refs[0]['position']==1 and fail:raise OSError('folder unavailable')
         return actual(job,refs,data)
     monkeypatch.setattr(core,'save_positions',save)
-    cloud=Cloud();cloud.result=picture('blue');service=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Cloud();cloud.result=picture('blue');service=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start_urls([entry(),entry('https://img.pddpic.com/b.png')],tmp_path/'out','prompt','source')
         wait(service,lambda s:s['status']=='paused')
@@ -221,12 +222,12 @@ def test_collector_save_retry_and_restart_recover_generated_bytes(tmp_path,monke
     monkeypatch.setattr(core,'download_image',lambda url:(picture(),'.png'))
     actual=core.save_positions
     monkeypatch.setattr(core,'save_positions',lambda *args:(_ for _ in ()).throw(OSError('disk blocked')))
-    cloud=Cloud();cloud.result=picture('blue');service=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Cloud();cloud.result=picture('blue');service=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     service.start_urls([entry()],tmp_path/'out','prompt','source')
     state=wait(service,lambda s:s['status']=='paused');service.close()
     assert state['items'][0]['phase']=='saving'
     monkeypatch.setattr(core,'save_positions',actual)
-    other=Cloud();restored=QueueService(lambda:other,tmp_path/'state')
+    other=Cloud();restored=QueueService(lambda:other,tmp_path/'state', license_authority=PermittingAuthority())
     try:
         assert restored.snapshot()['items'][0]['phase']=='saving'
         restored.action('retry',0);state=wait(restored,lambda s:s['status']=='completed')
@@ -242,12 +243,12 @@ def test_collector_restart_can_resume_known_generation_and_preserves_terminal_do
     monkeypatch.setattr(core,'download_image',download)
     class Recoverable(Cloud):
         def recovery_state(self):return {'conversation_url':'https://www.doubao.com/chat/12345678','identity':'a'*32}
-    cloud=Recoverable();service=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Recoverable();service=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     service.start_urls([entry('https://img.pddpic.com/bad.png'),entry()],tmp_path/'out','prompt','source')
     wait(service,lambda s:s['items'][1].get('download_recovery'));service.close()
     class Recovered(Cloud):
         def resume_from(self,state):self.recovered=state
-    other=Recovered();other.result=picture('blue');restored=QueueService(lambda:other,tmp_path/'state')
+    other=Recovered();other.result=picture('blue');restored=QueueService(lambda:other,tmp_path/'state', license_authority=PermittingAuthority())
     try:
         state=restored.snapshot()
         assert state['items'][0]['status']=='failed' and state['items'][1]['status']=='paused'
@@ -261,7 +262,7 @@ def test_stopped_downloader_cannot_submit_and_mapping_preserves_metadata_text(tm
     entered=threading.Event();release=threading.Event()
     def download(url):entered.set();release.wait(2);return picture(),'.png'
     monkeypatch.setattr(core,'download_image',download)
-    cloud=Cloud();service=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Cloud();service=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     try:
         source={**entry(),'title':'=HYPERLINK("https://bad.invalid")','product_id':'001'}
         service.start_urls([source],tmp_path/'out','prompt','source');assert entered.wait(1)

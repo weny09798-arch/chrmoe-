@@ -1,3 +1,4 @@
+from license_fakes import PermittingAuthority
 from contextlib import nullcontext
 import io
 import threading
@@ -30,7 +31,7 @@ class Cloud:
         self.closed = True
 
 def test_stop_continue_keeps_pending_request(tmp_path):
-    cloud = Cloud(); service = QueueService(lambda: cloud, tmp_path/'state')
+    cloud = Cloud(); service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png', png()), ('b.png', png())], tmp_path/'out', 'convert')
         wait(service, lambda s: s['items'][0]['phase'] == 'pending')
@@ -44,7 +45,7 @@ def test_stop_continue_keeps_pending_request(tmp_path):
 
 def test_save_retry_reuses_generated_bytes(tmp_path):
     cloud = Cloud(); cloud.result = png(); blocker = tmp_path/'out'; blocker.write_text('block')
-    service = QueueService(lambda: cloud, tmp_path/'state')
+    service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png', png())], blocker, 'convert')
         wait(service, lambda s: s['status'] == 'paused')
@@ -55,7 +56,7 @@ def test_save_retry_reuses_generated_bytes(tmp_path):
     finally: service.close()
 
 def test_timeout_continue_does_not_resubmit(tmp_path):
-    cloud = Cloud(); service = QueueService(lambda: cloud, tmp_path/'state'); service.generation_timeout = .02
+    cloud = Cloud(); service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority()); service.generation_timeout = .02
     try:
         service.start([('a.png', png())], tmp_path/'out', 'convert')
         wait(service, lambda s: s['status'] == 'paused')
@@ -65,10 +66,10 @@ def test_timeout_continue_does_not_resubmit(tmp_path):
     finally: service.close()
 
 def test_restart_requires_review_before_any_send(tmp_path):
-    cloud = Cloud(); service = QueueService(lambda: cloud, tmp_path/'state')
+    cloud = Cloud(); service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     service.start([('a.png', png())], tmp_path/'out', 'convert')
     wait(service, lambda s: s['items'][0]['phase'] == 'pending'); service.close()
-    other = Cloud(); restored = QueueService(lambda: other, tmp_path/'state')
+    other = Cloud(); restored = QueueService(lambda: other, tmp_path/'state', license_authority=PermittingAuthority())
     try:
         assert restored.snapshot()['items'][0]['status'] == 'needs-review'
         restored.action('continue'); time.sleep(.05)
@@ -82,7 +83,7 @@ def test_uncertain_submit_continue_does_not_resend(tmp_path):
     class Uncertain(Cloud):
         def submit(self, path, prompt, send_gate=nullcontext):
             super().submit(path, prompt, send_gate); raise SubmissionUncertain('inspect Chrome')
-    cloud = Uncertain(); service = QueueService(lambda: cloud, tmp_path/'state')
+    cloud = Uncertain(); service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png', png())], tmp_path/'out', 'convert')
         wait(service, lambda s: s['status'] == 'paused')
@@ -96,7 +97,7 @@ def test_download_retry_polls_existing_request(tmp_path):
         def poll(self):
             if self.fail: raise NeedsUser('下載失敗，請重試')
             return png()
-    cloud = DownloadFailure(); service = QueueService(lambda: cloud, tmp_path/'state')
+    cloud = DownloadFailure(); service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png', png())], tmp_path/'out', 'convert')
         wait(service, lambda s: s['status'] == 'paused')
@@ -111,7 +112,7 @@ def test_pre_send_readiness_can_continue(tmp_path):
         def submit(self, path, prompt, send_gate=nullcontext):
             if not self.ready: raise NeedsUser('請登入')
             super().submit(path, prompt, send_gate)
-    cloud = Readiness(); service = QueueService(lambda: cloud, tmp_path/'state')
+    cloud = Readiness(); service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png', png())], tmp_path/'out', 'convert')
         wait(service, lambda s: s['status'] == 'paused')
@@ -122,10 +123,10 @@ def test_pre_send_readiness_can_continue(tmp_path):
     finally: service.close()
 
 def test_finished_result_survives_restart(tmp_path):
-    cloud = Cloud(); cloud.result = png(); service = QueueService(lambda: cloud, tmp_path/'state')
+    cloud = Cloud(); cloud.result = png(); service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     service.start([('a.png', png())], tmp_path/'out', 'convert')
     state = wait(service, lambda s: s['status'] == 'completed'); service.close()
-    restored = QueueService(lambda: Cloud(), tmp_path/'state')
+    restored = QueueService(lambda: Cloud(), tmp_path/'state', license_authority=PermittingAuthority())
     try:
         assert restored.snapshot()['items'][0]['result']['output_path'] == state['items'][0]['result']['output_path']
         assert restored.snapshot()['status'] == 'completed'
@@ -135,7 +136,7 @@ def test_open_failure_closes_browser_on_worker(tmp_path):
     class OpenFailure(Cloud):
         def open(self):
             super().open(); raise NeedsUser('請登入')
-    cloud = OpenFailure(); service = QueueService(lambda: cloud, tmp_path/'state')
+    cloud = OpenFailure(); service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png', png())], tmp_path/'out', 'convert')
         wait(service, lambda s: s['status'] == 'paused')
@@ -149,7 +150,7 @@ def test_redo_rejects_old_inflight_poll_result(tmp_path):
             if len(self.sends) == 1:
                 entered.set(); assert release.wait(3)
             return png()
-    cloud = BarrierCloud(); service = QueueService(lambda: cloud, tmp_path/'state')
+    cloud = BarrierCloud(); service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png', png())], tmp_path/'out', 'convert')
         assert entered.wait(3)
@@ -163,7 +164,7 @@ def test_persistence_failure_is_visible_and_rejects_actions(tmp_path, monkeypatc
     class BarrierCloud(Cloud):
         def poll(self):
             entered.set(); assert release.wait(3); return png()
-    cloud = BarrierCloud(); service = QueueService(lambda: cloud, tmp_path/'state')
+    cloud = BarrierCloud(); service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png', png())], tmp_path/'out', 'convert'); assert entered.wait(3)
         original = Path.write_text
@@ -198,7 +199,7 @@ def test_redo_rejects_old_inflight_submit_and_save(tmp_path, monkeypatch, stage)
                 entered.set(); assert release.wait(3)
             return original_save(*args, **kwargs)
         monkeypatch.setattr(core, 'save_result', save)
-    service = QueueService(lambda: cloud, tmp_path/'state')
+    service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png', png())], tmp_path/'out', 'convert'); assert entered.wait(3)
         service.action('stop'); service.action('redo', 0); release.set()
@@ -214,7 +215,7 @@ def test_late_poll_error_cannot_clear_terminal_storage_failure(tmp_path, monkeyp
     class BarrierCloud(Cloud):
         def poll(self):
             entered.set(); assert release.wait(3); raise error
-    cloud = BarrierCloud(); service = QueueService(lambda: cloud, tmp_path/'state')
+    cloud = BarrierCloud(); service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png', png())], tmp_path/'out', 'convert'); assert entered.wait(3)
         original = Path.write_text
@@ -236,7 +237,7 @@ def test_late_poll_success_cannot_change_terminal_item_phase(tmp_path, monkeypat
     class BarrierCloud(Cloud):
         def poll(self):
             entered.set(); assert release.wait(3); return png()
-    cloud = BarrierCloud(); service = QueueService(lambda: cloud, tmp_path/'state')
+    cloud = BarrierCloud(); service = QueueService(lambda: cloud, tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png', png())], tmp_path/'out', 'convert'); assert entered.wait(3)
         original = Path.write_text
@@ -262,7 +263,7 @@ def test_cancel_prepared_unsent_request_before_commit(tmp_path, operation):
             if send_gate:
                 with send_gate(): self.sends.append((Path(path).read_bytes(), prompt))
             else: self.sends.append((Path(path).read_bytes(), prompt))
-    cloud=Preparing(); service=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Preparing(); service=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     service.start([('a.png',png())],tmp_path/'out','convert'); assert entered.wait(1)
     closer=None
     try:
@@ -289,7 +290,7 @@ def test_restart_keeps_known_unsent_items_queued_but_submitted_needs_review(tmp_
     source=root/'input.png';source.write_bytes(png())
     items=[{'index':i,'name':f'{i}.png','input_path':str(source),'status':'running' if i==0 else 'queued','phase':'pending' if i==0 else 'ready','message':'','result':None} for i in range(2)]
     (root/'job.json').write_text(json.dumps({'id':'job','status':'running','output_dir':str(tmp_path/'out'),'prompt':'convert','items':items,'message':''}),encoding='utf-8')
-    cloud=Cloud();cloud.result=png();service=QueueService(lambda:cloud,root)
+    cloud=Cloud();cloud.result=png();service=QueueService(lambda:cloud,root, license_authority=PermittingAuthority())
     try:
         snapshot=service.snapshot();assert snapshot['status']=='paused'
         assert snapshot['items'][0]['status']=='needs-review'
@@ -301,7 +302,7 @@ def test_restart_keeps_known_unsent_items_queued_but_submitted_needs_review(tmp_
 
 @pytest.mark.parametrize('command', ['continue','retry'])
 def test_accepted_resume_clears_stale_job_error(tmp_path,command):
-    cloud=Cloud();service=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Cloud();service=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png',png())],tmp_path/'out','convert')
         wait(service,lambda s:s['items'][0]['phase']=='pending')
@@ -316,7 +317,7 @@ def test_accepted_resume_clears_stale_job_error(tmp_path,command):
 def test_explicit_close_clears_task_cache_but_keeps_login_and_outputs(tmp_path):
     profile = tmp_path/'chrome-profile'; profile.mkdir(); (profile/'login').write_text('keep')
     cloud=Cloud(); cloud.result=png(); root=tmp_path/'state'
-    service=QueueService(lambda:cloud,root)
+    service=QueueService(lambda:cloud,root, license_authority=PermittingAuthority())
     service.start([('a.png',png())],tmp_path/'out','convert')
     state=wait(service,lambda s:s['status']=='completed')
     output=Path(state['items'][0]['result']['output_path'])
@@ -324,7 +325,7 @@ def test_explicit_close_clears_task_cache_but_keeps_login_and_outputs(tmp_path):
     assert not list(root.iterdir())
     assert output.exists() and output.with_suffix('.json').exists()
     assert (profile/'login').read_text()=='keep'
-    restored=QueueService(lambda:Cloud(),root)
+    restored=QueueService(lambda:Cloud(),root, license_authority=PermittingAuthority())
     try: assert restored.snapshot()['status']=='idle'
     finally: restored.close()
 
@@ -332,7 +333,7 @@ def test_close_waits_for_inflight_work_before_clearing_cache(tmp_path):
     entered,release=threading.Event(),threading.Event()
     class Slow(Cloud):
         def poll(self): entered.set(); release.wait(2); return png()
-    service=QueueService(lambda:Slow(),tmp_path/'state')
+    service=QueueService(lambda:Slow(),tmp_path/'state', license_authority=PermittingAuthority())
     service.start([('a.png',png())],tmp_path/'out','convert'); assert entered.wait(1)
     cache=Path(service.snapshot()['items'][0]['input_path'])
     closer=threading.Thread(target=lambda:service.close(clear_state=True))
@@ -345,7 +346,7 @@ def test_close_waits_for_inflight_work_before_clearing_cache(tmp_path):
     finally: release.set(); service.close()
 
 def test_regenerate_submits_again_and_does_not_show_previous_output_as_new(tmp_path):
-    cloud=Cloud(); cloud.result=png(); service=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Cloud(); cloud.result=png(); service=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     try:
         service.start([('a.png',png())],tmp_path/'out','convert')
         saved=wait(service,lambda s:s['status']=='completed')['items'][0]['result']['output_path']
@@ -360,7 +361,7 @@ def test_regenerate_submits_again_and_does_not_show_previous_output_as_new(tmp_p
 
 def test_restart_can_download_known_conversation_without_resubmitting(tmp_path):
     import json
-    cloud=Cloud();service=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Cloud();service=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     service.start([('a.png',png())],tmp_path/'out','convert')
     wait(service,lambda s:s['items'][0]['phase']=='pending');service.close()
     path=tmp_path/'state'/'job.json';job=json.loads(path.read_text(encoding='utf-8'))
@@ -369,7 +370,7 @@ def test_restart_can_download_known_conversation_without_resubmitting(tmp_path):
     class Recovered(Cloud):
         def resume_from(self,state):self.restored=state
         def poll(self):return png()
-    other=Recovered();restored=QueueService(lambda:other,tmp_path/'state')
+    other=Recovered();restored=QueueService(lambda:other,tmp_path/'state', license_authority=PermittingAuthority())
     try:
         assert restored.snapshot()['items'][0]['status']=='paused'
         restored.action('continue');result=wait(restored,lambda s:s['status']=='completed')

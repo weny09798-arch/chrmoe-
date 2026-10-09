@@ -1,3 +1,4 @@
+from license_fakes import PermittingAuthority
 import json
 from pathlib import Path
 from core import QueueService
@@ -30,7 +31,7 @@ def test_cloud_only_failed_upload_is_retried_from_cache_then_removed(tmp_path,mo
         failed=wait(q,lambda s:s['status']=='completed');cached=Path(failed['items'][0]['result']['output_path'])
         assert cached.is_file() and tmp_path/'state' in cached.parents
         q.close()
-        p.error=None;q=QueueService(lambda:cloud,tmp_path/'state',oss_factory=lambda:p)
+        p.error=None;q=QueueService(lambda:cloud,tmp_path/'state',oss_factory=lambda:p, license_authority=PermittingAuthority())
         q.action('retry-upload',1);done=wait(q,lambda s:s['status']=='completed')
         assert len(cloud.sends)==1 and not cached.exists() and done['items'][0]['result']['public_url']
         assert all(i['phase']=='done' and i['refs'][0]['published_url'] for i in done['items'])
@@ -54,7 +55,7 @@ def test_bridge_cloud_batch_needs_no_folder_and_remote_preview_after_cleanup(tmp
     monkeypatch.setattr(cloud_images,'download_image',lambda url:(png(),'.png'))
     monkeypatch.setattr(cloud_images,'read_public',lambda url:png())
     cloud=Cloud();cloud.result=png();p=Publisher()
-    app=create_app(lambda:cloud,tmp_path/'private',token='t',oss_factory=lambda:p)
+    app=create_app(lambda:cloud,tmp_path/'private',token='t',oss_factory=lambda:p, license_authority=PermittingAuthority())
     h={'X-Tool-Token':'t','X-Extension-Id':'a'*32,'Origin':'chrome-extension://'+'a'*32}
     try:
         with app.test_client() as c:
@@ -78,7 +79,7 @@ def test_restart_cleans_leftover_successful_cloud_cache_without_touching_outputs
     # A stale record cannot cause cleanup to reach another output directory.
     job_file=tmp_path/'state/job.json';job=json.loads(job_file.read_text(encoding='utf-8'))
     job['items'][0]['result']['record_path']=str(outside);job_file.write_text(json.dumps(job),encoding='utf-8')
-    q=QueueService(lambda:cloud,tmp_path/'state',oss_factory=lambda:p)
+    q=QueueService(lambda:cloud,tmp_path/'state',oss_factory=lambda:p, license_authority=PermittingAuthority())
     try:assert not cached.exists() and outside.exists() and len(cloud.sends)==1
     finally:q.close()
 
@@ -89,7 +90,7 @@ def test_paid_cloud_upload_retry_keeps_paid_calls_at_one(tmp_path,monkeypatch):
     monkeypatch.setattr(core,'download_image',lambda url:(image(),'.png'))
     monkeypatch.setattr(core,'download_aliyun_result',lambda url:(image(),'.png'))
     translator=Translator();p=Publisher();p.error=OSSError()
-    q=QueueService(never_browser,tmp_path/'state',aliyun_factory=lambda:translator,oss_factory=lambda:p)
+    q=QueueService(never_browser,tmp_path/'state',aliyun_factory=lambda:translator,oss_factory=lambda:p, license_authority=PermittingAuthority())
     try:
         q.start_urls([entry()],None,'p','task',provider='aliyun',paid_confirmed=True,cloud_only=True)
         state=wait(q,lambda s:s['status']=='completed');assert state['paid_calls']==translator.calls==1

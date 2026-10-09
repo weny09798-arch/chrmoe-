@@ -6,22 +6,33 @@ class Element {
  remove(){if(this.parent)this.parent.children=this.parent.children.filter(e=>e!==this);}
  set src(value){this._src=value;this.srcWrites++;}get src(){return this._src;}
 }
-const ids=['files','output','extra','background','typography','selected','results','start','stop','continue','reset','exit','open','error','status','browser','progress','connection-code','copy-code','connection-message','aliyun-key-id','aliyun-key-secret','aliyun-save','aliyun-delete','aliyun-status','provider','oss-bucket','oss-region','oss-mode','oss-key-id','oss-key-secret','oss-save','oss-delete','oss-check','oss-status'];
+const ids=['license-code','license-activate','license-refresh','license-status','files','output','extra','background','typography','selected','results','start','stop','continue','reset','exit','open','error','status','browser','progress','connection-code','copy-code','connection-message','aliyun-key-id','aliyun-key-secret','aliyun-save','aliyun-delete','aliyun-status','provider','oss-bucket','oss-region','oss-mode','oss-key-id','oss-key-secret','oss-save','oss-delete','oss-check','oss-status'];
 const nodes=Object.fromEntries(ids.map(id=>[id,new Element(['start','stop','continue','exit','open'].includes(id)?'button':'div')]));
 nodes.provider.value='doubao';nodes['oss-region'].value='cn-hangzhou';nodes['oss-mode'].value='independent';
 function all(root){return [root,...root.children.flatMap(all)];}
 const revoked=[],created=[];const URLClass=URL;
 URLClass.createObjectURL=file=>{const url='blob:local/'+created.length;created.push(url);return url;};URLClass.revokeObjectURL=url=>revoked.push(url);
 let timers=0;const events={};
-const snapshot={id:'job',status:'completed',message:'saved',browser_stage:'保存',items:[{index:0,name:'<img>.png',input_path:'D:/source.png',status:'completed',phase:'done',result:{output_path:'D:/result.png'}}]};
+const snapshot={license:{allowed:true,status:'allowed',remaining_days:30,expires_at:1802592000,message:'授权有效'},id:'job',status:'completed',message:'saved',browser_stage:'保存',items:[{index:0,name:'<img>.png',input_path:'D:/source.png',status:'completed',phase:'done',result:{output_path:'D:/result.png'}}]};
 const requests=[];
 const copied=[],warnings=[];
 let configured=false,ossConfigured=false;
-const context={document:{getElementById:id=>nodes[id],createElement:tag=>new Element(tag),querySelectorAll:tag=>Object.values(nodes).flatMap(all).filter(e=>e.tag===tag)},location:{hash:'#token=secret',pathname:'/',origin:'http://127.0.0.1:54321'},navigator:{clipboard:{writeText:async text=>copied.push(text)}},sessionStorage:{getItem:()=>'',setItem:()=>{}},history:{replaceState:()=>{}},URL:URLClass,URLSearchParams,encodeURIComponent,FormData:class{constructor(){this.fields={};}append(k,v){this.fields[k]=v;}},snapshot,confirm:text=>{warnings.push(text);return true;},fetch:async(path,opts)=>{requests.push({path,body:opts.body,method:opts.method});if(path==='/api/oss/config'){if(opts.method==='POST')ossConfigured=true;if(opts.method==='DELETE')ossConfigured=false;return {ok:true,json:async()=>({oss_configured:ossConfigured,bucket:'test-bucket',region:'cn-hangzhou',credential_mode:'independent'})};}if(path==='/api/oss/check')return {ok:true,json:async()=>({ok:true,message:'verified'})};if(path==='/api/aliyun/credentials'){if(opts.method==='POST')configured=true;if(opts.method==='DELETE')configured=false;return {ok:true,json:async()=>({aliyun_configured:configured,aliyun_price_per_image:0.06})};}return {ok:true,json:async()=>path==='/api/reset'?{id:null,status:'idle',items:[]}:snapshot};},setTimeout:()=>{timers++;},addEventListener:(name,fn)=>events[name]=fn,console};
+const context={document:{getElementById:id=>nodes[id],createElement:tag=>new Element(tag),querySelectorAll:tag=>Object.values(nodes).flatMap(all).filter(e=>e.tag===tag)},location:{hash:'#token=secret',pathname:'/',origin:'http://127.0.0.1:54321'},navigator:{clipboard:{writeText:async text=>copied.push(text)}},sessionStorage:{getItem:()=>'',setItem:()=>{}},history:{replaceState:()=>{}},URL:URLClass,URLSearchParams,encodeURIComponent,FormData:class{constructor(){this.fields={};}append(k,v){this.fields[k]=v;}},snapshot,confirm:text=>{warnings.push(text);return true;},fetch:async(path,opts)=>{requests.push({path,body:opts.body,method:opts.method});if(path.startsWith('/api/license/'))return {ok:true,json:async()=>snapshot.license};if(path==='/api/oss/config'){if(opts.method==='POST')ossConfigured=true;if(opts.method==='DELETE')ossConfigured=false;return {ok:true,json:async()=>({oss_configured:ossConfigured,bucket:'test-bucket',region:'cn-hangzhou',credential_mode:'independent'})};}if(path==='/api/oss/check')return {ok:true,json:async()=>({ok:true,message:'verified'})};if(path==='/api/aliyun/credentials'){if(opts.method==='POST')configured=true;if(opts.method==='DELETE')configured=false;return {ok:true,json:async()=>({aliyun_configured:configured,aliyun_price_per_image:0.06})};}return {ok:true,json:async()=>path==='/api/reset'?{id:null,status:'idle',items:[]}:snapshot};},setTimeout:()=>{timers++;},addEventListener:(name,fn)=>events[name]=fn,console};
 context.window=context;
 vm.createContext(context);vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context);
 (async()=>{
  await new Promise(resolve=>setImmediate(resolve));
+ assert.strictEqual(typeof nodes['license-activate'].onclick,'function','License must be activatable locally');
+ nodes['license-code'].value='private-code';await nodes['license-activate'].onclick();
+ assert.strictEqual(nodes['license-code'].value,'','Activation input must be cleared');
+ assert.ok(requests.some(r=>r.path==='/api/license/activate'&&JSON.parse(r.body).code==='private-code'));
+ assert.ok(nodes['license-status'].textContent.includes('30'),'Show remaining days');
+ snapshot.license={allowed:false,status:'expired',message:'授权已到期'};
+ nodes.files.files=[{name:'a.png'}];vm.runInContext('render()',context);
+ assert.strictEqual(nodes.start.disabled,true,'Expired UI cannot start');
+ const beforeDenied=requests.length;await nodes.start.onclick();assert.strictEqual(requests.length,beforeDenied,'Bypassed disabled handler still refuses');
+ snapshot.license={allowed:true,status:'allowed',remaining_days:30,expires_at:1802592000,message:'授权有效'};
+ await nodes['license-refresh'].onclick();nodes.files.files=[];vm.runInContext('render()',context);
  assert.strictEqual(typeof nodes['oss-save'].onclick,'function','OSS config needs save action');
  nodes['oss-bucket'].value='test-bucket';nodes['oss-key-id'].value='oss-id';nodes['oss-key-secret'].value='oss-secret';await nodes['oss-save'].onclick();
  assert.strictEqual(nodes['oss-key-secret'].value,'');assert.ok(requests.some(r=>r.path==='/api/oss/config'&&r.method==='POST'));

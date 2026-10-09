@@ -1,3 +1,4 @@
+from license_fakes import PermittingAuthority
 import json
 from pathlib import Path
 import threading
@@ -19,7 +20,7 @@ def setup(tmp_path,monkeypatch,publisher):
     import core
     monkeypatch.setattr(core,'download_image',lambda url:(png(),'.png'))
     cloud=Cloud();cloud.result=png()
-    q=QueueService(lambda:cloud,tmp_path/'state',oss_factory=lambda:publisher)
+    q=QueueService(lambda:cloud,tmp_path/'state',oss_factory=lambda:publisher, license_authority=PermittingAuthority())
     return q,cloud
 
 def test_save_then_upload_publishes_every_position_without_xlsx(tmp_path,monkeypatch):
@@ -127,7 +128,7 @@ def test_restart_uploading_resumes_local_result_without_translation(tmp_path,mon
         for ref in q.job['items'][0]['refs']:ref.pop('published_url');ref.pop('published_revision')
         q._persist()
     q.close()
-    restored=QueueService(lambda:(_ for _ in ()).throw(AssertionError('must not open browser')),tmp_path/'state',oss_factory=lambda:p)
+    restored=QueueService(lambda:(_ for _ in ()).throw(AssertionError('must not open browser')),tmp_path/'state',oss_factory=lambda:p, license_authority=PermittingAuthority())
     try:
         assert restored.snapshot()['status']=='paused'
         restored.action('continue');state=wait(restored,lambda s:s['status']=='completed')
@@ -176,7 +177,7 @@ def test_destination_change_during_doubao_preparation_blocks_send_gate(tmp_path,
             p.target_id='changed-before-send'
             return super().submit(path,prompt,send_gate)
     cloud=Preparing();cloud.result=png()
-    q=QueueService(lambda:cloud,tmp_path/'state',oss_factory=lambda:p)
+    q=QueueService(lambda:cloud,tmp_path/'state',oss_factory=lambda:p, license_authority=PermittingAuthority())
     try:
         q.start_urls([entry()],tmp_path/'out','p','task')
         state=wait(q,lambda s:s['status']=='paused')
@@ -193,7 +194,7 @@ def test_destination_change_during_aliyun_setup_blocks_paid_commit(tmp_path,monk
         setup_count+=1
         if setup_count>1:p.target_id='changed-before-paid-commit'
         return translator
-    q=QueueService(never_browser,tmp_path/'state',aliyun_factory=aliyun_factory,oss_factory=lambda:p)
+    q=QueueService(never_browser,tmp_path/'state',aliyun_factory=aliyun_factory,oss_factory=lambda:p, license_authority=PermittingAuthority())
     try:
         q.start_urls([entry()],tmp_path/'out','p','task',provider='aliyun',paid_confirmed=True)
         state=wait(q,lambda s:s['status']=='paused')
@@ -206,7 +207,7 @@ def test_legacy_unfinished_job_restores_sku_index_without_enabling_cloud_upload(
     monkeypatch.setattr(core,'download_image',lambda url:(png(),'.png'))
     save=core.save_positions
     monkeypatch.setattr(core,'save_positions',lambda *args:(_ for _ in ()).throw(OSError('disk blocked')))
-    cloud=Cloud();cloud.result=png();q=QueueService(lambda:cloud,tmp_path/'state')
+    cloud=Cloud();cloud.result=png();q=QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     q.start_urls([{**entry(),'kind':'sku','order':3}],tmp_path/'out','p','task')
     wait(q,lambda s:s['status']=='paused')
     with q.cv:
@@ -214,7 +215,7 @@ def test_legacy_unfinished_job_restores_sku_index_without_enabling_cloud_upload(
         q.job['items'][0]['refs'][0].pop('sku_index');q._persist()
     q.close();monkeypatch.setattr(core,'save_positions',save)
     def unexpected():raise AssertionError('legacy local job must not acquire a publisher')
-    restored=QueueService(lambda:cloud,tmp_path/'state',oss_factory=unexpected)
+    restored=QueueService(lambda:cloud,tmp_path/'state',oss_factory=unexpected, license_authority=PermittingAuthority())
     try:
         assert restored.snapshot()['items'][0]['refs'][0]['sku_index']==2
         restored.action('continue');state=wait(restored,lambda s:s['status']=='completed')

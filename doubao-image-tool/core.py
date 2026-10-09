@@ -12,6 +12,7 @@ from storage import validate_inputs, save_result, clear_task_state
 from image_batch import build_items, counts, download_image, save_positions, write_report
 from aliyun_translation import AliyunError, validate_aliyun_image, download_aliyun_result, PRICE_PER_IMAGE
 from credentials import CredentialError
+from license_authority import LicenseAuthority, LicenseRequiredError
 from oss_storage import OSSError
 from cloud_images import save_cached_result,clean_cached_images
 
@@ -64,8 +65,9 @@ class StorageFailure(RuntimeError):
 class QueueService:
     generation_timeout = 8 * 60
     poll_interval = .1
+    license_poll_interval = 1.0
 
-    def __init__(self, browser_factory, state_dir, aliyun_factory=None, oss_factory=None):
+    def __init__(self, browser_factory, state_dir, aliyun_factory=None, oss_factory=None, license_authority=None):
         self.factory = browser_factory
         self.aliyun_factory = aliyun_factory
         self.oss_factory = oss_factory
@@ -101,7 +103,51 @@ class QueueService:
             self._persist()
             for item in self.job['items']:
                 if item['status']=='completed' and item.get('upload_result'):clean_cached_images(self.job,item,self.state_dir)
+        self.license = license_authority if license_authority is not None else LicenseAuthority(self.state_dir.parent)
+        self._license_blocked = None
+        self._license_stop = threading.Event()
+        self.license.startup()
+        self.license_worker = threading.Thread(target=self._monitor_license, name='license-monitor', daemon=True)
+        self.license_worker.start()
         self.worker = threading.Thread(target=self._run, name='doubao-browser', daemon=True); self.worker.start()
+
+    def _observe_license(self, status):
+        with self.cv:
+            if not status.allowed and self.job and self.job['status'] == 'running':
+                self._license_blocked = status
+        return status
+
+    def license_status(self):
+        return self._observe_license(self.license.status())
+
+    def activate_license(self, code):
+        return self._observe_license(self.license.activate(code))
+
+    def refresh_license(self):
+        return self._observe_license(self.license.refresh())
+
+    def _monitor_license(self):
+        while not self._license_stop.wait(self.license_poll_interval):
+            self.license_status()
+
+    def _check_license(self, *, force_refresh):
+        try:
+            return self.license.require_new_work(force_refresh=force_refresh)
+        except LicenseRequiredError as exc:
+            self._observe_license(exc.status)
+            raise
+
+    def _require_new_work(self, *, force_refresh=False, manual=False):
+        status = self._check_license(force_refresh=force_refresh)
+        if manual:
+            self._license_blocked = None
+        elif self._license_blocked is not None:
+            raise LicenseRequiredError(self._license_blocked)
+        return status
+
+    @staticmethod
+    def _existing_result(item):
+        return item['phase'] in {'pending', 'saving', 'aliyun-downloading', 'uploading', 'upload-failed', 'alias'}
 
     def _check_storage(self):
         if self.job and self.job['status'] == 'storage-error':
@@ -122,6 +168,7 @@ class QueueService:
             raise StorageFailure(self.job['message']) from exc
 
     def start(self, files, output_dir, prompt, provider='doubao', paid_confirmed=False):
+        self._check_license(force_refresh=True)
         conversion_options(provider,None)
         if provider=='aliyun':
             if paid_confirmed is not True:raise ValueError('阿里云转换按 ¥0.06/张计费，请先确认付费')
@@ -131,6 +178,7 @@ class QueueService:
         with self.cv:
             if self.closed: raise RuntimeError('服務已關閉')
             if self.job and self.job['status'] != 'completed': raise ValueError('請先完成目前任務')
+            self._license_blocked = None
             job_id = uuid.uuid4().hex; folder = self.state_dir / job_id; folder.mkdir()
             items = []
             for index, (name, data) in enumerate(checked):
@@ -144,6 +192,7 @@ class QueueService:
             self._persist(); self.cv.notify_all(); return job_id
 
     def start_urls(self, entries, output_dir, prompt, source_task_id, provider='doubao', image_kinds=None, paid_confirmed=False, cloud_only=False, image_limits=None):
+        self._check_license(force_refresh=True)
         kinds = conversion_options(provider, image_kinds)
         limits = image_limit_options(image_limits, kinds)
         if not isinstance(entries, list): raise ValueError('图片清单无效')
@@ -160,6 +209,7 @@ class QueueService:
         with self.cv:
             if self.closed: raise RuntimeError('服务已关闭')
             if self.job and self.job['status'] != 'completed': raise ValueError('请先完成目前任务')
+            self._license_blocked = None
             job_id = uuid.uuid4().hex
             folder = self.state_dir / job_id; folder.mkdir()
             if output is not None:output.mkdir(parents=True, exist_ok=True)
@@ -175,9 +225,11 @@ class QueueService:
             self._persist(); self.cv.notify_all(); return job_id
 
     def snapshot(self, job_id=None):
+        license_status = self.license_status().to_dict()
         with self.cv:
             if job_id and (not self.job or job_id != self.job['id']): raise KeyError(job_id)
             state = copy.deepcopy(self.job) if self.job else {'id': None, 'status': 'idle', 'items': [], 'message': ''}
+            state['license'] = license_status
             state.setdefault('provider', 'doubao'); state.setdefault('image_kinds', list(IMAGE_KINDS))
             state.setdefault('image_limits', dict.fromkeys(IMAGE_KINDS))
             state.setdefault('paid_calls', 0); state.setdefault('estimated_cost_upper', 0)
@@ -212,6 +264,15 @@ class QueueService:
             if command == 'stop': self.job['status'] = 'stopped'
             elif command == 'continue':
                 if any(i['status'] == 'needs-review' or i['phase'] == 'uncertain' for i in self.job['items']): return
+                remaining = [i for i in self.job['items'] if i['status'] not in {'completed', 'failed'}]
+                if not any(self._existing_result(i) for i in remaining):
+                    self._require_new_work(force_refresh=True, manual=True)
+                elif self.license_status().allowed:
+                    try:
+                        self._require_new_work(force_refresh=True, manual=True)
+                    except LicenseRequiredError as exc:
+                        # A newly received denial stops new work, not retrieval already owed.
+                        self._license_blocked = exc.status
                 for i in self.job['items']:
                     if i['status'] == 'paused': i['status'] = 'queued'; i.pop('started', None)
                 self.job['status'] = 'running'; self.job['message'] = ''
@@ -241,6 +302,10 @@ class QueueService:
                     or item['phase'] in {'done', 'submitting', 'uncertain', 'aliyun-failed'}
                 ):
                     raise ValueError('此图片需要重新付费生成，请明确确认付费')
+                retrieves_existing = alias_retry or (aliyun and item.get('aliyun_result')) or (
+                    item['status'] != 'needs-review' and item['phase'] in {'saving', 'pending', 'aliyun-downloading'})
+                if command == 'redo' or not retrieves_existing:
+                    self._require_new_work(force_refresh=True, manual=True)
                 if alias_retry:
                     item['phase'] = 'alias'
                 elif aliyun and command == 'retry' and item.get('aliyun_result'):
@@ -303,11 +368,17 @@ class QueueService:
                         self.browser_message = message; self.browser_busy = False
                         continue
                     waiting = [i for i in self.job['items'] if i['status'] not in {'completed', 'failed'}]
+                    # Retrieval and upload retries must not sit behind blocked new work.
+                    waiting.sort(key=lambda i: not self._existing_result(i))
                     item = next((i for i in waiting if i['phase'] != 'alias'
                         or self.job['items'][i['alias_of']]['status'] in {'completed','failed'}), None)
                     if item is None and waiting:
                         self._pause(waiting[0], '请先继续或重试相同图片的原任务'); continue
                     if item is None:
+                        status = self.license_status()
+                        if not status.allowed or self._license_blocked is not None:
+                            self.job.update(status='paused', message=(self._license_blocked or status).message)
+                            self._persist(); continue
                         self.job['status'] = 'completed'; self.job['message'] = '圖片已生成並儲存；請人工確認繁體字和文案。'; self._persist(); continue
                     if item['status'] == 'needs-review':
                         self._pause(item, '請檢查 Chrome 後明確重試'); item['status'] = 'needs-review'; self._persist(); continue
@@ -315,6 +386,8 @@ class QueueService:
                     revision = item.get('revision', 0)
                     active_job = self.job
                 try:
+                    if phase in {'ready', 'aliyun-ready', 'downloading'}:
+                        self._require_new_work()
                     if phase in {'ready','aliyun-ready'}:self._publisher(active_job)
                     if phase == 'downloading':
                         data, extension = download_image(item['url'])
@@ -366,6 +439,7 @@ class QueueService:
                             self._check_storage()
                             if self.closed or self.job is not active_job or self.job['status'] != 'running' or item.get('revision',0) != revision: continue
                             self._publisher(active_job)
+                            self._require_new_work()
                             item.update(phase='submitting',status='running')
                             self.job['paid_calls'] += 1
                             self._persist()
@@ -406,6 +480,7 @@ class QueueService:
                                 if self.closed or self.job['status'] != 'running' or item.get('revision', 0) != revision:
                                     raise SubmissionCancelled()
                                 self._publisher(active_job)
+                                self._require_new_work()
                                 yield
                         self.browser.submit(Path(item['input_path']), self.job['prompt'], send_gate)
                         with self.cv:
@@ -478,6 +553,16 @@ class QueueService:
                                 if dependent.get('alias_of')==item['index'] and dependent.get('upload_result'):clean_cached_images(active_job,dependent,self.state_dir)
                     else:
                         with self.cv: self._pause(item, '提交狀態不確定；請明確重試。')
+                except LicenseRequiredError as exc:
+                    with self.cv:
+                        self._check_storage()
+                        if self.job is not active_job or item.get('revision', 0) != revision: continue
+                        if item['phase'] == 'submitting':
+                            item['phase'] = phase
+                            if active_job.get('provider') == 'aliyun':
+                                self.job['paid_calls'] -= 1
+                        self._license_blocked = exc.status
+                        self._pause(item, exc.status.message)
                 except SubmissionCancelled:
                     with self.cv:
                         self._check_storage()
@@ -553,10 +638,13 @@ class QueueService:
             self.clear_on_close = self.clear_on_close or clear_state
             self.closed = True; self.cv.notify_all()
 
-    def close(self, clear_state=False):
+    def close(self, clear_state=False, *, close_license=True):
         self.request_close(clear_state=clear_state)
-        self.worker.join(timeout=30)
+        self._license_stop.set()
+        self.license_worker.join()
+        self.worker.join(timeout=55)
         if self.worker.is_alive(): raise RuntimeError('瀏覽器操作尚未結束')
+        if close_license: self.license.close()
         with self.cv:
             if self.clear_on_close:
                 clear_task_state(self.state_dir)

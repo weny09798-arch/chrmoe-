@@ -1,3 +1,4 @@
+from license_fakes import PermittingAuthority
 """Whole HTTP-to-worker-to-published-mapping flow with external I/O replaced."""
 import io
 import json
@@ -49,7 +50,7 @@ def test_paired_mixed_product_batch_recovers_same_generation_and_exports_mapping
     import core
     monkeypatch.setattr(core, 'download_image', lambda url: (image('red'), '.png'))
     cloud = Cloud()
-    app = create_app(lambda: cloud, tmp_path / 'private', token='test-secret', oss_factory=FakePublisher)
+    app = create_app(lambda: cloud, tmp_path / 'private', token='test-secret', oss_factory=FakePublisher, license_authority=PermittingAuthority())
     extension = 'a' * 32
     headers = {'X-Tool-Token': 'test-secret', 'X-Extension-Id': extension,
                'Origin': f'chrome-extension://{extension}'}

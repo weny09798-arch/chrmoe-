@@ -1,3 +1,4 @@
+from license_fakes import PermittingAuthority
 import copy
 import threading
 import pytest
@@ -12,7 +13,7 @@ def completed_queue(tmp_path, monkeypatch):
     monkeypatch.setattr(core, 'download_image', lambda url: (image(), '.png'))
     monkeypatch.setattr(core, 'download_aliyun_result', lambda url: (image(color='blue'), '.png'))
     translator = Translator()
-    queue = QueueService(never_browser, tmp_path / 'state', aliyun_factory=lambda: translator)
+    queue = QueueService(never_browser, tmp_path / 'state', aliyun_factory=lambda: translator, license_authority=PermittingAuthority())
     try:
         queue.start_urls(entries(), tmp_path / 'out', 'convert', 'source', provider='aliyun', paid_confirmed=True)
         wait(queue, lambda state: state['status'] == 'completed')
@@ -107,7 +108,7 @@ def test_stale_http_retry_of_completed_original_returns_400(tmp_path, monkeypatc
     monkeypatch.setattr(core, 'download_image', lambda url: (image(), '.png'))
     monkeypatch.setattr(core, 'download_aliyun_result', download_result)
     translator = Translator()
-    app = create_app(never_browser, tmp_path / 'private', token='token', aliyun_factory=lambda: translator, oss_factory=FakePublisher)
+    app = create_app(never_browser, tmp_path / 'private', token='token', aliyun_factory=lambda: translator, oss_factory=FakePublisher, license_authority=PermittingAuthority())
     queue = app.extensions['queue']
     try:
         with app.test_client() as client:

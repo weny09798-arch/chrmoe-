@@ -1,7 +1,8 @@
+from license_fakes import PermittingAuthority
 from app import create_app
 
 def test_oss_config_api_protected_and_capability_does_not_expose_keys(tmp_path):
-    app=create_app(lambda:None,tmp_path,token='t')
+    app=create_app(lambda:None,tmp_path,token='t', license_authority=PermittingAuthority())
     try:
         with app.test_client() as c:
             assert c.get('/api/oss/config').status_code==403
@@ -16,7 +17,7 @@ def test_oss_config_api_protected_and_capability_does_not_expose_keys(tmp_path):
 def test_oss_check_uses_configured_publisher(tmp_path):
     class Publisher:
         def check(self):return {'ok':True}
-    app=create_app(lambda:None,tmp_path,token='t',oss_factory=lambda:Publisher())
+    app=create_app(lambda:None,tmp_path,token='t',oss_factory=lambda:Publisher(), license_authority=PermittingAuthority())
     try:
         with app.test_client() as c:
             assert c.post('/api/oss/check',headers={'X-Tool-Token':'t'}).json=={'ok':True}

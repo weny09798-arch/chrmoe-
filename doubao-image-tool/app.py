@@ -9,8 +9,9 @@ from flask import Flask, request, jsonify, send_file, render_template
 from core import QueueService, StorageFailure
 from prompts import build_prompt
 from cloud_images import image_response
+from license_authority import LicenseRequiredError
 
-def create_app(browser_factory=None, state_dir=None, output_default=None, token=None, aliyun_factory=None, oss_factory=None):
+def create_app(browser_factory=None, state_dir=None, output_default=None, token=None, aliyun_factory=None, oss_factory=None, license_authority=None):
     root = Path(state_dir or Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'DoubaoImageTool')
     if browser_factory is None:
         from browser import DoubaoBrowser
@@ -20,14 +21,16 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
     from credentials import CredentialStore
     from aliyun_translation import AliyunTranslator, PRICE_PER_IMAGE
     credentials = CredentialStore(root)
-    aliyun_factory = aliyun_factory or (lambda: AliyunTranslator(credentials.load()))
+    aliyun_factory = aliyun_factory or (lambda: AliyunTranslator(credentials.load(), profile_root=root))
     app.extensions['aliyun_credentials'] = credentials
     from oss_storage import OSSConfigStore,OSSPublisher
     oss_config=OSSConfigStore(root,credentials.load)
     oss_factory=oss_factory or (lambda:OSSPublisher(oss_config.load()))
     app.extensions['oss_config']=oss_config
-    queue = QueueService(browser_factory, root / 'state', aliyun_factory=aliyun_factory,oss_factory=oss_factory)
+    queue = QueueService(browser_factory, root / 'state', aliyun_factory=aliyun_factory,oss_factory=oss_factory, license_authority=license_authority)
     app.extensions['queue'] = queue
+    license_authority = queue.license
+    app.extensions['license_authority'] = license_authority
     lifecycle = threading.RLock()
 
     @app.before_request
@@ -48,6 +51,23 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' blob:; style-src 'self'; script-src 'self'; frame-ancestors 'none'"
         return response
+
+    @app.errorhandler(LicenseRequiredError)
+    def license_required(exc):
+        return jsonify(error=str(exc), license=exc.status.to_dict()), 423
+
+    @app.get('/api/license/status')
+    def license_status(): return jsonify(queue.license_status().to_dict())
+
+    @app.post('/api/license/activate')
+    def license_activate():
+        value = request.get_json(silent=True)
+        if not isinstance(value, dict) or not isinstance(value.get('code'), str):
+            raise ValueError('请输入授权码')
+        return jsonify(queue.activate_license(value['code'].strip()).to_dict())
+
+    @app.post('/api/license/refresh')
+    def license_refresh(): return jsonify(queue.refresh_license().to_dict())
 
     @app.errorhandler(ValueError)
     def invalid(exc): return jsonify(error=str(exc)), 400
@@ -112,8 +132,8 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
     def reset_queue():
         nonlocal queue
         with lifecycle:
-            queue.close(clear_state=True)
-            queue = QueueService(browser_factory, root / 'state', aliyun_factory=aliyun_factory,oss_factory=oss_factory)
+            queue.close(clear_state=True, close_license=False)
+            queue = QueueService(browser_factory, root / 'state', aliyun_factory=aliyun_factory,oss_factory=oss_factory, license_authority=license_authority)
             app.extensions['queue'] = queue
             return queue.snapshot()
 

@@ -1,3 +1,4 @@
+from license_fakes import PermittingAuthority
 import io, time
 import pytest
 from PIL import Image
@@ -14,7 +15,7 @@ class Browser:
 
 @pytest.fixture
 def client(tmp_path):
-    app = create_app(Browser, tmp_path / 'state', tmp_path / 'out', 'secret')
+    app = create_app(Browser, tmp_path / 'state', tmp_path / 'out', 'secret', license_authority=PermittingAuthority())
     app.config['TESTING'] = True
     with app.test_client() as client:
         yield client
@@ -48,7 +49,7 @@ def test_invalid_image_rejected(client, tmp_path):
 def test_open_browser_failure_is_visible(tmp_path):
     class Missing(Browser):
         def open(self): raise NeedsUser('请安装 Chrome')
-    app = create_app(Missing, tmp_path / 'state', tmp_path)
+    app = create_app(Missing, tmp_path / 'state', tmp_path, license_authority=PermittingAuthority())
     with app.test_client() as c:
         token = app.config['TOOL_TOKEN']
         assert c.post('/api/action', headers={'X-Tool-Token':token}, json={'action':'open-browser'}).status_code == 200
@@ -73,7 +74,7 @@ def test_state_remains_readable_while_chrome_opens(tmp_path):
     entered, release = threading.Event(), threading.Event()
     class Slow(Browser):
         def open(self): entered.set(); release.wait(2)
-    app = create_app(Slow, tmp_path)
+    app = create_app(Slow, tmp_path, license_authority=PermittingAuthority())
     q = app.extensions['queue']; q.open_browser(); assert entered.wait(1)
     snapshots = []
     reader = threading.Thread(target=lambda: snapshots.append(q.snapshot()))
@@ -121,7 +122,7 @@ def test_exit_acknowledgement_cancels_unsent_preparation_before_server_shutdown(
         def submit(self,path,prompt,send_gate):
             entered.set();release.wait(2)
             with send_gate(): sends.append(prompt)
-    app=create_app(Preparing,tmp_path/'state',tmp_path/'out','secret')
+    app=create_app(Preparing,tmp_path/'state',tmp_path/'out','secret', license_authority=PermittingAuthority())
     app.extensions['shutdown']=lambda:None
     q=app.extensions['queue'];q.start([('a.png',png())],tmp_path/'out','convert')
     assert entered.wait(1)

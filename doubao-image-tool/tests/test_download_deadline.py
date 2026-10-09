@@ -1,3 +1,4 @@
+from license_fakes import PermittingAuthority
 """Real socket regressions for downloads whose peer never becomes idle."""
 import json
 import http.client
@@ -98,7 +99,7 @@ def test_hard_process_deadline_terminates_trickling_transport(slow_transport, mo
 @pytest.mark.parametrize('mode', ['headers', 'body'])
 def test_close_and_clear_finish_after_trickling_download(tmp_path, slow_transport, mode):
     selected, entered = slow_transport; selected[0] = mode
-    cloud = Cloud();service = QueueService(lambda:cloud,tmp_path/'state')
+    cloud = Cloud();service = QueueService(lambda:cloud,tmp_path/'state', license_authority=PermittingAuthority())
     service.start_urls([{'platform':'pdd','product_id':'1','title':'product','kind':'main','sku':'',
         'order':1,'url':'https://img.pddpic.com/trickle.png','product_url':''}],tmp_path/'out','prompt','source')
     try:

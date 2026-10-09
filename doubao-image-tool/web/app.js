@@ -13,6 +13,9 @@ $('copy-code').onclick = async () => {
 };
 let busy = false, state = null, closed = false;
 let aliyunConfigured = false, ossConfigured = false;
+let licenseStatus = {allowed:false,message:'正在读取授权状态'};
+const existingResult = item => ['pending','saving','aliyun-downloading','uploading','upload-failed','alias'].includes(item.phase);
+function licensed(){return (state?.license || licenseStatus).allowed===true;}
 const cards = new Map();
 let selectedUrls = [];
 const statuses = {idle:'尚未开始',running:'正在处理',stopped:'已停止后续提交',paused:'等待处理',completed:'全部已保存，请逐张检查', 'storage-error':'状态保存失败，必须重新启动'};
@@ -26,11 +29,15 @@ async function api(path, body, method) {
 function node(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
 function imageUrl(index,kind){return `/api/images/${encodeURIComponent(state.id)}/${index}/${kind}?token=${encodeURIComponent(token)}`;}
 function render(){
+ const license=state?.license || licenseStatus;
+ $('license-status').textContent=(license.message||'授权不可用')+(license.expires_at?` · 到期：${new Date(license.expires_at*1000).toLocaleString()}`:'')+(license.remaining_days!==null&&license.remaining_days!==undefined?` · 剩余 ${license.remaining_days} 天`:'')+(license.offline?' · 离线授权':'');
  const running=state?.status==='running', terminal=state?.status==='storage-error';
  document.querySelectorAll('button').forEach(b=>b.disabled=busy || terminal);
- $('start').disabled=busy||terminal||!$('files').files.length||(state?.id&&state.status!=='completed')||($('provider').value==='aliyun'&&!aliyunConfigured);
+ $('start').disabled=!licensed()||busy||terminal||!$('files').files.length||(state?.id&&state.status!=='completed')||($('provider').value==='aliyun'&&!aliyunConfigured);
  $('stop').disabled=busy||terminal||!running;
  $('continue').disabled=busy||terminal||!state?.id||running||state.status==='completed'||state.items.some(i=>i.status==='needs-review'||i.phase==='uncertain');
+ $('continue').disabled=$('continue').disabled||(!licensed()&&!state?.items.some(i=>i.status!=='completed'&&existingResult(i)));
+ $('license-activate').disabled=busy; $('license-refresh').disabled=busy;
  $('exit').disabled=busy; $('open').disabled=busy||terminal||state?.browser_busy;
  $('reset').disabled=busy||!state?.id;
  const fixedTarget=state?.upload_enabled&&state?.id&&state.status!=='completed';
@@ -72,9 +79,9 @@ function render(){
   }
   view.retry.textContent=item.phase==='upload-failed'?'重试上传（不重新翻译）':['pending','saving','aliyun-downloading'].includes(item.phase)?'继续获取此图':'继续处理此图';
   view.retry.hidden=item.status==='completed'||item.status==='needs-review'||item.phase==='uncertain'||(state?.provider==='aliyun'&&['submitting','aliyun-failed'].includes(item.phase));
-  view.retry.disabled=busy||terminal||running;
+  view.retry.disabled=busy||terminal||running||(!licensed()&&!existingResult(item));
   view.retry.onclick=()=>act(item.phase==='upload-failed'?'retry-upload':'retry',item.index);
-  view.redo.textContent='重新生成此图';view.redo.disabled=busy||terminal||running;
+  view.redo.textContent='重新生成此图';view.redo.disabled=busy||terminal||running||!licensed();
   view.redo.onclick=()=>act('redo',item.index);
  }
  for(const [key,view] of cards){if(!keys.has(key)){view.card.remove();cards.delete(key);}}
@@ -82,10 +89,19 @@ function render(){
 }
 async function command(fn){busy=true;$('error').textContent='';render();try{state=await fn();}catch(e){$('error').textContent=e.message;}finally{busy=false;render();}}
 function act(action,index){
+ if(!licensed()&&(action==='redo'||(action==='retry'&&!existingResult(state.items[index])))){ $('error').textContent='请激活或续费授权后手动恢复任务';return; }
  const paid=action==='redo'&&state?.provider==='aliyun';
  if(paid&&!window.confirm('阿里云重新生成会再次按 ¥0.06/张计费，图片将上传阿里云；包装文字仍需逐张检查。确认再次付费？'))return;
  return command(()=>api('/api/action',{action,index,...(paid?{paid_confirmed:true}:{})}));
 }
+async function updateLicense(path, body){
+ busy=true;$('error').textContent='';render();
+ try{licenseStatus=await api(path,body);if(state)state.license=licenseStatus;}
+ catch(e){$('error').textContent=e.message;}
+ finally{$('license-code').value='';busy=false;render();}
+}
+$('license-activate').onclick=()=>updateLicense('/api/license/activate',{code:$('license-code').value.trim()});
+$('license-refresh').onclick=()=>updateLicense('/api/license/refresh',{});
 async function refreshCredentials(){
  const result=await api('/api/aliyun/credentials');aliyunConfigured=result.aliyun_configured===true;
  $('aliyun-status').textContent=aliyunConfigured?'已配置（¥0.06/张）':'尚未配置，阿里云付费转换不可开始';render();
@@ -140,6 +156,7 @@ window.addEventListener('beforeunload',clearSelected);
 $('open').onclick=()=>act('open-browser');$('stop').onclick=()=>act('stop');$('continue').onclick=()=>act('continue');
 $('reset').onclick=()=>command(async()=>{const empty=await api('/api/reset',{});$('files').value='';clearSelected();$('selected').replaceChildren();return empty;});
 $('start').onclick=()=>{
+ if(!licensed()){$('error').textContent='请激活或续费授权后开始新任务';return;}
  const provider=$('provider').value;
  if(provider==='aliyun'){
   if(!aliyunConfigured){$('error').textContent='请先配置阿里云 AccessKey';return;}

@@ -34,7 +34,7 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
             extension = origin_id()
             headers = {h.strip().lower() for h in request.headers.get('Access-Control-Request-Headers','').split(',') if h.strip()}
             method = request.headers.get('Access-Control-Request-Method')
-            expected = 'GET' if request.path.startswith(('/api/bridge/state', '/api/bridge/capabilities', '/api/bridge/manifest', '/api/bridge/images/')) else 'POST'
+            expected = 'GET' if request.path.startswith(('/api/bridge/state', '/api/bridge/capabilities', '/api/bridge/manifest', '/api/bridge/images/', '/api/bridge/license/status')) else 'POST'
             if not extension or (paired != extension and not (is_pair and paired is None)) or not headers.issubset(ALLOWED_HEADERS) or method != expected:
                 return forbidden()
             return '', 204
@@ -96,8 +96,20 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
 
     @app.get('/api/bridge/capabilities')
     def capabilities():
-        return jsonify(version='1.6.4',cloud_image_storage=True,image_type_limits=True,providers=['doubao','aliyun'],image_kinds=['main','detail','sku'],
+        return jsonify(licensing=True,version='1.6.4',cloud_image_storage=True,image_type_limits=True,providers=['doubao','aliyun'],image_kinds=['main','detail','sku'],
                        **(credential_status() if credential_status else {'aliyun_configured':False,'aliyun_price_per_image':0.06}))
+
+    @app.get('/api/bridge/license/status', endpoint='bridge_license_status')
+    def license_status(): return jsonify(get_queue().license_status().to_dict())
+
+    @app.post('/api/bridge/license/activate', endpoint='bridge_license_activate')
+    def license_activate():
+        code = body().get('code')
+        if not isinstance(code, str): raise ValueError('请输入授权码')
+        return jsonify(get_queue().activate_license(code.strip()).to_dict())
+
+    @app.post('/api/bridge/license/refresh', endpoint='bridge_license_refresh')
+    def license_refresh(): return jsonify(get_queue().refresh_license().to_dict())
 
     @app.post('/api/bridge/folder')
     def folder():
