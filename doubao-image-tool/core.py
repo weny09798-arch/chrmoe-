@@ -113,7 +113,7 @@ class QueueService:
 
     def _observe_license(self, status):
         with self.cv:
-            if not status.allowed and self.job and self.job['status'] == 'running':
+            if not status.allowed and status.state != 'validation_in_progress' and self.job and self.job['status'] == 'running':
                 self._license_blocked = status
         return status
 

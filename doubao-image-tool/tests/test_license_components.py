@@ -123,7 +123,7 @@ def test_atomic_store_failure_keeps_previous_protected_record(tmp_path):
     assert 'secret' not in str(caught.value)
     broken = False
     assert store.load() == {'code': 'old'}
-    assert list(tmp_path.iterdir()) == [store.path]
+    assert {path.name for path in tmp_path.iterdir()} == {'license.dpapi', '.license.lock'}
 
 
 class Response:

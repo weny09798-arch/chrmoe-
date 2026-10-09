@@ -1,6 +1,7 @@
 """Authority state-machine tests with real signatures and controlled clocks/I/O."""
 import copy
 import json
+import threading
 
 import pytest
 
@@ -19,6 +20,7 @@ class Clock:
 class Store:
     def __init__(self):
         self.value = None
+        self.lock = threading.RLock()
         self.fail = False
     def load(self):
         if self.fail:
@@ -28,6 +30,13 @@ class Store:
         if self.fail:
             raise OSError('sensitive storage details')
         self.value = copy.deepcopy(value)
+
+    def compare_and_save(self, expected, value):
+        with self.lock:
+            if self.load() != expected:
+                return False
+            self.save(value)
+            return True
 
 
 class Service:

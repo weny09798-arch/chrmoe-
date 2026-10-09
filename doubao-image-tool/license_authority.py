@@ -1,4 +1,5 @@
 """Threadless Windows license authority. New work consumes only public statuses."""
+import copy
 from dataclasses import dataclass
 import math
 import re
@@ -13,8 +14,11 @@ from license_transport import HttpsLicenseTransport, LicenseTransportOutage
 from license_trust import CredentialVerifier
 
 
+_UNREAD = object()
+
 DENIALS = frozenset({'unknown_code', 'disabled', 'expired', 'unbound', 'device_mismatch'})
 MESSAGES = {
+    'validation_in_progress': '正在验证授权，请稍候',
     'allowed': '授权有效', 'activation_required': '请输入授权码激活',
     'needs_validation': '需要联网验证授权', 'unconfigured': '授权服务尚未配置',
     'hardware_unavailable': '无法读取 Windows 设备标识',
@@ -54,7 +58,10 @@ class LicenseRequiredError(PermissionError):
 
 
 class LicenseAuthority:
-    """Own one per profile. Call startup before serving work; caller owns scheduler.
+    """Versioned profile authority. Call startup before work; caller owns scheduler.
+
+    The app and short-lived helpers synchronize via the store's compare_and_save.
+    Network operations never hold its process lock.
 
     Injected clocks/storage/transport/hardware are for isolated testing. Production
     uses fixed build config, Windows identity, DPAPI and HTTPS by default.
@@ -70,6 +77,8 @@ class LicenseAuthority:
         self._transport = transport
         self._owns_transport = transport is None
         self._wall_clock, self._monotonic_clock = wall_clock, monotonic_clock
+        self._record = None
+        self._write_conflict = False
         self._code = None
         self._envelope = self._claims = None
         self._public_expiry = None
@@ -116,17 +125,36 @@ class LicenseAuthority:
             raise ValueError()
         return wall, mono
 
-    def _load(self):
+    def _load(self, record=_UNREAD):
         try:
-            record = self._store.load()
+            record = self._store.load() if record is _UNREAD else record
+            self._record = copy.deepcopy(record)
+            previous_code = self._code
+            self._code = None
+            self._envelope = self._claims = None
+            self._offline = False
             if record is None:
                 wall, mono = self._clocks()
                 self._wall_anchor = self._wall_high = wall
                 self._mono_anchor = self._mono_high = mono
-                return
+                self._server_anchor = self._public_expiry = self._checked_at = None
+                self._state = 'activation_required'
+                self._last_attempt = None
+                return True
             fields = {'version', 'code', 'credential', 'server_time',
                       'wall_high_water', 'monotonic_high_water'}
-            if not isinstance(record, dict) or set(record) != fields or type(record['version']) is not int or record['version'] != 1:
+            if not isinstance(record, dict) or type(record.get('version')) is not int:
+                raise ValueError()
+            version = record['version']
+            if version == 2:
+                fields |= {'revision', 'state', 'last_attempt', 'offline'}
+                if (not isinstance(record.get('revision'), str) or not re.fullmatch(r'[0-9a-f]{32}', record['revision'])
+                        or record.get('state') not in MESSAGES or type(record.get('offline')) is not bool
+                        or (record.get('last_attempt') is not None and not self._number(record['last_attempt']))):
+                    raise ValueError()
+                if (record.get('credential') is not None) != (record['state'] == 'allowed'):
+                    raise ValueError()
+            if version not in (1, 2) or set(record) != fields:
                 raise ValueError()
             if not self._valid_code(record['code']):
                 raise ValueError()
@@ -136,6 +164,10 @@ class LicenseAuthority:
             if record['server_time'] is not None and not self._number(record['server_time']):
                 raise ValueError()
             self._code = record['code']
+            if previous_code != self._code:
+                self._public_expiry = self._checked_at = None
+            self._last_attempt = record.get('last_attempt')
+            self._offline = record.get('offline', False)
             self._wall_anchor = self._wall_high = record['wall_high_water']
             self._mono_anchor = self._mono_high = record['monotonic_high_water']
             self._server_anchor = record['server_time']
@@ -144,10 +176,24 @@ class LicenseAuthority:
                 self._envelope = record['credential']
                 self._public_expiry = self._claims.expires_at
                 self._checked_at = self._claims.issued_at
-            self._state = 'needs_validation'
+            saved_state = record.get('state', 'needs_validation')
+            self._state = saved_state if self._started or self._envelope is None else 'needs_validation'
+            return True
         except Exception:
             self._envelope = self._claims = None
             self._state = 'storage_error'
+            return False
+
+    def _sync(self):
+        """Observe newer denial/replacement before any grant evaluation or write."""
+        try:
+            record = self._store.load()
+        except Exception:
+            self._drop('storage_error')
+            return False
+        if record != self._record:
+            return self._load(record)
+        return True
 
     def _public(self):
         allowed = self._state == 'allowed' and self._claims is not None
@@ -171,17 +217,49 @@ class LicenseAuthority:
         self._state = state
         return self._public()
 
-    def _persist(self, envelope, server_time, wall, mono, *, reset_clock=False):
+    def _persist(self, envelope, server_time, wall, mono, *, reset_clock=False, state=None, checkpoint=False, begin_request=False):
         wall_high = wall if reset_clock else max(self._wall_high, wall)
         mono_high = mono if reset_clock else max(self._mono_high, mono)
         try:
-            self._store.save({'version': 1, 'code': self._code, 'credential': envelope,
-                              'server_time': server_time, 'wall_high_water': wall_high,
-                              'monotonic_high_water': mono_high})
+            revision = self._record.get('revision') if checkpoint and self._record else None
+            record = {'version': 2, 'revision': revision or secrets.token_hex(16),
+                      'state': state or ('allowed' if envelope is not None else self._state),
+                      'last_attempt': self._last_attempt,
+                      'offline': self._offline if envelope is not None else False,
+                      'code': self._code, 'credential': envelope,
+                      'server_time': server_time, 'wall_high_water': wall_high,
+                      'monotonic_high_water': mono_high}
+            expected = self._record
+            for attempt in range(3):
+                if self._store.compare_and_save(expected, record):
+                    break
+                latest = self._store.load()
+                # Merge only competing elapsed-time checkpoints within the SAME
+                # generation, including just before beginning a fresh online request.
+                # Never retry a network response, denial, or offline restore over
+                # another generation. Clock progress is monotonic in every field.
+                identity = ('revision', 'code', 'credential', 'state', 'last_attempt', 'offline')
+                if (not (checkpoint or begin_request) or not expected or not expected.get('revision')
+                        or not isinstance(latest, dict)
+                        or any(latest.get(key) != expected.get(key) for key in identity)):
+                    self._write_conflict = True
+                    self._load(latest)
+                    if not checkpoint: self._drop('needs_validation')
+                    return False
+                for key in ('server_time', 'wall_high_water', 'monotonic_high_water'):
+                    record[key] = max(record[key], latest[key])
+                expected = latest
+            else:
+                self._write_conflict = True
+                self._drop('needs_validation')
+                return False
+            self._record = copy.deepcopy(record)
+            self._write_conflict = False
         except Exception:
+            self._write_conflict = True
             self._drop('storage_error')
             return False
-        self._wall_high, self._mono_high = wall_high, mono_high
+        self._wall_high, self._mono_high = record['wall_high_water'], record['monotonic_high_water']
         return True
 
     def _revoke(self, state, wall, mono):
@@ -190,7 +268,7 @@ class LicenseAuthority:
             self._persist(None, self._server_anchor, wall, mono)
         return self._public()
 
-    def _evaluate(self):
+    def _evaluate(self, *, reconcile=True, restore=False):
         """Check exact lease/expiry and persist elapsed time before exposing grant."""
         try:
             wall, mono = self._clocks()
@@ -209,10 +287,14 @@ class LicenseAuthority:
             claims = self._verifier.verify(self._envelope, self._device, now)
         except Exception:
             return self._revoke('invalid_response', wall, mono)
-        if not self._persist(self._envelope, now, wall, mono):
+        if not self._persist(self._envelope, now, wall, mono, checkpoint=not restore):
+            if self._claims is not None:
+                if reconcile: return self._evaluate(reconcile=False)
+                return self._drop('needs_validation')
             return self._public()
         self._claims = claims
-        self._server_anchor, self._wall_anchor, self._mono_anchor = now, wall, mono
+        self._server_anchor = self._record['server_time']
+        self._wall_anchor, self._mono_anchor = self._wall_high, self._mono_high
         self._state = 'allowed'
         return self._public()
 
@@ -220,6 +302,7 @@ class LicenseAuthority:
         """Always attempt online validation for a saved code, including restarts."""
         with self._lock:
             self._started = True
+            if not self._configuration_error and not self._sync(): return self._public()
             return self._refresh('validate')
 
     def activate(self, code):
@@ -230,6 +313,7 @@ class LicenseAuthority:
                 return self._drop('closed')
             if self._configuration_error:
                 return self._drop(self._configuration_error)
+            if not self._sync(): return self._public()
             self._drop('activation_required')
             if not self._valid_code(code):
                 try:
@@ -246,6 +330,7 @@ class LicenseAuthority:
         """Explicit online attempt; renewal permits work but never resumes a job."""
         with self._lock:
             self._started = True
+            if not self._configuration_error and not self._sync(): return self._public()
             return self._refresh('validate')
 
     def _refresh(self, operation):
@@ -255,7 +340,9 @@ class LicenseAuthority:
             return self._drop(self._configuration_error)
         if self._code is None:
             return self._public()
+        self._write_conflict = False
         self._evaluate()
+        if self._write_conflict: return self._public()
         try:
             wall, mono = self._clocks()
         except Exception:
@@ -264,10 +351,10 @@ class LicenseAuthority:
         previous_state = self._state
         # Revoke on disk BEFORE contacting the server. A crash or a failed write
         # after explicit denial cannot bring the prior offline grant back.
-        if not self._persist(None, self._server_anchor, wall, mono):
-            return self._public()
         self._last_attempt = mono
-        self._drop('needs_validation')
+        if not self._persist(None, self._server_anchor, wall, mono, state='validation_in_progress', begin_request=True):
+            return self._public()
+        self._drop('validation_in_progress')
         nonce = secrets.token_urlsafe(32)
         try:
             if self._transport is None:
@@ -275,12 +362,12 @@ class LicenseAuthority:
             response = self._transport.request(operation, self._code, self._device, nonce)
         except LicenseTransportOutage:
             if fallback is None:
-                return self._drop(previous_state if previous_state in {'clock_rollback', 'expired', 'lease_expired'} else 'transport_outage')
+                return self._revoke(previous_state if previous_state in {'clock_rollback', 'expired', 'lease_expired'} else 'transport_outage', wall, mono)
             self._envelope, self._claims = fallback, fallback_claims
             self._offline = True
-            return self._evaluate()
+            return self._evaluate(restore=True)
         except Exception:
-            return self._drop('invalid_response')
+            return self._revoke('invalid_response', wall, mono)
         try:
             body = response.document
             if not isinstance(body, dict):
@@ -294,7 +381,7 @@ class LicenseAuthority:
                 if expiry is not None and (type(expiry) is not int or not 0 <= expiry <= 2**63 - 1):
                     raise ValueError()
                 self._public_expiry = expiry
-                return self._drop(body['status'])
+                return self._revoke(body['status'], wall, mono)
             if (response.status_code != 200 or set(body) != {'status', 'server_time', 'expires_at', 'credential'}
                     or body['status'] != 'allowed' or type(expiry) is not int):
                 raise ValueError()
@@ -318,7 +405,7 @@ class LicenseAuthority:
             self._state, self._offline = 'allowed', False
             return self._public()
         except Exception:
-            return self._drop('invalid_response')
+            return self._revoke('invalid_response', wall, mono)
 
     def status(self):
         """Public status; once started, refresh at 300s since the last attempt."""
@@ -327,6 +414,7 @@ class LicenseAuthority:
                 return self._drop('closed')
             if not self._started or self._configuration_error:
                 return self._public()
+            if not self._sync(): return self._public()
             result = self._evaluate()
             try:
                 _, mono = self._clocks()
