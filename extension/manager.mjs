@@ -17,6 +17,7 @@ const storage = installed ? chrome.storage.local : {
 let keywords = [], task = null, runner = null, busy = false, lockedOut = false, clearing = false, pendingResume = null, activeRun = null, exporting = false;
 let keywordWrites = Promise.resolve(), taskWrites = Promise.resolve();
 let refillAuto = false, refillWaiting = false;
+let licenseHeld = false;
 const conversion = createConversionPanel({
   document, extensionId: globalThis.chrome?.runtime?.id,
   getCollection: () => ({ task, collecting: busy || refillWaiting || Boolean(activeRun), unavailable: lockedOut || clearing }),
@@ -37,7 +38,12 @@ const refillScheduler = createRefillScheduler({
   settle: async () => { if (activeRun) await activeRun.catch(() => {}); },
   flush: async isCurrent => {
     if (!isCurrent() || clearing || lockedOut || busy || !task) return;
-    const auto = refillAuto && task.status !== 'blocked';
+    let auto = refillAuto && !licenseHeld && task.status !== 'blocked';
+    if (auto) {
+      try { await conversion.requireLicense({refresh:true}); }
+      catch (error) { auto = false; licenseHeld = true; task.status = 'paused'; task.licenseMessage = error.message; notice(error.message,'error'); }
+    }
+    if (!isCurrent() || clearing || lockedOut || !task) return;
     prepareRequestedRefills(!auto);
     if (auto) task.status = 'pending';
     await saveTask(task);
@@ -143,8 +149,14 @@ function renderTask() {
       retry.title = '替换此名称的旧结果，其他名称保留';
       retry.addEventListener('click', async () => {
         if (busy || lockedOut || clearing) return;
-        retryJob(task, index); renderTask();
-        try { await saveTask(task); if (canAutoRun()) await execute(); }
+        const current = task;
+        try {
+          await conversion.requireLicense({refresh:true});
+          if (current !== task || busy || lockedOut || clearing) return;
+          licenseHeld = false;
+          retryJob(task, index); renderTask();
+          await saveTask(task); if (canAutoRun()) await execute();
+        }
         catch (error) { notice(`重新搜索失败：${error.message}`, 'error'); }
       });
       action.append(retry);
@@ -185,7 +197,7 @@ function renderLinks() {
     remove.addEventListener('click', () => {
       if (lockedOut || clearing || !task?.jobs.includes(job) || !removeProduct(job, item.id, task)) return;
       void conversion.removeProduct(task.id, item.site || job.site || 'pdd', item.id);
-      const mayRestart = busy ? Boolean(runner && (!runner.intent || refillAuto)) : !['paused', 'blocked', 'stopped'].includes(task.status);
+      const mayRestart = !licenseHeld && !runner?.licenseStop && (busy ? Boolean(runner && (!runner.intent || refillAuto)) : !['paused', 'blocked', 'stopped'].includes(task.status));
       refillAuto ||= mayRestart;
       refillWaiting = true;
       runner?.pauseForRefill();
@@ -205,25 +217,37 @@ function saveTask(current) {
   return taskWrites;
 }
 function canAutoRun() {
-  return installed && !lockedOut && !clearing && !busy && !refillWaiting && task?.jobs.some(job => job.status === 'pending') && !['paused', 'blocked'].includes(task.status);
+  return installed && !licenseHeld && !lockedOut && !clearing && !busy && !refillWaiting && task?.jobs.some(job => job.status === 'pending') && !['paused', 'blocked'].includes(task.status);
 }
 async function execute() {
-  cancelRefill(); prepareRequestedRefills();
   busy = true;
-  runner = new Runner(task, browserPorts({ save: saveTask, update: renderTask }));
   renderTask(); notice('');
-  const running = runner.run(); activeRun = running;
+  const current = task, request = {cancelled:false}; pendingResume = request;
+  const running = (async () => {
+    await conversion.requireLicense({refresh:true});
+    if (request.cancelled || clearing || lockedOut || task !== current) return;
+    licenseHeld = false; delete task.licenseMessage;
+    cancelRefill(); prepareRequestedRefills();
+    pendingResume = null;
+    runner = new Runner(task, {...browserPorts({save:saveTask,update:renderTask}),authorize:() => conversion.requireLicense()});
+    await runner.run();
+  })(); activeRun = running;
   try {
     await running;
-    if (task.status === 'blocked') notice(task.jobs.find(j => j.status === 'blocked')?.note || '请处理页面后继续');
+    if (request.cancelled || clearing || task !== current) return;
+    if (runner?.licenseStop) { licenseHeld = true; notice(`${task.licenseMessage}。已有结果可导出，授权恢复后请手动继续。`,'error'); }
+    else if (task.status === 'blocked') notice(task.jobs.find(j => j.status === 'blocked')?.note || '请处理页面后继续');
     else if (task.status === 'done') notice('采集已结束，可以按模板导出 Excel。数量不足的名称请在采集结果表中查看。', 'success');
     else if (task.status === 'error') notice('部分名称采集失败，已有结果仍可导出。请查看每行说明。', 'error');
   } catch (error) {
+    if (request.cancelled || clearing || task !== current) return;
+    if (error.licenseDenied) { licenseHeld = true; task.licenseMessage = error.message; }
     task.status = 'paused';
-    for (const job of task.jobs) if (job.status === 'running') job.status = 'paused';
+    for (const job of task.jobs) if (['running','pending'].includes(job.status)) job.status = 'paused';
     notice(`任务暂停：${error.message}。当前结果仍可导出。`, 'error');
     try { await saveTask(task); } catch { /* The in-memory result remains exportable even when storage is full. */ }
   } finally {
+    if (pendingResume === request) pendingResume = null;
     if (activeRun === running) activeRun = null;
     busy = false; runner = null; renderTask();
     if (canAutoRun()) queueMicrotask(() => { if (canAutoRun()) void execute(); });
@@ -302,7 +326,7 @@ $('clear-all').addEventListener('click', async () => {
     await closeTaskDetailTab(task);
     await Promise.allSettled([keywordWrites, taskWrites]);
     await storage.set({ keywords: [], task: null });
-    keywords = []; task = null; busy = false; runner = null;
+    keywords = []; task = null; busy = false; runner = null; licenseHeld = false;
     $('keyword-input').value = ''; $('link-rows').replaceChildren();
     notice('已清空商品名称、搜索进度和结果。', 'success');
   } catch (error) { notice(`清空失败：${error.message}`, 'error'); }
@@ -395,6 +419,8 @@ async function initialize() {
   // Match the restored owned batch to loaded collection before polling it.
   void conversion.recover(task);
   renderKeywords(); renderTask();
+  try { await conversion.checkLicense(); }
+  catch (error) { if (installed) notice(error.message,'error'); }
   if (!installed) notice('界面预览：名称可以添加和保存。实际采集需将 extension 文件夹加载为 Chrome 扩展。');
   else if (task?.status === 'paused') notice('已恢复上次保存的进度，点击“继续”恢复采集。');
 }

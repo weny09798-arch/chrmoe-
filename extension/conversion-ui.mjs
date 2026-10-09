@@ -1,4 +1,4 @@
-import { BridgeClient, ConversionController, buildImageManifest, imagePositionKey, matchingImageReplacements, normalizeImageLimits, imageKindCounts } from './lib/image-conversion.mjs';
+import { BridgeClient, ConversionController, buildImageManifest, imagePositionKey, matchingImageReplacements, normalizeImageLimits, imageKindCounts, conversionActionNeedsLicense } from './lib/image-conversion.mjs';
 
 const STATUS = { recovering:'正在恢复本批进度', running:'转换中', queued:'等待', pending:'等待', paused:'已暂停', stopped:'已停止', blocked:'等待处理', 'needs-review':'请检查结果', completed:'本批已结束', done:'本批已结束', failed:'失败' };
 const PHASE = { downloading:'正在下载原图', ready:'原图就绪', submitting:'正在提交', pending:'等待生成结果', saving:'正在保存结果', uploading:'正在上传 OSS', 'upload-failed':'OSS 上传失败，导出保留原图', alias:'复用相同图片', done:'已完成', 'download-failed':'原图下载失败', uncertain:'请检查生成结果', 'aliyun-ready':'等待阿里云翻译', 'aliyun-downloading':'正在下载阿里云结果', 'aliyun-failed':'阿里云翻译失败，重新生成可能再次计费' };
@@ -22,6 +22,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
   let renderedEpoch = controller.epoch;
   let imageLimits = {main:'',detail:'',sku:''};
   let imageKinds = ['main','detail','sku'], provider = 'doubao', quoteSignature = '', batchOptionsSignature = '';
+  let licenseWorking = false;
   function selection(task) {
     let limits, entries;
     try {
@@ -104,7 +105,13 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     if (disposed) return;
     if (renderedEpoch !== controller.epoch) { stopPoll(); renderedEpoch = controller.epoch; }
     const state = controller.view(), { task, collecting = false, unavailable = false } = getCollection();
-    const job = state.job, connected = state.connected, working = state.working || unavailable;
+    const job = state.job, connected = state.connected, working = state.working || unavailable || licenseWorking;
+    const license = state.license;
+    $('license-status').textContent = license?.message || (!connected ? '请先连接本地工具，再激活或刷新授权。' : state.capabilities?.licensing !== true ? '请升级本地工具到支持月度授权的版本。' : '授权状态待检查，请刷新授权。');
+    const date = Number.isFinite(license?.expires_at) ? new Date(license.expires_at * 1000).toLocaleString('zh-CN') : '';
+    $('license-expiry').textContent = date ? `到期时间：${date} · 剩余 ${Number.isFinite(license.remaining_days) ? license.remaining_days : '待确认'} 天${license.offline ? ' · 离线授权（受有效期与校验期限限制）' : ''}` : '';
+    $('license-activate').disabled = !connected || working;
+    $('license-refresh').disabled = !connected || working;
     const frozen = Boolean(controller.pendingSource || (job && !['completed','done'].includes(job.status)));
     const batchSignature = job ? JSON.stringify([job.id,job.provider,job.image_kinds,job.image_limits]) : '';
     if (job && !controller.pendingSource && (frozen || batchSignature !== batchOptionsSignature)) { imageKinds = [...(job.image_kinds || ['main','detail','sku'])]; provider = job.provider || 'doubao'; imageLimits = {...(job.image_limits || {main:null,detail:null,sku:null})}; }
@@ -133,9 +140,10 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     $('conversion-login').disabled = !connected || working;
     $('conversion-login').hidden = paid;
     $('conversion-start').textContent = paid ? chosen.amount === null ? '付费开始转换（费用待恢复）' : `付费开始转换（上限 ¥${chosen.amount.toFixed(2)}）` : '开始图片转换（豆包免费）';
-    $('conversion-start').disabled = !extensionId || !connected || !ossReady || !limitsReady || Boolean(chosen.error) || working || collecting || !task || !['done','stopped','error','short'].includes(task.status) || frozen || !chosen.count || (paid && (!capabilities?.providers?.includes('aliyun') || capabilities.aliyun_configured !== true));
+    $('conversion-start').disabled = license?.allowed !== true || !extensionId || !connected || !ossReady || !limitsReady || Boolean(chosen.error) || working || collecting || !task || !['done','stopped','error','short'].includes(task.status) || frozen || !chosen.count || (paid && (!capabilities?.providers?.includes('aliyun') || capabilities.aliyun_configured !== true));
     $('conversion-stop').disabled = working || !job || ['completed','done','paused','stopped'].includes(job.status);
-    $('conversion-continue').disabled = working || !job || !['paused','stopped','blocked'].includes(job.status);
+    $('conversion-continue').disabled = (license?.allowed !== true && conversionActionNeedsLicense(job,'continue')) || working || !job || !['paused','stopped','blocked'].includes(job.status);
+    $('conversion-continue').textContent = license?.allowed !== true && !conversionActionNeedsLicense(job,'continue') ? '继续获取已有结果' : '继续转换';
     $('conversion-status').textContent = job ? `${STATUS[job.status] || job.status} · ${job.provider === 'aliyun' ? '阿里云付费' : '豆包免费'} · ${(job.image_kinds || ['main','detail','sku']).map(kind => KIND[kind]).join('、')} · 付费请求 ${job.paid_calls || 0}${job.provider === 'aliyun' ? '（包含不确定请求，以实际账单为准）' : ''}${job.browser_message ? ` · ${job.browser_message}` : ''}` : collecting || (task && !['done','stopped','error','short'].includes(task.status)) ? '请先停止采集或等待采集结束' : connected ? '已连接，图片将保存到 OSS' : '等待连接本地工具';
     const counts = job?.counts || {};
     const replacedKeys = new Set(matchingImageReplacements(task,task?.imageReplacements).map(imagePositionKey)), exportManifest = buildImageManifest(task);
@@ -155,7 +163,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
         const canUploadRetry = item?.phase === 'upload-failed' && Boolean(item.result?.public_url || item.result?.output_path || item.result_path);
         if (retry) { button.textContent = label || '无需重试'; button.hidden = !label; }
         if (uploadRetry) button.hidden = !canUploadRetry;
-        button.disabled = working || !['paused','stopped','blocked','completed','done'].includes(job?.status) || !['failed','needs-review','paused','completed'].includes(item?.status) || (retry && !label) || (uploadRetry && !canUploadRetry);
+        button.disabled = (license?.allowed !== true && conversionActionNeedsLicense(job,button.dataset.conversionAction,Number(row.dataset.index))) || working || !['paused','stopped','blocked','completed','done'].includes(job?.status) || !['failed','needs-review','paused','completed'].includes(item?.status) || (retry && !label) || (uploadRetry && !canUploadRetry);
       }
     }
     if (!job) { stopPoll(); $('conversion-details').open = false; }
@@ -167,6 +175,19 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     if (controller.current(epoch) && client.connection) { $('conversion-code').value = ''; message('已连接本地工具。'); }
   }));
   $('conversion-refresh-config').addEventListener('click', () => { if (!$('conversion-refresh-config').disabled) void run(() => controller.refreshCapabilities()); });
+  async function licenseAction(activate) {
+    if (licenseWorking || !client.connection || unavailable()) return;
+    licenseWorking = true; render();
+    try {
+      const value = activate ? await controller.activateLicense($('license-code').value) : await controller.checkLicense({refresh:true});
+      if (activate && value.allowed === true) $('license-code').value = '';
+      message(value.allowed === true ? '授权已更新；暂停的任务请手动点击继续。' : value.message || '授权不可用。',value.allowed !== true);
+    } catch (error) { message(error.message,true); }
+    finally { licenseWorking = false; render(); }
+  }
+  function unavailable() { return getCollection().unavailable === true; }
+  $('license-activate').addEventListener('click', () => { if (!$('license-activate').disabled) void licenseAction(true); });
+  $('license-refresh').addEventListener('click', () => { if (!$('license-refresh').disabled) void licenseAction(false); });
   for (const kind of Object.keys(KIND)) $('conversion-limit-'+kind).addEventListener('input', () => { if (!$('conversion-limit-'+kind).disabled) imageLimits[kind] = $('conversion-limit-'+kind).value; render(); });
   for (const kind of Object.keys(KIND)) $('conversion-kind-'+kind).addEventListener('change', () => {
     if (!$('conversion-kind-'+kind).disabled) imageKinds = Object.keys(KIND).filter(kind => $('conversion-kind-'+kind).checked);
@@ -190,6 +211,8 @@ export function createConversionPanel({ document, extensionId, getCollection, on
   render();
   return {
     controller, refresh: render,
+    requireLicense(options) { return controller.requireLicense(options); },
+    checkLicense(options) { return controller.checkLicense(options); },
     recover(task) { return controller.restoreForTask(task); },
     clear() { stopPoll(); message(''); return controller.clear(); },
     removeProduct(taskId, platform, productId) { return controller.removeProduct(taskId,platform,productId); },

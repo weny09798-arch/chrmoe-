@@ -1,3 +1,5 @@
+import { installLicensedBridgeFixture, licensedStatus } from './helpers/licensed-bridge.mjs';
+test.beforeEach(installLicensedBridgeFixture);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -17,8 +19,8 @@ test('manager saves published mapping through task writer and preserves it after
     globalThis.sessionStorage={getItem:key=>session.get(key),setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)};
     globalThis.setTimeout=()=>1;
     globalThis.fetch=async(url,options)=>{
-      const body=options.body&&JSON.parse(options.body);let value={};
-      if(url.endsWith('/capabilities'))value={providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true};
+      const body=options.body&&JSON.parse(options.body);let value=url.includes('/license/')?licensedStatus:{};
+      if(url.endsWith('/capabilities'))value={licensing:true,providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true};
       if(url.endsWith('/folder'))value={path:'D:\\图片'};
       if(url.endsWith('/jobs'))entries=body.entries;
       if(url.endsWith('/jobs')||url.includes('/state'))value={id:'job-1',kind:'collector',source_task_id:source.id,status:'completed',items:[{status:'completed',refs:entries.map(ref=>({...ref,published_url:published,published_revision:1}))}],counts:{uploaded:1}};
@@ -40,8 +42,8 @@ test('manager retries published mapping persistence after transient storage fail
     globalThis.sessionStorage={getItem:key=>session.get(key),setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)};
     globalThis.setTimeout=fn=>{timers.push(fn);return timers.length;};
     globalThis.fetch=async(url,options)=>{
-      const body=options.body&&JSON.parse(options.body);let value={};
-      if(url.endsWith('/capabilities'))value={providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true};
+      const body=options.body&&JSON.parse(options.body);let value=url.includes('/license/')?licensedStatus:{};
+      if(url.endsWith('/capabilities'))value={licensing:true,providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true};
       if(url.endsWith('/folder'))value={path:'D:\\图片'};
       if(url.endsWith('/jobs'))entries=body.entries;
       if(url.endsWith('/jobs')||url.includes('/state'))value={id:'job-1',kind:'collector',source_task_id:source.id,status:'completed',items:[{status:'completed',refs:entries.map(ref=>({...ref,published_url:published,published_revision:1}))}],counts:{uploaded:1}};
@@ -66,8 +68,8 @@ test('delayed replacement save followed by deletion retains the remaining produc
     globalThis.sessionStorage={getItem:key=>session.get(key),setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)};
     globalThis.setTimeout=()=>1;
     globalThis.fetch=async(url,options)=>{
-      const body=options.body&&JSON.parse(options.body);let value={};
-      if(url.endsWith('/capabilities'))value={providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true};
+      const body=options.body&&JSON.parse(options.body);let value=url.includes('/license/')?licensedStatus:{};
+      if(url.endsWith('/capabilities'))value={licensing:true,providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true};
       if(url.endsWith('/folder'))value={path:'D:\\图片'};
       if(url.endsWith('/jobs')){entries=body.entries;value={id:'job-race',kind:'collector',source_task_id:source.id,status:'completed',items:[{status:'completed',refs:entries.map(ref=>({...ref,published_url:published,published_revision:1}))}],counts:{uploaded:1}};}
       return {ok:true,json:async()=>value};
@@ -86,11 +88,13 @@ test('delayed replacement save followed by deletion retains the remaining produc
     assert.match(f.document.getElementById('conversion-counts').textContent,/已替换 1.*原图回退 0/);
   } finally {releaseWrite();globalThis.fetch=oldFetch;globalThis.sessionStorage=oldSession;globalThis.setTimeout=oldTimer;}
 });
-test('export freezes product and replacement snapshot before yielding and reports actual replacement count',async()=>{
+test('export without native bridge freezes product and saved replacement snapshot and reports actual count',async()=>{
   const oldRaf=globalThis.requestAnimationFrame,oldCreate=URL.createObjectURL,oldRevoke=URL.revokeObjectURL,oldTimer=globalThis.setTimeout;
   const frames=[],blobs=[];let source;
   const original='https://img.pddpic.com/a.jpg',published='https://bucket.oss-cn-shanghai.aliyuncs.com/a.png';
   try {
+    globalThis.sessionStorage={getItem:()=>null,setItem:()=>{},removeItem:()=>{}};
+    globalThis.fetch=async()=>{throw new Error('本地工具已关闭');};
     globalThis.requestAnimationFrame=callback=>frames.push(callback);globalThis.setTimeout=()=>1;URL.createObjectURL=blob=>{blobs.push(blob);return 'blob:test';};URL.revokeObjectURL=()=>{};
     const f=await managerFixture(task=>{source=task;task.status='stopped';task.jobs[0].groups=[{best:{id:'1',title:'相机',image:original,cents:100}}];task.imageReplacements=[{platform:'pdd',product_id:'1',kind:'main',order:1,sku_index:null,url:original,published_url:published}];});
     globalThis.chrome.downloads={download:async()=>1};f.click('export');
@@ -135,7 +139,8 @@ test('manager clear invalidates converter polls before collection storage clear,
     globalThis.fetch=async(url,options)=>{
       requests.push(url);
       if(url.endsWith('/action'))throw new Error('offline');
-      if(url.endsWith('/capabilities'))return {ok:true,json:async()=>({providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true})};
+      if(url.includes('/license/'))return {ok:true,json:async()=>licensedStatus};
+      if(url.endsWith('/capabilities'))return {ok:true,json:async()=>({licensing:true,providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true})};
       return {ok:true,json:async()=>url.endsWith('/folder')?{path:'D:\\图片'}:{id:'job-1',kind:'collector',source_task_id:options.body&&JSON.parse(options.body).source_task_id,status:'running',items:[{index:0,status:'queued',refs:[]}],counts:{total:1,unique:1}}};
     };
     const f=await managerFixture(task=>{task.status='stopped';task.jobs[0].status='stopped';task.jobs[0].groups=[{best:{id:'1',title:'相机',image:'https://img.pddpic.com/a.jpg',cents:100}}];});
@@ -272,6 +277,56 @@ async function managerFixture(configureTask = () => {}, create = async () => { t
   return { document, saved, click, decidePermission, removedTabs, activatedTabs, get tabCreates() { return tabCreates; }, get permissionRequests() { return permissionRequests; } };
 }
 
+test('denied re-search preserves old products and published replacements before any mutation',async()=>{
+  let license=licensedStatus;const nativeFetch=globalThis.fetch;
+  globalThis.fetch=async(url,options)=>url.includes('/license/')?{ok:true,json:async()=>license}:nativeFetch(url,options);
+  const f=await managerFixture(task=>{task.status='done';task.jobs[0].status='done';task.jobs[0].groups=[{best:{id:'saved',title:'相机',cents:100,detailStatus:'done',image:'https://img.pddpic.com/saved.jpg'}}];task.imageReplacements=[{product_id:'saved',published_url:'https://bucket.oss-cn-shanghai.aliyuncs.com/saved.png'}];});
+  const original=structuredClone(f.saved.task);
+  license={allowed:false,status:'expired',message:'授权已到期'};
+  f.document.querySelector('[data-retry-job="0"]').dispatchEvent(new window.Event('click'));await tick();await tick();
+  assert.deepEqual(f.saved.task.jobs[0].groups,original.jobs[0].groups);assert.deepEqual(f.saved.task.imageReplacements,original.imageReplacements);assert.equal(f.tabCreates,0);
+  assert.match(f.document.getElementById('notice').textContent,/连接|到期/);
+});
+test('unconnected new keyword is saved paused with a visible manual continue control',async()=>{
+  globalThis.sessionStorage={getItem:()=>null,setItem:()=>{},removeItem:()=>{}};
+  const f=await managerFixture(task=>{task.status='done';task.jobs[0].status='done';});
+  f.document.getElementById('keyword-input').value='书包';f.document.getElementById('add-form').dispatchEvent(new window.Event('submit',{cancelable:true}));await tick();await tick();
+  assert.equal(f.saved.task.status,'paused');assert.equal(f.saved.task.jobs[1].keyword,'书包');assert.equal(f.document.getElementById('resume').hidden,false);assert.equal(f.tabCreates,0);
+});
+test('clearing a denied queue leaves the next unauthorized queue paused and resumable',async()=>{
+  const nativeFetch=globalThis.fetch;globalThis.fetch=async(url,options)=>url.includes('/license/')?{ok:true,json:async()=>({allowed:false,status:'expired',message:'授权到期'})}:nativeFetch(url,options);
+  const f=await managerFixture(task=>{task.status='done';task.jobs[0].status='done';});
+  const add=name=>{f.document.getElementById('keyword-input').value=name;f.document.getElementById('add-form').dispatchEvent(new window.Event('submit',{cancelable:true}));};
+  add('书包');await tick();await tick();assert.equal(f.saved.task.status,'paused');f.click('clear-all');await tick();await tick();
+  add('帽子');await tick();await tick();assert.equal(f.saved.task.status,'paused');assert.equal(f.document.getElementById('resume').hidden,false);assert.equal(f.tabCreates,0);
+});
+test('expired collection remains paused after successful monthly activation until manual continue',async()=>{
+  const nativeFetch=globalThis.fetch;let license=licensedStatus;const calls=[];
+  globalThis.fetch=async(url,options)=>{calls.push(url);if(url.endsWith('/license/activate'))license=licensedStatus;return url.includes('/license/')?{ok:true,json:async()=>license}:nativeFetch(url,options);};
+  const f=await managerFixture(task=>{task.status='done';task.jobs[0].status='done';});
+  license={allowed:false,status:'expired',message:'授权已到期'};
+  f.document.getElementById('keyword-input').value='书包';f.document.getElementById('add-form').dispatchEvent(new window.Event('submit',{cancelable:true}));await tick();await tick();
+  assert.equal(f.saved.task.status,'paused');assert.equal(f.tabCreates,0);assert.match(f.document.getElementById('notice').textContent,/到期/);
+  f.document.getElementById('license-code').value='renewal';f.click('license-activate');await tick();await tick();
+  assert.equal(f.saved.task.status,'paused');assert.equal(f.tabCreates,0);assert.match(f.document.getElementById('license-status').textContent,/有效/);
+  f.click('resume');await tick();await tick();assert.equal(f.tabCreates,1);assert.ok(calls.some(url=>url.endsWith('/license/refresh')));
+});
+test('expired deletion saves remaining products and replacement links but refill waits manual renewal',async()=>{
+  const oldTimer=globalThis.setTimeout,oldClear=globalThis.clearTimeout,timers=new Map();let sequence=0,license=licensedStatus;const nativeFetch=globalThis.fetch;
+  globalThis.setTimeout=fn=>{timers.set(++sequence,fn);return sequence;};globalThis.clearTimeout=id=>timers.delete(id);
+  globalThis.fetch=async(url,options)=>{if(url.endsWith('/license/activate'))license=licensedStatus;return url.includes('/license/')?{ok:true,json:async()=>license}:nativeFetch(url,options);};
+  try {
+    const f=await managerFixture(task=>{task.status='done';const job=task.jobs[0];job.status='done';job.phase='done';job.limit=2;job.groups=['1','2'].map(id=>({best:{id,title:'相机'+id,cents:100,detailStatus:'done',image:`https://img.pddpic.com/${id}.jpg`}}));task.imageReplacements=[{platform:'pdd',product_id:'2',kind:'main',order:1,sku_index:null,url:'https://img.pddpic.com/2.jpg',published_url:'https://bucket.oss-cn-shanghai.aliyuncs.com/2.png'}];});
+    license={allowed:false,status:'expired',message:'授权到期'};
+    const panel=f.document.getElementById('links-panel');panel.open=true;panel.dispatchEvent(new window.Event('toggle'));
+    f.document.querySelector('[data-remove-product="1"]').dispatchEvent(new window.Event('click'));await tick();
+    for(const fn of [...timers.values()])fn();timers.clear();for(let i=0;i<4;i++)await tick();
+    assert.deepEqual(f.saved.task.jobs[0].groups.map(group=>group.best.id),['2']);assert.equal(f.saved.task.imageReplacements[0].published_url,'https://bucket.oss-cn-shanghai.aliyuncs.com/2.png');assert.equal(f.tabCreates,0);assert.equal(f.saved.task.status,'paused');
+    f.document.getElementById('license-code').value='renewal';f.click('license-activate');await tick();assert.equal(f.tabCreates,0);
+    f.click('resume');await tick();await tick();assert.equal(f.tabCreates,1);
+  } finally {globalThis.setTimeout=oldTimer;globalThis.clearTimeout=oldClear;}
+});
+
 test('manager displays the detail cooldown and clear interrupts it without starting another product',async()=>{
   const oldWait=Runner.prototype.waitForPdd;
   let release, clock=1000;
@@ -308,7 +363,7 @@ test('resuming a legacy task labels the missing prior statistics and only counts
   const f=await managerFixture(task=>{
     task.status='paused';task.jobs[0].scanned=50;task.jobs[0].skipped=3;
   });
-  await new Runner(f.saved.task,{save:async()=>{},update(){},open:async()=>{},close:async()=>{},read:async()=>({cards:[],end:true})}).run();
+  await new Runner(f.saved.task,{authorize:async()=>({allowed:true}),save:async()=>{},update(){},open:async()=>{},close:async()=>{},read:async()=>({cards:[],end:true})}).run();
   await import(`../extension/manager.mjs?case=${Math.random()}`);await tick();
   const note=f.document.querySelector('#result-rows .note').textContent;
   assert.match(note,/此前 50 条未记录分类/);assert.match(note,/恢复后的统计/);assert.match(note,/识别跳过 0 条/);

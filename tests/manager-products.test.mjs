@@ -1,3 +1,5 @@
+import { installLicensedBridgeFixture } from './helpers/licensed-bridge.mjs';
+test.beforeEach(installLicensedBridgeFixture);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -112,4 +114,13 @@ test('stop during an active deletion prevents automatic restart after the pendin
     assert.equal(f.tabCreates, 1); assert.equal(f.saved.task.status, 'stopped');
     assert.equal(f.saved.task.jobs[0].groups.length, 1); assert.equal(f.saved.task.jobs[0].exclusions.length, 1);
   } finally { f.cleanup(); }
+});
+test('automatic refill after a running deletion resumes despite its own temporary pause',async()=>{
+  let reject;const pending=new Promise((_resolve,rejectPromise)=>{reject=rejectPromise;});let attempts=0;
+  const f=await fixture('paused',()=>++attempts===1?pending:Promise.reject(new Error('受控补搜结束')));
+  try {
+    f.click('resume');await tick();assert.equal(f.tabCreates,1);
+    f.remove('1');f.fire();await tick();reject(new Error('受控原搜索结束'));
+    for(let i=0;i<8;i++)await tick();assert.equal(f.tabCreates,2);
+  } finally {f.cleanup();}
 });

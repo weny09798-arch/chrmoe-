@@ -1,4 +1,5 @@
 import { outputLimit, validProductTitle } from './core.mjs';
+import { LicenseAuthority, licenseError } from './licensing.mjs';
 
 export function normalizeImageLimits(imageKinds, values = {}) {
   const limits = {};
@@ -91,6 +92,15 @@ export function parseConnectionCode(code) {
 
 const SESSION_KEY = 'collector-image-bridge';
 const OWNED_JOB_KEY = 'collector-image-owned-job';
+export function conversionActionNeedsLicense(job, action, index) {
+  if (action === 'redo') return true;
+  if (action === 'continue') return !(job?.items || []).some(item => !['completed','failed'].includes(item.status) && ['pending','saving','aliyun-downloading','uploading','upload-failed','alias'].includes(item.phase));
+  if (action !== 'retry') return false;
+  const item = job?.items?.find((item,offset) => (item.index ?? offset) === index);
+  const original = Number.isInteger(item?.alias_of) ? job.items[item.alias_of] : item;
+  if (original !== item && original?.status === 'completed') return false;
+  return !original || original.status === 'needs-review' || !['saving','pending','aliyun-downloading'].includes(original.phase);
+}
 export class BridgeClient {
   constructor({ extensionId, fetch = globalThis.fetch?.bind(globalThis), storage = globalThis.sessionStorage } = {}) {
     this.extensionId = extensionId; this.fetch = fetch; this.storage = storage; this.connection = null;
@@ -111,6 +121,10 @@ export class BridgeClient {
     try { response = await this.fetch(`${connection.baseUrl}/api/bridge/${route}`, { method: body === undefined ? 'GET' : 'POST', headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), cache: 'no-store', redirect: 'error', credentials: 'omit' }); }
     catch { throw new Error('无法连接本地图片工具，请确认工具仍在运行并重新复制连接码。'); }
     if (!response.ok) {
+      if (response.status === 423) {
+        const value = await response.json().catch(() => ({}));
+        const error = licenseError(value.license); error.status = 423; throw error;
+      }
       // Never surface a server URL/body that could accidentally include credentials.
       const messages = {401:'连接码已失效，请重新连接。',403:'本地工具未授权此扩展，请使用同一管理页的连接码重新连接。',409:'本地工具正在处理其他任务，或任务已失效，请先在工具中处理。',404:'本地任务或图片尚不可用。'};
       const error = new Error(messages[response.status] || `本地工具请求失败（${response.status}）。`);
@@ -129,6 +143,7 @@ export class ConversionController {
     this.reconnectCandidate = null;
     this.restored = false;
     this.capabilities = null; this.availableCounts = null;
+    this.licenseAuthority = new LicenseAuthority({client,onChange:() => this.emit()});
     // Restore ownership synchronously: deletion/clear must work before the first GET.
     try {
       const handle = JSON.parse(client.storage?.getItem(OWNED_JOB_KEY) || 'null');
@@ -154,7 +169,14 @@ export class ConversionController {
     this.currentTask = task;
     await this.poll();
   }
-  view() { return { job: this.job, capabilities: this.capabilities, connected: Boolean(this.client.connection), outputDir: this.outputDir, working: this.working, error: this.error, canForget: Boolean(this.reconnectCandidate) }; }
+  view() { return { job: this.job, license:this.licenseAuthority.status, capabilities: this.capabilities, connected: Boolean(this.client.connection), outputDir: this.outputDir, working: this.working, error: this.error, canForget: Boolean(this.reconnectCandidate) }; }
+  async requireLicense(options) {
+    const epoch = this.epoch;
+    try { const status = await this.licenseAuthority.require(options); return this.current(epoch) ? status : null; }
+    catch (error) { if (this.current(epoch)) throw error; return null; }
+  }
+  checkLicense(options) { return this.licenseAuthority.check(options); }
+  activateLicense(code) { return this.licenseAuthority.activate(code); }
   async readCapabilities(connection) {
     try { return await this.client.request('capabilities', { connection }); }
     catch (error) { if (error.status === 404) return { providers:['doubao'], legacy:true, aliyun_configured:false, aliyun_price_per_image:0.06 }; throw error; }
@@ -164,13 +186,14 @@ export class ConversionController {
     return this.guarded(async epoch => {
       this.capabilities = null; this.emit();
       const capabilities = await this.readCapabilities(this.client.connection);
-      if (this.current(epoch)) { this.capabilities = capabilities; this.emit(); }
+      if (this.current(epoch)) { this.capabilities = capabilities; this.licenseAuthority.reset(capabilities); await this.checkLicense(); this.emit(); }
     });
   }
   canReconnect() { return !this.pendingSource && (!this.job || ['completed','done','paused','stopped','blocked'].includes(this.job.status) || Boolean(this.error)); }
   acceptSnapshot(snapshot, jobId) {
     if (snapshot?.id !== jobId || snapshot.kind !== 'collector' || snapshot.source_task_id !== this.sourceTaskId) throw new Error('本地任务与当前图片批次不一致，请在本地工具中检查。');
     this.job = { ...snapshot, provider: snapshot.provider || this.job?.provider || 'doubao', image_kinds: snapshot.image_kinds || this.job?.image_kinds || ['main','detail','sku'], image_limits: normalizeImageLimits(snapshot.image_kinds || this.job?.image_kinds || ['main','detail','sku'],snapshot.image_limits || this.job?.image_limits), paid_calls: snapshot.paid_calls || 0 };
+    if (snapshot.license) this.licenseAuthority.accept(snapshot.license);
     if (typeof snapshot.output_dir === 'string') this.outputDir = snapshot.output_dir;
     const refs = snapshot.items?.flatMap(item => item.refs || []);
     if (refs?.length && !this.entries?.some(ref => ref.kind && ref.url)) this.entries = Object.freeze(refs.map(ref => Object.freeze({ ...ref })));
@@ -192,6 +215,7 @@ export class ConversionController {
     this.job = null; this.entries = null; this.sourceTaskId = null; this.pendingSource = null; this.restored = false;
     this.client.storage?.removeItem(OWNED_JOB_KEY); this.client.remember(connection);
     this.capabilities = null; this.outputDir = ''; this.error = ''; this.emit();
+    this.licenseAuthority.reset();
   }
   emit() { this.onChange(this.view()); }
   current(epoch) { return epoch === this.epoch; }
@@ -199,7 +223,7 @@ export class ConversionController {
     const epoch = this.epoch;
     this.working = true; this.error = ''; this.emit();
     try { return await operation(epoch); }
-    catch (error) { if (this.current(epoch)) { this.error = error.message; this.emit(); } throw error; }
+    catch (error) { if (this.current(epoch)) { if (error.licenseDenied && error.license) this.licenseAuthority.accept(error.license); this.error = error.message; this.emit(); } throw error; }
     finally { if (this.current(epoch)) { this.working = false; this.emit(); } }
   }
   async connect(code) {
@@ -207,6 +231,7 @@ export class ConversionController {
     const ownedJob = this.job && !['completed','done'].includes(this.job.status) ? this.job : null;
     this.reconnectCandidate = null;
     ++this.epoch;
+    this.licenseAuthority.reset();
     if (!ownedJob && this.job) {
       this.job = null; this.entries = null; this.sourceTaskId = null;
       this.client.storage?.removeItem(OWNED_JOB_KEY);
@@ -227,11 +252,11 @@ export class ConversionController {
         if (!this.current(epoch)) return;
         await this.acceptSnapshot(snapshot, ownedJob.id);
         if (!this.current(epoch)) return;
-        this.capabilities = capabilities; this.client.remember(connection); this.persistOwnership(); this.restored = false; this.emit();
+        this.capabilities = capabilities; this.client.remember(connection); this.licenseAuthority.reset(capabilities); await this.checkLicense(); this.persistOwnership(); this.restored = false; this.emit();
         return;
       }
       const capabilities = await this.readCapabilities(connection);
-      if (this.current(epoch)) { this.capabilities = capabilities; this.client.remember(connection); this.outputDir = ''; this.emit(); }
+      if (this.current(epoch)) { this.capabilities = capabilities; this.client.remember(connection); this.licenseAuthority.reset(capabilities); await this.checkLicense(); this.outputDir = ''; this.emit(); }
     });
   }
   async chooseFolder() {
@@ -257,6 +282,8 @@ export class ConversionController {
     return this.guarded(async epoch => {
       let snapshot;
       try {
+        await this.requireLicense({refresh:true});
+        if (!this.current(epoch)) return;
         let capabilities = this.capabilities;
         if (provider === 'aliyun') {
           capabilities = await this.readCapabilities(connection);
@@ -305,6 +332,8 @@ export class ConversionController {
     const item = job?.items?.find((item,offset) => (item.index ?? offset) === index);
     if (job?.provider === 'aliyun' && action === 'retry' && ['uncertain','submitting','aliyun-failed'].includes(item?.phase)) throw new Error('请检查结果并使用已确认付费的重新生成。');
     return this.guarded(async epoch => {
+      if (conversionActionNeedsLicense(job,action,index)) await this.requireLicense({refresh:true});
+      if (!this.current(epoch)) return;
       const snapshot = await this.client.request('action', { body: { job_id: job?.id || null, source_task_id: this.sourceTaskId || taskId || null, action, ...(index === undefined ? {} : { index }), ...(paidRedo ? {paid_confirmed:true} : {}) } });
       if (this.current(epoch) && job && this.job?.id === job.id) { await this.acceptSnapshot(snapshot, job.id); if (this.current(epoch) && this.job?.id === job.id) this.emit(); }
     });
@@ -312,6 +341,7 @@ export class ConversionController {
   async clear() {
     const job = this.job, sourceTaskId = this.sourceTaskId, connection = this.client.connection;
     ++this.epoch;
+    this.licenseAuthority.invalidate();
     this.job = null; this.entries = null; this.sourceTaskId = null; this.pendingSource = null;
     this.restored = false; this.reconnectCandidate = null; this.client.storage?.removeItem(OWNED_JOB_KEY);
     this.working = false; this.error = ''; this.emit();

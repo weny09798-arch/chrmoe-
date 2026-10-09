@@ -1,3 +1,4 @@
+import { licensedStatus } from './helpers/licensed-bridge.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -7,6 +8,16 @@ import { createConversionPanel } from '../extension/conversion-ui.mjs';
 
 const html = await readFile(new URL('../extension/manager.html', import.meta.url), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test('license panel distinguishes activation code and connection code and renewal remains manual',async()=>{
+  const f=fixture();await connectFolder(f);
+  assert.match(f.document.getElementById('license-status').textContent,/授权有效/);
+  assert.match(f.document.getElementById('license-expiry').textContent,/30/);
+  f.document.getElementById('license-code').value='monthly-code';f.click('license-activate');await tick();
+  assert.equal(f.document.getElementById('license-code').value,'');
+  const activation=f.requests.find(r=>r.url.endsWith('/license/activate'));assert.deepEqual(JSON.parse(activation.options.body),{code:'monthly-code'});
+  assert.equal(f.requests.some(r=>r.url.endsWith('/jobs')),false);
+});
 
 test('cloud conversion starts without choosing a local folder and sends no local destination',async()=>{
   const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';
@@ -23,20 +34,28 @@ function fixture({configured=true,ossConfigured=true,replacement=true,cloudStora
   task.jobs[0].groups=[{best:{id:'101',title:'玻璃杯',image:'https://img.pddpic.com/a.jpg',cents:100}}];
   const actions=[], requests=[], timers=[], saved=new Map();
   if(restored){saved.set('collector-image-bridge',JSON.stringify({baseUrl:'http://localhost:53121',token:'secret'}));saved.set('collector-image-owned-job',JSON.stringify({job_id:'job-1',source_task_id:task.id,products:[{platform:'pdd',product_id:'101'}]}));}
-  let status='paused',collecting=false,itemState={status:'failed',phase:'download-failed',message:'下载失败'},fetchOverride=null,batch={};
+  let status='paused',collecting=false,license=licensedStatus,itemState={status:'failed',phase:'download-failed',message:'下载失败'},fetchOverride=null,batch={};
   const snapshot=()=>{
     const entries=batch.entries||[{platform:'pdd',product_id:'101',title:'玻璃杯',kind:'main',order:1,url:'https://img.pddpic.com/a.jpg'}],groups=new Map();
     for(const entry of entries){if(!groups.has(entry.url))groups.set(entry.url,[]);groups.get(entry.url).push(entry);}
-    return {id:'job-1',kind:'collector',source_task_id:task.id,status,provider:batch.provider||'doubao',image_kinds:batch.image_kinds||['main','detail','sku'],paid_calls:batch.provider==='aliyun'?1:0,estimated_cost_upper:batch.provider==='aliyun'?groups.size*0.06:0,counts:{total:entries.length,unique:groups.size,downloaded:groups.size,converted:0,failed:1},items:[...groups.values()].map((refs,index)=>({index,...itemState,input_path:'input.png',refs}))};
+    return {id:'job-1',kind:'collector',source_task_id:task.id,status,license,provider:batch.provider||'doubao',image_kinds:batch.image_kinds||['main','detail','sku'],paid_calls:batch.provider==='aliyun'?1:0,estimated_cost_upper:batch.provider==='aliyun'?groups.size*0.06:0,counts:{total:entries.length,unique:groups.size,downloaded:groups.size,converted:0,failed:1},items:[...groups.values()].map((refs,index)=>({index,...itemState,input_path:'input.png',refs}))};
   };
   const panel=createConversionPanel({document,extensionId:'test-extension',storage:{getItem:key=>saved.get(key),setItem:(key,val)=>saved.set(key,val),removeItem:key=>saved.delete(key)},getCollection:()=>({task,collecting,unavailable:false}),
-    fetch:async(url,options)=>{requests.push({url,options});if(fetchOverride)return fetchOverride(url,options);const body=options.body&&JSON.parse(options.body);let value={};if(url.endsWith('/capabilities'))value={providers:['doubao','aliyun'],oss_configured:ossConfigured,image_link_replacement:replacement,cloud_image_storage:cloudStorage,image_type_limits:true,aliyun_configured:configured,aliyun_price_per_image:0.06};if(url.endsWith('/folder'))value={path:'D:\\图片'};if(url.endsWith('/jobs'))batch=body;if(url.endsWith('/jobs')||url.includes('/state'))value=snapshot();if(url.endsWith('/action')){actions.push(body);if(body.action==='continue')status='running';if(body.action==='stop')status='paused';value=snapshot();}return {ok:true,json:async()=>value,blob:async()=>new Blob(['preview'])};},
+    fetch:async(url,options)=>{requests.push({url,options});if(fetchOverride)return fetchOverride(url,options);const body=options.body&&JSON.parse(options.body);let value=url.includes('/license/')?licensedStatus:{};if(url.endsWith('/capabilities'))value={licensing:true,providers:['doubao','aliyun'],oss_configured:ossConfigured,image_link_replacement:replacement,cloud_image_storage:cloudStorage,image_type_limits:true,aliyun_configured:configured,aliyun_price_per_image:0.06};if(url.endsWith('/folder'))value={path:'D:\\图片'};if(url.endsWith('/jobs'))batch=body;if(url.endsWith('/jobs')||url.includes('/state'))value=snapshot();if(url.endsWith('/action')){actions.push(body);if(body.action==='continue')status='running';if(body.action==='stop')status='paused';value=snapshot();}return {ok:true,json:async()=>value,blob:async()=>new Blob(['preview'])};},
     setTimer:callback=>{timers.push(callback);return timers.length;},clearTimer:()=>{},download:async()=>{},confirm
   });
   const click=id=>document.getElementById(id).dispatchEvent(new window.Event('click'));
   const change=(id,checked)=>{document.getElementById(id).checked=checked;document.getElementById(id).dispatchEvent(new window.Event('change'));};
-  return {document,window,panel,task,actions,requests,timers,click,change,setCollecting:value=>{collecting=value;panel.refresh();},setItem:value=>{itemState=value;},setFetch:value=>{fetchOverride=value;},setConfigured:value=>{configured=value;}};
+  return {document,window,panel,task,actions,requests,timers,click,change,setLicense:value=>{license=value;},setCollecting:value=>{collecting=value;panel.refresh();},setItem:value=>{itemState=value;},setFetch:value=>{fetchOverride=value;},setConfigured:value=>{configured=value;}};
 }
+
+test('expired license still offers existing-result continuation and retry while disabling regeneration',async()=>{
+  const f=fixture();await connectFolder(f);f.click('conversion-start');await tick();
+  f.setLicense({allowed:false,status:'expired',message:'授权到期'});f.setItem({status:'paused',phase:'pending'});await f.panel.controller.poll();
+  assert.equal(f.document.getElementById('conversion-continue').disabled,false);
+  const retry=f.document.querySelector('[data-conversion-action="retry"]'),redo=f.document.querySelector('[data-conversion-action="redo"]');
+  assert.equal(retry.disabled,false);assert.equal(redo.disabled,true);retry.dispatchEvent(new f.window.Event('click'));await tick();assert.equal(f.actions[0].action,'retry');
+});
 
 test('new batch requires configured OSS and offers an actionable configuration or upgrade explanation',async()=>{
   for(const options of [{ossConfigured:false},{replacement:false},{cloudStorage:false}]){
@@ -100,11 +119,11 @@ test('incomplete restored ownership handle waits for snapshot counts and never i
 });
 test('paid capability validation displays the synchronous pending manifest despite source changes',async()=>{
   const f=fixture();await connectFolder(f);f.change('conversion-paid',true);let release;
-  f.setFetch(async url=>url.endsWith('/capabilities')?await new Promise(resolve=>{release=resolve;}):{ok:true,json:async()=>({})});
+  f.setFetch(async url=>url.endsWith('/capabilities')?await new Promise(resolve=>{release=resolve;}):{ok:true,json:async()=>url.includes('/license/')?licensedStatus:{}});
   f.click('conversion-start');await tick();const before=f.document.getElementById('conversion-selection').textContent,cost=f.document.getElementById('conversion-cost').textContent;
   f.task.jobs[0].groups[0].best.detailImages=['https://img.pddpic.com/late.jpg'];f.panel.refresh();
   assert.equal(f.document.getElementById('conversion-selection').textContent,before);assert.equal(f.document.getElementById('conversion-cost').textContent,cost);
-  await f.panel.clear();release({ok:true,json:async()=>({providers:['doubao','aliyun'],aliyun_configured:true})});await tick();
+  await f.panel.clear();release({ok:true,json:async()=>({licensing:true,providers:['doubao','aliyun'],aliyun_configured:true})});await tick();
 });
 async function connectFolder(f){f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();}
 test('checkbox selections count all positions and unique URLs, reject empty selection and send selected types',async()=>{

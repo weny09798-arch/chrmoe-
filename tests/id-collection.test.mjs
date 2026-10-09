@@ -10,7 +10,7 @@ import {searchPage} from './helpers/search-page.mjs';
 const fp={bits:'0000000000000000',color:[100,100,100],spread:50};
 const candidate=id=>({id,title:'相机',cents:1300,image:'https://img.alicdn.com/same.jpg',fingerprint:fp,url:`https://item.taobao.com/item.htm?id=${id}`});
 const sourceUrl=(site,id)=>site==='pdd'?`https://mobile.pinduoduo.com/goods.html?goods_id=${id}`:site==='1688'?`https://detail.1688.com/offer/${id}.html`:`https://item.taobao.com/item.htm?id=${id}`;
-const ports={open:async()=>{},close:async()=>{},save:async()=>{},update(){},wait:async()=>{},scroll:async()=>{},
+const ports={authorize:async()=>({allowed:true}),open:async()=>{},close:async()=>{},save:async()=>{},update(){},wait:async()=>{},scroll:async()=>{},
   hash:async()=>{throw new Error('Image hashing must not gate collection');}};
 
 test('distinct product IDs remain separate even with identical artwork or no image fingerprint',()=>{

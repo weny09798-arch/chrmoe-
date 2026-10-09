@@ -70,7 +70,7 @@ test('deleting a product excludes it across names and later jobs, without confus
   const restored=recoverTask(JSON.parse(JSON.stringify(task)));
   enqueueKeyword(restored,'新相机','pdd',{limit:1});const other=restored.jobs[2];
   for(const job of restored.jobs.slice(0,2))job.status='done';
-  await new Runner(restored,{save:async()=>{},update(){},open:async()=>{},close:async()=>{},
+  await new Runner(restored,{authorize:async()=>({allowed:true}),save:async()=>{},update(){},open:async()=>{},close:async()=>{},
     read:async()=>({cards:['123','789'].map(id=>({...item(id),key:id,priceText:'¥10'})),end:true}),
     enrich:async()=>({detailStatus:'done',attributes:[{name:'材质',value:'塑料'}]})}).run();
   assert.deepEqual(selected(other).map(x=>x.id),['789']);
@@ -83,6 +83,7 @@ test('automatic refill pause preserves a verification response and manual stop s
     const { task, job } = fixture(); job.status = 'pending'; job.phase = 'search'; job.scanned = 0; job.limit = 3;
     let collector;
     collector = new Runner(task, {
+    authorize:async()=>({allowed:true}),
       open: async () => {}, close: async () => {}, save: async () => {}, update() {},
       read: async () => {
         if (intent === 'stop') collector.stop();
@@ -99,7 +100,7 @@ test('automatic refill pause preserves a verification response and manual stop s
 test('deleting the running detail cancels further reads and discards its late result',async()=>{
   const {task,job}=fixture();job.phase='detail';job.status='pending';
   const deleted=selected(job)[0];let cancelledAfterDelete=false,runner;
-  runner=new Runner(task,{save:async()=>{},update(){},close:async()=>{},
+  runner=new Runner(task,{authorize:async()=>({allowed:true}),save:async()=>{},update(){},close:async()=>{},
     enrich:async(value,currentTask,cancelled)=>{
       products.removeProduct(job,value.id,currentTask);runner.pauseForRefill();
       cancelledAfterDelete=cancelled?.()===true;
@@ -115,7 +116,7 @@ test('deleting the running detail cancels further reads and discards its late re
 test('a removed queued detail is skipped even when selected before the removal',async()=>{
   const {task,job}=fixture();job.phase='detail';job.status='pending';
   selected(job)[1].detailStatus='pending';const ids=[];let now=10000;
-  await new Runner(task,{save:async()=>{},update(){},close:async()=>{},wait:async ms=>{now+=ms;},now:()=>now,
+  await new Runner(task,{authorize:async()=>({allowed:true}),save:async()=>{},update(){},close:async()=>{},wait:async ms=>{now+=ms;},now:()=>now,
     enrich:async(value)=>{ids.push(value.id);products.removeProduct(job,'3',task);return {attributes:[{name:'材质',value:'棉'}]};}
   }).enrich(job);
   assert.deepEqual(ids,['2']);
@@ -123,7 +124,7 @@ test('a removed queued detail is skipped even when selected before the removal',
 
 test('deleting another item for refill does not discard the still-wanted detail in progress',async()=>{
   const {task,job}=fixture();job.phase='detail';job.status='pending';let runner,wasCancelled;
-  runner=new Runner(task,{save:async()=>{},update(){},close:async()=>{},
+  runner=new Runner(task,{authorize:async()=>({allowed:true}),save:async()=>{},update(){},close:async()=>{},
     enrich:async(value,currentTask,cancelled)=>{products.removeProduct(job,'3',currentTask);runner.pauseForRefill();wasCancelled=cancelled();return {attributes:[{name:'材质',value:'棉'}]};}
   });
   await runner.run();assert.equal(wasCancelled,false);assert.equal(selected(job)[0].detailStatus,'done');
@@ -148,6 +149,7 @@ test('refill reaches the saved target with retained details and permits cheap di
   const { task, job } = fixture(); job.scanned=3; products.removeProduct(job, '2'); products.prepareRefill(job);
   let reads = 0; const details = [];
   await new Runner(task, {
+    authorize:async()=>({allowed:true}),
     open: async () => {}, close: async () => {}, save: async () => {}, update() {}, scroll: async () => {}, wait: async () => {},
     read: async () => { reads++; return { cards: ['1','2','3','4','5','6'].map(id => ({ ...item(id), key: id, priceText: '¥8.00' })), end: false }; },
     hash: async url => fp(url.endsWith('5.jpg') || url.endsWith('6.jpg') ? 400 : 100),
@@ -160,7 +162,7 @@ test('refill reaches the saved target with retained details and permits cheap di
 
 test('a PDD refill at the scan cap reports a shortage without rereading or refreshing',async()=>{
   const {task,job}=fixture();products.removeProduct(job,'2');products.prepareRefill(job);let reads=0,details=0;
-  await new Runner(task,{save:async()=>{},update(){},open:async()=>{},close:async()=>{},read:async()=>{reads++;throw new Error('must not read');},enrich:async()=>details++}).run();
+  await new Runner(task,{authorize:async()=>({allowed:true}),save:async()=>{},update(){},open:async()=>{},close:async()=>{},read:async()=>{reads++;throw new Error('must not read');},enrich:async()=>details++}).run();
   assert.equal(reads,0);assert.equal(details,0);assert.equal(job.status,'short');assert.deepEqual(selected(job).map(x=>x.id),['3']);
   assert.match(job.note,/200条上限/);
 });

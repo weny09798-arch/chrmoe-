@@ -4,7 +4,7 @@ import {createTask,selected,recoverTask} from '../extension/lib/core.mjs';
 import {Runner} from '../extension/lib/runner.mjs';
 
 const card=(id,price)=>({id,title:'相机',url:`https://mobile.pinduoduo.com/goods.html?goods_id=${id}`,image:`https://img.pddpic.com/${id}.jpg`,priceText:`¥${price}`,key:id});
-function ports(pages, overrides={}) {let i=0,clock=1000;return {open:async()=>{},read:async()=>pages[Math.min(i++,pages.length-1)],scroll:async()=>{},hash:async()=>({bits:'0000000000000000',color:[100,100,100],spread:50}),resolve:async c=>c,enrich:async()=>({}),save:async()=>{},update:()=>{},...overrides,now:overrides.now||(()=>clock),wait:async ms=>{await overrides.wait?.(ms);clock+=ms;}};}
+function ports(pages, overrides={}) {let i=0,clock=1000;return {authorize:async()=>({allowed:true}),open:async()=>{},read:async()=>pages[Math.min(i++,pages.length-1)],scroll:async()=>{},hash:async()=>({bits:'0000000000000000',color:[100,100,100],spread:50}),resolve:async c=>c,enrich:async()=>({}),save:async()=>{},update:()=>{},...overrides,now:overrides.now||(()=>clock),wait:async ms=>{await overrides.wait?.(ms);clock+=ms;}};}
 
 test('PDD skips a missing link without clicking and continues scrolling to an identifiable card',async()=>{
   const task=createTask(['相机']);task.jobs[0].limit=1;let resolves=0,scrolls=0;

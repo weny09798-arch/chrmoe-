@@ -1,6 +1,7 @@
 import { addCandidate, countDetails, hasDetailData, outputLimit, parsePrice, priceAllowed, selected, validProductTitle, SCAN_LIMIT } from './core.mjs';
 import { siteForJob } from './sites.mjs';
 import { productImage } from './products.mjs';
+import { licenseError } from './licensing.mjs';
 
 const finished = status => ['done', 'short', 'error', 'stopped'].includes(status);
 export class Runner {
@@ -9,6 +10,25 @@ export class Runner {
   pauseForRefill() { if (!this.intent) { this.intent = 'paused'; this.refillPause = true; } }
   stop() { this.intent = 'stopped'; this.refillPause = false; }
   now() { return this.ports.now?.() ?? Date.now(); }
+  async authorize(boundary) {
+    if (this.licenseStop) throw this.licenseStop;
+    try {
+      if (typeof this.ports.authorize !== 'function') throw licenseError(null,'缺少本地授权检查，采集已暂停。请连接并升级本地工具。');
+      const status = await this.ports.authorize(boundary);
+      if (this.licenseStop) throw this.licenseStop;
+      if (status?.allowed !== true) throw licenseError(status);
+    } catch (error) { throw error.licenseDenied ? error : licenseError(null,error.message); }
+  }
+  scheduleLicensePoll() {
+    if (!this.running || this.licenseStop) return;
+    this.licenseTimer = (this.ports.setTimer || globalThis.setTimeout)(async () => {
+      this.licenseTimer = null;
+      try { await this.authorize('poll'); }
+      catch (error) { if (this.running) this.licenseStop = error; }
+      if (this.running && !this.licenseStop) this.scheduleLicensePoll();
+    }, 300000);
+    this.licenseTimer?.unref?.();
+  }
   async waitForPdd(job) {
     if ((job.site || 'pdd') !== 'pdd' || !Number.isSafeInteger(this.task.pddNextActionAt)) return !this.intent;
     this.cooling = this.task.pddNextActionAt > this.now();
@@ -26,7 +46,8 @@ export class Runner {
   }
   async run() {
     if (this.running) return;
-    this.running = true; this.intent = ''; this.task.status = 'running';
+    this.running = true; this.intent = ''; this.licenseStop = null; this.task.status = 'running';
+    this.scheduleLicensePoll();
     try {
       await this.checkpoint();
       for (const job of this.task.jobs) {
@@ -37,9 +58,12 @@ export class Runner {
           if (job.phase === 'detail') await this.enrich(job);
           else {
             if (!await this.waitForPdd(job)) break;
+            await this.authorize('search');
+            if (this.intent) break;
             await this.ports.open(job, this.task); await this.collect(job);
           }
         } catch (error) {
+          if (error.licenseDenied) { this.licenseStop = error; this.intent ||= 'paused'; job.note = error.message; this.task.licenseMessage = error.message; break; }
           if (this.intent && !this.refillPause) break;
           if (error.blocked) {
             // A user stop/pause that races with a verification response wins.
@@ -53,6 +77,7 @@ export class Runner {
         }
         if (this.intent || this.task.status === 'blocked') break;
       }
+      if (this.licenseStop) { this.intent ||= 'paused'; this.task.licenseMessage = this.licenseStop.message; }
       if (this.intent) {
         this.task.status = this.intent;
         for (const job of this.task.jobs) {
@@ -61,6 +86,7 @@ export class Runner {
       } else if (this.task.status !== 'blocked') this.task.status = this.task.jobs.some(j => j.status === 'error') ? 'error' : 'done';
       await this.checkpoint();
     } finally {
+      if (this.licenseTimer != null) (this.ports.clearTimer || globalThis.clearTimeout)(this.licenseTimer);
       await this.ports.close?.({ preserveBlocked: this.task.status === 'blocked' });
       this.running = false; this.ports.update(this.task);
     }
@@ -74,6 +100,8 @@ export class Runner {
     if (job.merged == null && !job.skipReasons) { job.statsStart = job.scanned || 0; job.statsStartSkipped = job.skipped || 0; }
     job.merged ??= 0; job.excluded ??= 0; job.skipReasons ||= {};
     while (!this.intent && job.scanned < SCAN_LIMIT && selected(job).length < limit) {
+      await this.authorize('read');
+      if (this.intent) return;
       const page = await this.ports.read(job);
       if (page.blocked && this.refillPause) throw Object.assign(new Error(page.reason || '请处理登录或验证码后继续'), { blocked: true });
       if (this.intent) return;
@@ -94,6 +122,8 @@ export class Runner {
         if (this.intent || job.scanned >= SCAN_LIMIT || selected(job).length >= limit) break;
         let candidate, problem = '', skipReason = '其他原因';
         try {
+          await this.authorize('prepareCard');
+          if (this.intent) return;
           if (job.site === 'taobao' && this.ports.prepareCard) {
             skipReason = '页面商品变化';
             raw = await this.ports.prepareCard(raw,job,()=>Boolean(this.intent));
@@ -108,6 +138,8 @@ export class Runner {
           if (!priceAllowed(cents, job)) throw new Error('展示价格不在设定区间内');
           skipReason = '链接未识别';
           if ((job.site || 'pdd') === 'pdd' && (!raw.id || !raw.url)) throw new Error('页面已加载的数据中未识别到真实商品链接，已跳过');
+          await this.authorize('resolve');
+          if (this.intent) return;
           const resolved = raw.id ? raw : await this.ports.resolve(raw, page, job);
           if (this.intent) return;
           navigated ||= Boolean(resolved.navigated);
@@ -116,7 +148,7 @@ export class Runner {
           candidate = { ...resolved, cents, collectedAt: new Date().toISOString(), site: site.id, platform: site.platformForUrl?.(resolved.url) || site.label };
         } catch (error) {
           if (this.intent && !this.refillPause) return;
-          if (error.blocked || error.fatal) throw error;
+          if (error.licenseDenied || error.blocked || error.fatal) throw error;
           if (this.intent) return;
           problem = error.message;
         }
@@ -150,6 +182,8 @@ export class Runner {
       }
       previousSnapshot = snapshot;
       if (!navigated) {
+        await this.authorize('scroll');
+        if (this.intent) return;
         const scrolling = await this.ports.scroll(); job.scrolls++;
         if (scrolling?.paginationPending) {
           awaitingPage = page.cards.map(c=>c.key); job.paginationFromKeys = awaitingPage;
@@ -175,6 +209,8 @@ export class Runner {
       if (['done', 'partial', 'error'].includes(item.detailStatus)) continue;
       if (!await this.waitForPdd(job)) return;
       if (!selected(job).includes(item)) continue;
+      await this.authorize('enrich');
+      if (this.intent) return;
       const cancelled = () => Boolean((this.intent && !this.refillPause) || !selected(job).includes(item));
       item.detailStatus = 'running'; item.detailNote = '';
       await this.checkpoint();
@@ -216,6 +252,7 @@ export class Runner {
       }
       if ((job.site || 'pdd') === 'pdd') this.task.pddNextActionAt = this.now() + 3000;
       await this.checkpoint();
+      if (this.licenseStop) throw this.licenseStop;
     }
     if (this.intent) return;
     const items = selected(job);

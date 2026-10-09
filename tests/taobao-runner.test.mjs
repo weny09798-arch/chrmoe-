@@ -12,7 +12,7 @@ const sampleHash=id=>{
   for(let i=0;i<pixels.length;i+=4){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;pixels[i]=seed&255;pixels[i+1]=(seed>>>8)&255;pixels[i+2]=(seed>>>16)&255;pixels[i+3]=255;}
   return fingerprint(pixels);
 };
-const pagePorts=f=>({save:async()=>{},update(){},open:async()=>{},close:async()=>{},
+const pagePorts=f=>({authorize:async()=>({allowed:true}),save:async()=>{},update(){},open:async()=>{},close:async()=>{},
   scroll:async()=>f.send({type:'PDD_SCROLL'}),read:async()=>f.send({type:'PDD_SNAPSHOT'}),
   wait:async ms=>f.advance(ms),hash:async url=>sampleHash(url.match(/item-(\d+)/)[1]),
   enrich:async()=>({descriptionText:'商品详情',detailStatus:'done'})});
@@ -46,7 +46,7 @@ test('systematic extraction failure stops after five post-retry failures rather 
 test('Taobao collection retains Tmall source and shares the limit, exclusions and template export',async()=>{
   const task=enqueueKeyword(null,'相机','taobao',{limit:2,priceMin:500,priceMax:1500});const job=task.jobs[0];let reads=0;
   const card=(id,host='item.taobao.com')=>({id,key:id,title:'相机包',priceText:'¥8.50',image:`https://img.alicdn.com/${id}.jpg`,url:`https://${host}/item.htm?id=${id}`});
-  const ports={save:async()=>{},update(){},open:async()=>{},close:async()=>{},scroll:async()=>{},wait:async()=>{},
+  const ports={authorize:async()=>({allowed:true}),save:async()=>{},update(){},open:async()=>{},close:async()=>{},scroll:async()=>{},wait:async()=>{},
     read:async()=>{reads++;return{cards:[card('1'),card('2','detail.tmall.com'),card('3')],end:true};},
     hash:async url=>({bits:'0000000000000000',color:[Number(url.match(/(\d+)\.jpg/)[1])*100,100,100],spread:50}),
     enrich:async item=>({descriptionText:'详情',detailStatus:'done',skus:[{id:'sku'+item.id,specs:['红'],cents:850,image:item.image,stock:'2'}]})};

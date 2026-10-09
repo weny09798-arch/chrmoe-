@@ -1,3 +1,4 @@
+import { licensedFetch } from './helpers/licensed-bridge.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTask } from '../extension/lib/core.mjs';
@@ -5,7 +6,7 @@ import { taskSheets, workbookBytes } from '../extension/lib/xlsx.mjs';
 import { buildImageManifest, parseConnectionCode, BridgeClient, ConversionController } from '../extension/lib/image-conversion.mjs';
 
 const image = 'https://img.pddpic.com/main.jpg?size=100';
-const capabilities = { providers:['doubao','aliyun'], image_kinds:['main','detail','sku'], oss_configured:true, image_link_replacement:true,cloud_image_storage:true, aliyun_configured:true, aliyun_price_per_image:0.06 };
+const capabilities = { licensing:true,providers:['doubao','aliyun'], image_kinds:['main','detail','sku'], oss_configured:true, image_link_replacement:true,cloud_image_storage:true, aliyun_configured:true, aliyun_price_per_image:0.06 };
 function fixture() {
   const task = createTask(['杯']); task.status = 'done';
   task.jobs[0].limit = 1; task.jobs[0].status = 'done';
@@ -68,13 +69,13 @@ function setup(fetch) {
     const value = await result.json();
     return response(value.providers ? value : capabilities);
   };
-  const client = new BridgeClient({ extensionId: 'test-extension', fetch:fixtureFetch, storage });
+  const client = new BridgeClient({ extensionId: 'test-extension', fetch:licensedFetch(fixtureFetch), storage });
   const updates = [];
   const controller = new ConversionController({ client, onChange: state => updates.push(state) });
   return { client, controller, updates, saved };
 }
 function reloaded(f, fetch) {
-  return new ConversionController({client:new BridgeClient({extensionId:'test-extension',fetch,storage:f.client.storage})});
+  return new ConversionController({client:new BridgeClient({extensionId:'test-extension',fetch:licensedFetch(fetch),storage:f.client.storage})});
 }
 test('reload preserves owned products so deletion and global clear cancel before any recovery poll',async()=>{
   for(const operation of ['delete','clear']) {
@@ -145,7 +146,7 @@ test('expired connection can pair a restarted tool and recover the same owned pa
   const controller=reloaded(first,async(url,options)=>{
     requests.push({url,headers:options.headers,body:options.body&&JSON.parse(options.body)});
     if(options.headers['X-Tool-Token']==='old')return {ok:false,status:401};
-    return response(url.endsWith('/pair')?{}:snapshot);
+    return response(url.endsWith('/capabilities')?capabilities:url.endsWith('/pair')?{}:snapshot);
   });
   await controller.restoreForTask(task);assert.ok(controller.error);
   const count=requests.length;await controller.connect('http://localhost:54121/#token=new');
@@ -210,6 +211,7 @@ test('clear during job submission ignores response and stops the newly created m
   });
   await f.controller.connect('http://localhost:53121/#token=x');
   const task = fixture(), start = f.controller.start(task, 'D:\\图片', false);
+  await new Promise(resolve=>setImmediate(resolve));
   await f.controller.clear(); const count = f.updates.length;
   pending.resolve(response({id:'job-late',kind:'collector',source_task_id:task.id,status:'running',items:[]})); await start;
   assert.equal(f.controller.job, null); assert.equal(f.updates.length,count);
@@ -243,12 +245,13 @@ test('clear discards outstanding folder, action, image and workbook results',asy
     const task=fixture();
     const f=setup(async url=>{
       if(waiting && !url.endsWith('/action'))return pending.promise;
-      if(waiting && kind==='action'){waiting=false;return pending.promise;}
+      if(waiting && kind==='action' && url.endsWith('/action')){waiting=false;return pending.promise;}
       return response(url.endsWith('/jobs')?{id:'job-1',kind:'collector',source_task_id:task.id,status:'paused',items:[]}:{});
     });
     await f.controller.connect('http://localhost:53121/#token=x');await f.controller.start(task,'D:\\图片',false);
     waiting=true;
     const operation=kind==='folder'?f.controller.chooseFolder():kind==='action'?f.controller.action('continue'):kind==='image'?f.controller.image(0,'original'):f.controller.manifest();
+    if(kind==='action')await new Promise(resolve=>setImmediate(resolve));
     await f.controller.clear();const count=f.updates.length;
     pending.resolve({ok:true,json:async()=>({path:'D:\\不应出现',id:'job-1',status:'running',items:[]}),blob:async()=>new Blob(['stale'])});
     const result=await operation;
@@ -277,7 +280,7 @@ test('paid start validates capabilities and confirmation and freezes selected en
 test('old tool capability 404 requires an upgrade for both integrated free and paid entries',async()=>{
   const task=fixture(),jobs=[];
   const f=setup(async(url,options)=>{if(url.endsWith('/capabilities'))return {ok:false,status:404};if(url.endsWith('/jobs')){jobs.push(JSON.parse(options.body));return response({id:'free-1',kind:'collector',source_task_id:task.id,status:'completed',items:[]});}return response({});});
-  await f.controller.connect('http://localhost:53121/#token=x');
+  await assert.rejects(f.controller.connect('http://localhost:53121/#token=x'),/升级/);
   await assert.rejects(f.controller.start(task,'D:\\图片',false,{provider:'aliyun',paidConfirmed:true}),/升级/);
   await assert.rejects(f.controller.start(task,'D:\\图片',false,{imageKinds:['detail']}),/升级/);
   assert.equal(jobs.length,0);

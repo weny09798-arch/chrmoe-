@@ -1,3 +1,4 @@
+import { licensedStatus } from './helpers/licensed-bridge.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as XLSX from 'xlsx';
@@ -5,7 +6,7 @@ import { buildImageManifest, BridgeClient, ConversionController, mergeImageRepla
 import { taskSheets, workbookBytes, workbookXlsBytes } from '../extension/lib/xlsx.mjs';
 
 const original='https://img.example/a.jpg', published='https://bucket.oss-cn-shanghai.aliyuncs.com/converted/a.png';
-const caps={providers:['doubao','aliyun'],oss_configured:true,image_link_replacement:true,cloud_image_storage:true,aliyun_configured:true};
+const caps={licensing:true,providers:['doubao','aliyun'],oss_configured:true,image_link_replacement:true,cloud_image_storage:true,aliyun_configured:true};
 function fixture(){return {id:'source',status:'done',jobs:[{keyword:'杯',site:'pdd',groups:[{best:{id:'101',title:'玻璃杯',cents:1234,image:original,galleryImages:[original,'https://img.example/b.jpg'],detailImages:[original],skus:[{id:'duplicate',specs:['红'],image:original,cents:1500},{id:'duplicate',specs:['蓝'],image:original,cents:1600}]}}]},{keyword:'杯',site:'taobao',groups:[{best:{id:'101',site:'taobao',title:'保温杯',cents:2000,image:original}}]}]};}
 const response=value=>({ok:true,json:async()=>value});
 test('main-only replacement does not change the unselected fallback SKU image',()=>{
@@ -18,7 +19,7 @@ test('main-only replacement does not change the unselected fallback SKU image',(
 });
 async function controllerFixture(task,extra={}){
   const saved=new Map(),requests=[],mappings=[];let snapshot={id:'batch',kind:'collector',source_task_id:task.id,status:'paused',items:[]};
-  const client=new BridgeClient({extensionId:'extension',storage:{getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)},fetch:async(url,options)=>{requests.push({url,body:options.body&&JSON.parse(options.body)});return response(url.endsWith('/capabilities')?caps:url.endsWith('/jobs')||url.includes('/state')||url.endsWith('/action')?snapshot:{});}});
+  const client=new BridgeClient({extensionId:'extension',storage:{getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)},fetch:async(url,options)=>{requests.push({url,body:options.body&&JSON.parse(options.body)});return response(url.includes('/license/')?licensedStatus:url.endsWith('/capabilities')?caps:url.endsWith('/jobs')||url.includes('/state')||url.endsWith('/action')?snapshot:{});}});
   const controller=new ConversionController({client,getTask:()=>task,onReplacements:async(source,refs)=>{mappings.push({source,refs});},...extra});
   await controller.connect('http://localhost:53121/#token=test');await controller.start(task,'D:\\图片');
   return {controller,client,requests,mappings,setSnapshot:value=>{snapshot=value;}};
@@ -81,8 +82,9 @@ test('partial replacement survives persistence in real XLSX and XLS without chan
 });
 test('integrated free conversion refuses old or unconfigured OSS tools before creating jobs',async()=>{
   for(const capabilities of [{providers:['doubao']},{...caps,oss_configured:false}]){
-    const requests=[],client=new BridgeClient({extensionId:'extension',fetch:async(url,options)=>{requests.push(url);return response(url.endsWith('/capabilities')?capabilities:{});},storage:null});
-    const controller=new ConversionController({client});await controller.connect('http://localhost:53121/#token=test');
+    const requests=[],client=new BridgeClient({extensionId:'extension',fetch:async(url,options)=>{requests.push(url);return response(url.includes('/license/')?licensedStatus:url.endsWith('/capabilities')?capabilities:{});},storage:null});
+    const controller=new ConversionController({client});
+    if(capabilities.licensing !== true)await assert.rejects(controller.connect('http://localhost:53121/#token=test'),/升级/);else await controller.connect('http://localhost:53121/#token=test');
     await assert.rejects(controller.start(fixture(),'D:\\图片'),capabilities.image_link_replacement?/OSS/:/升级/);assert.equal(requests.some(url=>url.endsWith('/jobs')),false);
   }
 });
@@ -97,7 +99,7 @@ test('limited batch accepts only selected published positions in XLSX and XLS wh
  const task=fixture(), all=buildImageManifest(task), prior=all.find(ref=>ref.kind==='sku'&&ref.order===2);
  mergeImageReplacements(task,[{...prior,published_url:'https://bucket.oss-cn-shanghai.aliyuncs.com/old.png'}]);
  let snapshot={id:'limited',kind:'collector',source_task_id:task.id,status:'paused',items:[]};
- const client=new BridgeClient({extensionId:'extension',storage:null,fetch:async url=>response(url.endsWith('/capabilities')?{...caps,image_type_limits:true}:url.endsWith('/jobs')||url.includes('/state')?snapshot:{})});
+ const client=new BridgeClient({extensionId:'extension',storage:null,fetch:async url=>response(url.includes('/license/')?licensedStatus:url.endsWith('/capabilities')?{...caps,image_type_limits:true}:url.endsWith('/jobs')||url.includes('/state')?snapshot:{})});
  const controller=new ConversionController({client,getTask:()=>task,onReplacements:async(_,refs)=>mergeImageReplacements(task,refs)});
  await controller.connect('http://localhost:53121/#token=test');await controller.start(task,'',false,{imageLimits:{main:1,detail:1,sku:1}});
  snapshot={...controller.job,status:'completed',items:[{status:'completed',refs:all.map(ref=>({...ref,published_url:published}))}]};await controller.poll();
