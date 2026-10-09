@@ -151,3 +151,83 @@ for(const failure of [401,403])test(`current native ${failure} still pauses afte
   f.client.fetch=async()=>({ok:false,status:failure,json:async()=>({})});await f.controller.poll();finish({descriptionText:'current detail saved'});await running;
   assert.equal(f.controller.view().license.allowed,false);assert.deepEqual(details,['101']);assert.equal(task.status,'paused');assert.equal(job.groups[0].best.descriptionText,'current detail saved');assert.equal(job.groups[1].best.detailStatus,'pending');
 });
+
+for (const path of ['poll','action','start','reconnect']) for (const scenario of ['old denial after reset','old allowance after denial','current denial','current allowance']) test(`successful ${path} snapshot: ${scenario}`,async()=>{
+  const f=fixture();await f.controller.connect('http://localhost:53121/#token=pair');
+  const source=createTask(['相机']);source.status='done';source.jobs[0].groups=[{best:{id:'1',title:'相机',image:'https://img.pddpic.com/1.jpg'}}];
+  const old={id:'job',kind:'collector',source_task_id:source.id,status:'paused',items:[]};
+  if(path!=='start'){f.controller.sourceTaskId=source.id;f.controller.job=old;}
+  let release,announce,admissions=0;const pending=new Promise(r=>{release=r;}),entered=new Promise(r=>{announce=r;});const native=f.client.fetch;
+  f.client.fetch=async(url,options)=>{
+    if(path==='start' && url.includes('/state?job_id=job'))return {ok:true,json:async()=>({...old,license:f.controller.view().license,output_dir:'fresh-output'})};
+    const delayed=path==='start'?url.endsWith('/jobs'):path==='action'?url.endsWith('/action'):url.includes('/state?job_id=job');
+    if(delayed){if(path==='start')admissions++;announce();return pending;}return native(url,options);
+  };
+  const operation=path==='poll'?f.controller.poll():path==='action'?f.controller.action('retry-upload',0):path==='start'?f.controller.start(source):f.controller.connect('http://localhost:53121/#token=pair');
+  await entered;
+  const denied={allowed:false,status:'expired',message:'expired snapshot'};
+  const stale=scenario.startsWith('old'), snapshotLicense=scenario.includes('denial')&&!scenario.includes('after denial')?denied:allowed;
+  if(scenario==='old denial after reset'){f.controller.licenseAuthority.reset({licensing:true});await f.controller.checkLicense();}
+  if(scenario==='old allowance after denial'){f.setLicense(denied);await f.controller.checkLicense();}
+  const expectedLicense=f.controller.view().license, expectedJob=f.controller.job;
+  if(!stale)f.setLicense(snapshotLicense);
+  const task=createTask(['collection']),job=task.jobs[0];job.site='1688';job.phase='detail';job.searchStatus='done';job.groups=['101','102'].map(id=>({best:{id,title:'product',cents:100,detailStatus:'pending'}}));
+  let finish,started;const detail=new Promise(r=>{finish=r;}),ready=new Promise(r=>{started=r;});const details=[];
+  // A live collector is attached for the allowed starting cases; its current detail is owed.
+  const runner=new Runner(task,ports({authorize:async()=>f.controller.view().license,subscribeLicense:l=>f.controller.subscribeLicense(l),setTimer:()=>1,clearTimer(){},enrich:async item=>{details.push(item.id);started();return detail;}}));
+  const running=expectedLicense.allowed?runner.run():null;if(running)await ready;
+  release({ok:true,json:async()=>({...old,status:'completed',license:snapshotLicense,output_dir:'obsolete-output'})});await operation;
+  if(stale){
+    assert.equal(f.controller.view().license,expectedLicense);assert.notEqual(f.controller.outputDir,'obsolete-output');
+    if(path==='start'){
+      assert.equal(f.controller.job.id,'job');assert.equal(f.controller.job.status,'paused');assert.equal(f.controller.outputDir,'fresh-output');
+      assert.equal(JSON.parse(f.client.storage.getItem('collector-image-owned-job')).job_id,'job');
+      await assert.rejects(f.controller.start(source),/当前图片批次/);
+      assert.equal(admissions,1);
+      assert.equal(f.requests.some(([route,body])=>route==='action' && body?.action==='cancel'),false,'owed native results remain reachable');
+    }else assert.equal(f.controller.job,expectedJob);
+  } else {assert.equal(f.controller.job.status,'completed');assert.equal(f.controller.view().license.allowed,snapshotLicense.allowed);}
+  if(running){finish({descriptionText:'owed detail saved'});await running;assert.equal(job.groups[0].best.descriptionText,'owed detail saved');assert.equal(task.status,scenario==='current denial'?'paused':'done');assert.equal(details.length,scenario==='current denial'?1:2);}
+});
+
+for(const failure of ['transport','newer reset'])test(`obsolete admitted start retains recoverable ownership when current fetch meets ${failure}`,async()=>{
+  const f=fixture();await f.controller.connect('http://localhost:53121/#token=pair');
+  const source=createTask(['相机']);source.status='done';source.jobs[0].groups=[{best:{id:'1',title:'相机',image:'https://img.pddpic.com/1.jpg'}}];
+  const snapshot={id:'admitted',kind:'collector',source_task_id:source.id,status:'running',items:[],license:{allowed:false,status:'expired'},output_dir:'obsolete-output'};
+  let release,announce,admissions=0;const pending=new Promise(r=>{release=r;}),entered=new Promise(r=>{announce=r;});const native=f.client.fetch;
+  f.client.fetch=async(url,options)=>{
+    if(url.endsWith('/jobs')){admissions++;announce();return pending;}
+    if(url.includes('/state?job_id=admitted')){
+      if(failure==='transport')throw new Error('closed');
+      return {ok:true,json:async()=>{f.controller.licenseAuthority.reset({licensing:true});return snapshot;}};
+    }
+    return native(url,options);
+  };
+  const starting=f.controller.start(source);await entered;f.controller.licenseAuthority.reset({licensing:true});await f.controller.checkLicense();
+  release({ok:true,json:async()=>snapshot});await starting;
+  assert.equal(f.controller.job.status,'recovering');assert.equal(f.controller.job.items.length,0);assert.notEqual(f.controller.outputDir,'obsolete-output');assert.notEqual(f.controller.view().license.status,'expired');
+  assert.equal(JSON.parse(f.client.storage.getItem('collector-image-owned-job')).job_id,'admitted');
+  await assert.rejects(f.controller.start(source),/当前图片批次/);assert.equal(admissions,1);
+  const recovered=new ConversionController({client:f.client});assert.equal(recovered.job.id,'admitted');assert.equal(recovered.job.status,'recovering');
+  f.client.fetch=async()=>({ok:true,json:async()=>({...snapshot,status:'paused',license:allowed,output_dir:'current-output'})});
+  await recovered.restoreForTask(source);assert.equal(recovered.job.status,'paused');assert.equal(recovered.outputDir,'current-output');assert.equal(recovered.view().license.allowed,true);
+});
+
+test('obsolete successful allowance cannot revive live Runner denial; owed detail saves and renewal needs manual run',async()=>{
+  const f=fixture();await f.controller.connect('http://localhost:53121/#token=pair');
+  const snapshot={id:'job',kind:'collector',source_task_id:'source',status:'paused',items:[]};f.controller.job=snapshot;f.controller.sourceTaskId='source';
+  let release,announce;const response=new Promise(r=>{release=r;}),entered=new Promise(r=>{announce=r;});const native=f.client.fetch;
+  f.client.fetch=async(url,options)=>{if(url.includes('/state?job_id=job')){announce();return response;}return native(url,options);};
+  const polling=f.controller.poll();await entered;
+  const task=createTask(['collection']),job=task.jobs[0];job.site='1688';job.phase='detail';job.searchStatus='done';job.groups=['101','102'].map(id=>({best:{id,title:'product',cents:100,detailStatus:'pending'}}));
+  let finish,start;const detail=new Promise(r=>{finish=r;}),ready=new Promise(r=>{start=r;});const details=[];
+  const p=ports({authorize:()=>f.controller.requireLicense(),subscribeLicense:l=>f.controller.subscribeLicense(l),setTimer:()=>1,clearTimer(){},enrich:async item=>{details.push(item.id);start();return detail;}});
+  const runner=new Runner(task,p),running=runner.run();await ready;
+  const denied={allowed:false,status:'disabled',message:'current revocation'};f.setLicense(denied);await f.controller.checkLicense();
+  release({ok:true,json:async()=>({...snapshot,status:'completed',license:allowed})});await polling;
+  assert.equal(f.controller.view().license,denied);assert.equal(f.controller.job,snapshot);
+  finish({descriptionText:'owed detail saved'});await running;
+  assert.equal(task.status,'paused');assert.equal(job.groups[0].best.descriptionText,'owed detail saved');assert.equal(job.groups[1].best.detailStatus,'pending');assert.deepEqual(details,['101']);
+  f.setLicense(allowed);await f.controller.checkLicense();assert.equal(task.status,'paused');assert.deepEqual(details,['101']);
+  p.enrich=async item=>{details.push(item.id);return {descriptionText:'manual continuation'};};await new Runner(task,p).run();assert.equal(task.status,'done');assert.deepEqual(details,['101','102']);
+});

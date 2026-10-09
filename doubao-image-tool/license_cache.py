@@ -25,16 +25,21 @@ class DpapiLicenseStore:
     def load(self):
         with self._lock:
             try:
-                if not self.path.exists():
-                    return None
-                if self.path.stat().st_size > 65536:
-                    raise ValueError()
-                value = json.loads(self._protect(self.path.read_bytes(), True))
-                if not isinstance(value, dict):
-                    raise ValueError()
-                return value
+                with self._exclusive():
+                    return self._read_locked()
             except Exception:
                 raise LicenseStorageError('授权数据不可读取，请重新验证') from None
+
+    def _read_locked(self):
+        """Caller holds the OS lock, including CAS's comparison read."""
+        if not self.path.exists():
+            return None
+        if self.path.stat().st_size > 65536:
+            raise ValueError()
+        value = json.loads(self._protect(self.path.read_bytes(), True))
+        if not isinstance(value, dict):
+            raise ValueError()
+        return value
 
     @contextmanager
     def _exclusive(self):
@@ -75,7 +80,7 @@ class DpapiLicenseStore:
         with self._lock:
             try:
                 with self._exclusive():
-                    if self.load() != expected:
+                    if self._read_locked() != expected:
                         return False
                     self._write(record)
                     return True

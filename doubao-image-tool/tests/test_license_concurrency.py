@@ -249,8 +249,129 @@ def test_contended_cache_lock_fails_within_helper_overhead_budget(tmp_path):
         started=time.monotonic()
         with pytest.raises(LicenseStorageError):store.compare_and_save({'value':'original'},{'value':'bad'})
         assert time.monotonic()-started<1, 'Local coordination must fit the existing paid-helper overhead budget'
-        assert store.load()=={'value':'original'}
+        started=time.monotonic()
+        with pytest.raises(LicenseStorageError):store.load()
+        assert time.monotonic()-started<1
     finally:
         gate.write_text('go')
         process.communicate(timeout=5)
         assert process.returncode==0
+    assert store.load()=={'value':'original'}
+
+
+def overlap_real_reader(store, operation, monkeypatch):
+    """Hold an actual Windows non-delete-sharing read handle from another store.
+
+    Release inside the .25s lock budget; a pre-fix replace actually fails while
+    this handle is open. No replace/DPAPI result is mocked.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+    from license_cache import DpapiLicenseStore
+    opened=threading.Event();release=threading.Event();finished=threading.Event()
+    original=Path.read_bytes
+    def read(path):
+        if path==store.path and threading.current_thread().name.startswith('held-license-reader'):
+            with path.open('rb') as handle:
+                opened.set()
+                assert release.wait(5)
+                return handle.read()
+        return original(path)
+    monkeypatch.setattr(Path,'read_bytes',read)
+    reader=DpapiLicenseStore(store.path.parent)
+    with ThreadPoolExecutor(1,thread_name_prefix='held-license-reader') as reads, ThreadPoolExecutor(1) as writes:
+        reading=reads.submit(reader.load);assert opened.wait(5)
+        def write():
+            try:return operation()
+            finally:finished.set()
+        writing=writes.submit(write)
+        try:
+            # Event wait is the reader's bounded hold, not a race against release.
+            finished.wait(.1)
+        finally:release.set()
+        assert reading.result(timeout=5) is not None
+        return writing.result(timeout=5)
+
+
+def test_independent_dpapi_read_handle_does_not_break_atomic_cas(tmp_path, monkeypatch):
+    from license_cache import DpapiLicenseStore
+    store=DpapiLicenseStore(tmp_path/'profile');old={'value':'old'};store.save(old)
+    assert overlap_real_reader(store,lambda:store.compare_and_save(old,{'value':'new'}),monkeypatch)
+    assert store.load()=={'value':'new'}
+
+
+def test_dpapi_authority_checkpoint_under_read_overlap_stays_allowed(tmp_path, signer, monkeypatch):
+    from license_cache import DpapiLicenseStore
+    clock=Clock();store=DpapiLicenseStore(tmp_path/'profile')
+    authority=LicenseAuthority(config=LicenseBuildConfig('https://license.example',signer[1]),store=store,
+        transport=SignedService(signer[0],clock),hardware_provider=lambda:'a'*64,
+        wall_clock=lambda:clock.wall,monotonic_clock=lambda:clock.mono)
+    assert authority.activate(OLD_CODE).allowed
+    status=overlap_real_reader(store,authority.status,monkeypatch)
+    assert status.allowed and status.state=='allowed'
+    assert authority.status().allowed and store.load()['state']=='allowed'
+
+
+def test_queue_parent_helper_read_overlap_does_not_latch_storage_denial(tmp_path, signer, monkeypatch):
+    import core
+    from core import QueueService
+    from license_cache import DpapiLicenseStore
+    from test_aliyun import image, never_browser
+    from test_core import wait
+    clock=Clock();store=DpapiLicenseStore(tmp_path/'profile')
+    def authority(storage):
+        return LicenseAuthority(config=LicenseBuildConfig('https://license.example',signer[1]),store=storage,
+            transport=SignedService(signer[0],clock),hardware_provider=lambda:'a'*64,
+            wall_clock=lambda:clock.wall,monotonic_clock=lambda:clock.mono)
+    parent=authority(store);assert parent.activate(OLD_CODE).allowed
+    paid=[];observed=[]
+    class Helper:
+        def translate(self,path):
+            # Independent helper has reconciled and validated the same protected record.
+            helper=authority(DpapiLicenseStore(store.path.parent));assert helper.startup().allowed
+            observed.append(overlap_real_reader(store,q.license_status,monkeypatch))
+            helper.require_new_work(force_refresh=False)
+            paid.append(path)
+            return {'request_id':'isolated','final_image_url':'https://example.test/result.png'}
+    monkeypatch.setattr(core,'download_aliyun_result',lambda url:(image(),'.png'))
+    q=QueueService(never_browser,tmp_path/'state',aliyun_factory=Helper,license_authority=parent)
+    try:
+        q.start([('a.png',image()),('b.png',image())],tmp_path/'out','convert',provider='aliyun',paid_confirmed=True)
+        s=wait(q,lambda s:s['status'] in {'completed','paused'})
+        assert s['status']=='completed' and len(paid)==2, (s['message'],[(i['phase'],i['message']) for i in s['items']])
+        assert len(observed)==2 and all(status.allowed for status in observed)
+        assert parent.status().allowed and store.load()['state']=='allowed'
+    finally:q.close()
+
+
+def test_process_dpapi_reader_coordinates_with_writer(tmp_path):
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+    from concurrent.futures import ThreadPoolExecutor
+    from license_cache import DpapiLicenseStore
+    store=DpapiLicenseStore(tmp_path/'profile');old={'value':'old'};store.save(old)
+    ready=tmp_path/'reader-ready';release=tmp_path/'reader-release';script=tmp_path/'reader.py'
+    module_root=Path(__file__).resolve().parents[1]
+    script.write_text("import sys,time\nfrom pathlib import Path\nsys.path.insert(0,"+repr(str(module_root))+")\nfrom license_cache import DpapiLicenseStore\ns=DpapiLicenseStore(sys.argv[1]); original=Path.read_bytes\ndef held(path):\n if path==s.path:\n  with path.open('rb') as handle:\n   Path(sys.argv[2]).write_text('ready')\n   while not Path(sys.argv[3]).exists(): time.sleep(.005)\n   return handle.read()\n return original(path)\nPath.read_bytes=held\nassert s.load()=={'value':'old'}\n",encoding='utf-8')
+    p=subprocess.Popen([sys.executable,'-B',str(script),str(store.path.parent),str(ready),str(release)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+    try:
+        end=time.monotonic()+5
+        while not ready.exists():
+            assert time.monotonic()<end
+            time.sleep(.005)
+        finished=threading.Event()
+        def write():
+            try:return store.compare_and_save(old,{'value':'new'})
+            finally:finished.set()
+        with ThreadPoolExecutor(1) as pool:
+            future=pool.submit(write)
+            try:finished.wait(.1)
+            finally:release.write_text('go')
+            assert future.result(timeout=5)
+        out,err=p.communicate(timeout=5);assert p.returncode==0,(out,err)
+        assert store.load()=={'value':'new'}
+    finally:
+        release.write_text('go')
+        if p.poll() is None:p.kill();p.wait()

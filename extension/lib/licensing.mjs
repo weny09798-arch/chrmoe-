@@ -14,6 +14,9 @@ export class LicenseAuthority {
   subscribe(listener) { this.listeners.add(listener); if (this.status) listener(this.status); return () => this.listeners.delete(listener); }
   accept(status) {
     this.status = status && typeof status === 'object' ? status : {allowed:false,status:'unavailable'};
+    // A newer denial also supersedes HTTP 200 snapshots already in flight.
+    // Keep error request generations separate so the current denial is displayed.
+    if (this.status.allowed !== true) this.client.invalidateSnapshotResponses?.();
     for (const listener of this.listeners) listener(this.status);
     this.onChange(); return this.status;
   }

@@ -104,6 +104,7 @@ export function conversionActionNeedsLicense(job, action, index) {
 export class BridgeClient {
   constructor({ extensionId, fetch = globalThis.fetch?.bind(globalThis), storage = globalThis.sessionStorage } = {}) {
     this.extensionId = extensionId; this.fetch = fetch; this.storage = storage; this.connection = null; this.denialListeners = new Set(); this.requestGeneration = 0;
+    this.snapshotGeneration = 0; this.responseOrigins = new WeakMap();
     try {
       const saved = JSON.parse(storage?.getItem(SESSION_KEY) || 'null');
       if (saved) this.connection = parseConnectionCode(`${saved.baseUrl}/#token=${encodeURIComponent(saved.token)}`);
@@ -115,8 +116,14 @@ export class BridgeClient {
   }
   subscribeDenial(listener) { this.denialListeners.add(listener); return () => this.denialListeners.delete(listener); }
   invalidateRequests() { ++this.requestGeneration; }
+  invalidateSnapshotResponses() { ++this.snapshotGeneration; }
+  snapshotCurrent(response) {
+    const origin = this.responseOrigins.get(response);
+    return !origin || (origin.generation === this.requestGeneration && origin.snapshotGeneration === this.snapshotGeneration);
+  }
   reportDenial(status, connection, generation) { if (connection === this.connection && generation === this.requestGeneration) for (const listener of this.denialListeners) listener(status); }
   async request(route, { body, blob = false, connection = this.connection, generation = this.requestGeneration } = {}) {
+    const snapshotGeneration = this.snapshotGeneration;
     const failure = error => { error.staleRequest = generation !== this.requestGeneration; return error; };
     if (!connection || !this.extensionId) {
       const message = '请先在 Chrome 扩展中连接本地图片工具。';
@@ -143,7 +150,9 @@ export class BridgeClient {
       if ([401,403].includes(response.status)) this.reportDenial({allowed:false,status:'disconnected',message:error.message},connection,generation);
       error.status = response.status; throw failure(error);
     }
-    return blob ? response.blob() : response.json();
+    const value = await (blob ? response.blob() : response.json());
+    if (value && typeof value === 'object') this.responseOrigins.set(value, { generation, snapshotGeneration });
+    return value;
   }
 }
 
@@ -204,7 +213,8 @@ export class ConversionController {
     });
   }
   canReconnect() { return !this.pendingSource && (!this.job || ['completed','done','paused','stopped','blocked'].includes(this.job.status) || Boolean(this.error)); }
-  acceptSnapshot(snapshot, jobId) {
+  acceptSnapshot(snapshot, jobId, origin = snapshot) {
+    if (this.client.snapshotCurrent?.(origin) === false) return false;
     if (snapshot?.id !== jobId || snapshot.kind !== 'collector' || snapshot.source_task_id !== this.sourceTaskId) throw new Error('本地任务与当前图片批次不一致，请在本地工具中检查。');
     this.job = { ...snapshot, provider: snapshot.provider || this.job?.provider || 'doubao', image_kinds: snapshot.image_kinds || this.job?.image_kinds || ['main','detail','sku'], image_limits: normalizeImageLimits(snapshot.image_kinds || this.job?.image_kinds || ['main','detail','sku'],snapshot.image_limits || this.job?.image_limits), paid_calls: snapshot.paid_calls || 0 };
     if (snapshot.license) this.licenseAuthority.accept(snapshot.license);
@@ -264,7 +274,7 @@ export class ConversionController {
         if (!this.current(epoch)) return;
         const capabilities = await this.readCapabilities(connection);
         if (!this.current(epoch)) return;
-        await this.acceptSnapshot(snapshot, ownedJob.id);
+        if (await this.acceptSnapshot(snapshot, ownedJob.id) === false) return;
         if (!this.current(epoch)) return;
         this.capabilities = capabilities; this.client.remember(connection); this.licenseAuthority.reset(capabilities); await this.checkLicense(); this.persistOwnership(); this.restored = false; this.emit();
         return;
@@ -321,7 +331,16 @@ export class ConversionController {
       if (snapshot?.kind !== 'collector' || snapshot.source_task_id !== sourceTaskId || !snapshot.id) throw new Error('本地任务与当前图片批次不一致，请在本地工具中检查。');
       this.availableCounts = availableCounts; this.entries = entries; this.sourceTaskId = sourceTaskId; this.outputDir = outputDir;
       this.publishedSignature = '';
-      await this.acceptSnapshot({ ...snapshot, provider:snapshot.provider || provider, image_kinds:snapshot.image_kinds || imageKinds, image_limits:imageLimits }, snapshot.id);
+      if (this.client.snapshotCurrent?.(snapshot) === false) {
+        // Admission already happened. Keep locally frozen ownership so a newer
+        // denial cannot orphan owed results or permit a duplicate start. Only a
+        // fresh state response may publish the native job's contents/license.
+        this.job = { id:snapshot.id, kind:'collector', source_task_id:sourceTaskId, status:'recovering', items:[], provider, image_kinds:imageKinds, image_limits:imageLimits };
+        this.persistOwnership(); this.emit();
+        await this.poll();
+        return;
+      }
+      await this.acceptSnapshot({ ...snapshot, provider:snapshot.provider || provider, image_kinds:snapshot.image_kinds || imageKinds, image_limits:imageLimits }, snapshot.id, snapshot);
       if (!this.current(epoch)) return;
       this.persistOwnership(); this.emit();
     });
@@ -332,7 +351,7 @@ export class ConversionController {
     try {
       const snapshot = await this.client.request(`state?job_id=${encodeURIComponent(jobId)}`);
       if (this.current(epoch) && this.job?.id === jobId) {
-        await this.acceptSnapshot(snapshot, jobId);
+        if (await this.acceptSnapshot(snapshot, jobId) === false) return;
         if (!this.current(epoch) || this.job?.id !== jobId) return;
         this.error = ''; this.emit();
       }
@@ -349,7 +368,7 @@ export class ConversionController {
       if (conversionActionNeedsLicense(job,action,index)) await this.requireLicense({refresh:true});
       if (!this.current(epoch)) return;
       const snapshot = await this.client.request('action', { body: { job_id: job?.id || null, source_task_id: this.sourceTaskId || taskId || null, action, ...(index === undefined ? {} : { index }), ...(paidRedo ? {paid_confirmed:true} : {}) } });
-      if (this.current(epoch) && job && this.job?.id === job.id) { await this.acceptSnapshot(snapshot, job.id); if (this.current(epoch) && this.job?.id === job.id) this.emit(); }
+      if (this.current(epoch) && job && this.job?.id === job.id) { if (await this.acceptSnapshot(snapshot, job.id) === false) return; if (this.current(epoch) && this.job?.id === job.id) this.emit(); }
     });
   }
   async clear() {
