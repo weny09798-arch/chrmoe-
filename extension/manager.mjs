@@ -7,6 +7,7 @@ import { productImage, removeProduct, prepareRefill } from './lib/products.mjs';
 import { createRefillScheduler } from './lib/refill.mjs';
 import { createConversionPanel } from './conversion-ui.mjs';
 import { mergeImageReplacements } from './lib/image-conversion.mjs';
+import { licenseError } from './lib/licensing.mjs';
 
 const $ = id => document.getElementById(id);
 const installed = Boolean(globalThis.chrome?.runtime?.id);
@@ -44,6 +45,7 @@ const refillScheduler = createRefillScheduler({
       catch (error) { auto = false; licenseHeld = true; task.status = 'paused'; task.licenseMessage = error.message; notice(error.message,'error'); }
     }
     if (!isCurrent() || clearing || lockedOut || !task) return;
+    auto = auto && !licenseHeld && refillAuto;
     prepareRequestedRefills(!auto);
     if (auto) task.status = 'pending';
     await saveTask(task);
@@ -59,6 +61,12 @@ const refillScheduler = createRefillScheduler({
     }
     notice(`补搜准备失败：${error.message}，当前结果仍可导出，请点击继续。`, 'error'); renderTask();
   }
+});
+conversion.subscribeLicense(status => {
+  if (status?.allowed === true || (!busy && !refillWaiting)) return;
+  licenseHeld = true;
+  if (pendingResume) pendingResume.licenseDenial ||= licenseError(status);
+  if (refillWaiting) { refillAuto = false; if (!busy && task) task.status = 'paused'; }
 });
 function prepareRequestedRefills(hold = false) {
   for (const job of task?.jobs || []) if (prepareRefill(job) && hold) {
@@ -226,10 +234,11 @@ async function execute() {
   const running = (async () => {
     await conversion.requireLicense({refresh:true});
     if (request.cancelled || clearing || lockedOut || task !== current) return;
+    if (request.licenseDenial) throw request.licenseDenial;
     licenseHeld = false; delete task.licenseMessage;
     cancelRefill(); prepareRequestedRefills();
     pendingResume = null;
-    runner = new Runner(task, {...browserPorts({save:saveTask,update:renderTask}),authorize:() => conversion.requireLicense()});
+    runner = new Runner(task, {...browserPorts({save:saveTask,update:renderTask}),authorize:() => conversion.requireLicense(),subscribeLicense:listener => conversion.subscribeLicense(listener)});
     await runner.run();
   })(); activeRun = running;
   try {

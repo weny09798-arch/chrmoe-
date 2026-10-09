@@ -311,6 +311,32 @@ test('expired collection remains paused after successful monthly activation unti
   assert.equal(f.saved.task.status,'paused');assert.equal(f.tabCreates,0);assert.match(f.document.getElementById('license-status').textContent,/有效/);
   f.click('resume');await tick();await tick();assert.equal(f.tabCreates,1);assert.ok(calls.some(url=>url.endsWith('/license/refresh')));
 });
+test('manager wires panel-observed denial to its active Runner even when activation restores allowance before detail completion',async()=>{
+  const nativeFetch=globalThis.fetch,originalRun=Runner.prototype.run;let license=licensedStatus,announce,finish;
+  const entered=new Promise(resolve=>{announce=resolve;}),pending=new Promise(resolve=>{finish=resolve;});const details=[];
+  globalThis.fetch=async(url,options)=>url.includes('/license/')?{ok:true,json:async()=>license}:nativeFetch(url,options);
+  Runner.prototype.run=function(){this.ports.enrich=async item=>{details.push(item.id);if(details.length===1){announce();return pending;}return {descriptionText:'手动继续的第二件详情'};};return originalRun.call(this);};
+  try {
+    const f=await managerFixture(task=>{const job=task.jobs[0];job.site='1688';job.phase='detail';job.searchStatus='done';job.limit=2;job.groups=['1','2'].map(id=>({best:{id,title:'相机'+id,cents:100,detailStatus:'pending'}}));});
+    f.click('resume');await entered;
+    license={allowed:false,status:'expired',message:'授权已到期'};f.click('license-refresh');await tick();
+    license=licensedStatus;f.document.getElementById('license-code').value='activation-after-admin-renewal';f.click('license-activate');await tick();
+    assert.match(f.document.getElementById('license-status').textContent,/有效/);finish({descriptionText:'已经提交并保存的第一件详情'});
+    for(let i=0;i<5;i++)await tick();assert.deepEqual(details,['1']);assert.equal(f.saved.task.status,'paused');
+    assert.equal(f.saved.task.jobs[0].groups[0].best.descriptionText,'已经提交并保存的第一件详情');assert.equal(f.saved.task.jobs[0].groups[1].best.detailStatus,'pending');assert.equal(f.document.getElementById('resume').hidden,false);
+    f.click('resume');for(let i=0;i<5;i++)await tick();assert.deepEqual(details,['1','2']);assert.equal(f.saved.task.status,'done');
+  } finally {finish({descriptionText:'测试结束保存'});Runner.prototype.run=originalRun;}
+});
+test('panel denial during pending collection authorization cannot be overwritten by an earlier allowed response',async()=>{
+  const nativeFetch=globalThis.fetch;let license=licensedStatus,release,announce,refreshes=0;
+  const entered=new Promise(resolve=>{announce=resolve;}),pending=new Promise(resolve=>{release=resolve;});
+  globalThis.fetch=async(url,options)=>{if(url.endsWith('/license/refresh')&&refreshes++===0){announce();return pending;}return url.includes('/license/')?{ok:true,json:async()=>license}:nativeFetch(url,options);};
+  const f=await managerFixture();f.click('resume');await entered;
+  license={allowed:false,status:'expired',message:'授权到期'};f.click('license-refresh');await tick();license=licensedStatus;
+  f.document.getElementById('license-code').value='active-again';f.click('license-activate');await tick();release({ok:true,json:async()=>licensedStatus});
+  for(let i=0;i<4;i++)await tick();assert.equal(f.tabCreates,0);assert.equal(f.saved.task.status,'paused');assert.equal(f.document.getElementById('resume').hidden,false);
+  f.click('resume');await tick();await tick();assert.equal(f.tabCreates,1);
+});
 test('expired deletion saves remaining products and replacement links but refill waits manual renewal',async()=>{
   const oldTimer=globalThis.setTimeout,oldClear=globalThis.clearTimeout,timers=new Map();let sequence=0,license=licensedStatus;const nativeFetch=globalThis.fetch;
   globalThis.setTimeout=fn=>{timers.set(++sequence,fn);return sequence;};globalThis.clearTimeout=id=>timers.delete(id);

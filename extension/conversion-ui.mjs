@@ -213,6 +213,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     controller, refresh: render,
     requireLicense(options) { return controller.requireLicense(options); },
     checkLicense(options) { return controller.checkLicense(options); },
+    subscribeLicense(listener) { return controller.subscribeLicense(listener); },
     recover(task) { return controller.restoreForTask(task); },
     clear() { stopPoll(); message(''); return controller.clear(); },
     removeProduct(taskId, platform, productId) { return controller.removeProduct(taskId,platform,productId); },

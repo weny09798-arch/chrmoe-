@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { parseHTML } from 'linkedom';
 import { createTask } from '../extension/lib/core.mjs';
 import { createConversionPanel } from '../extension/conversion-ui.mjs';
+import { Runner } from '../extension/lib/runner.mjs';
 
 const html = await readFile(new URL('../extension/manager.html', import.meta.url), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -41,7 +42,7 @@ function fixture({configured=true,ossConfigured=true,replacement=true,cloudStora
     return {id:'job-1',kind:'collector',source_task_id:task.id,status,license,provider:batch.provider||'doubao',image_kinds:batch.image_kinds||['main','detail','sku'],paid_calls:batch.provider==='aliyun'?1:0,estimated_cost_upper:batch.provider==='aliyun'?groups.size*0.06:0,counts:{total:entries.length,unique:groups.size,downloaded:groups.size,converted:0,failed:1},items:[...groups.values()].map((refs,index)=>({index,...itemState,input_path:'input.png',refs}))};
   };
   const panel=createConversionPanel({document,extensionId:'test-extension',storage:{getItem:key=>saved.get(key),setItem:(key,val)=>saved.set(key,val),removeItem:key=>saved.delete(key)},getCollection:()=>({task,collecting,unavailable:false}),
-    fetch:async(url,options)=>{requests.push({url,options});if(fetchOverride)return fetchOverride(url,options);const body=options.body&&JSON.parse(options.body);let value=url.includes('/license/')?licensedStatus:{};if(url.endsWith('/capabilities'))value={licensing:true,providers:['doubao','aliyun'],oss_configured:ossConfigured,image_link_replacement:replacement,cloud_image_storage:cloudStorage,image_type_limits:true,aliyun_configured:configured,aliyun_price_per_image:0.06};if(url.endsWith('/folder'))value={path:'D:\\图片'};if(url.endsWith('/jobs'))batch=body;if(url.endsWith('/jobs')||url.includes('/state'))value=snapshot();if(url.endsWith('/action')){actions.push(body);if(body.action==='continue')status='running';if(body.action==='stop')status='paused';value=snapshot();}return {ok:true,json:async()=>value,blob:async()=>new Blob(['preview'])};},
+    fetch:async(url,options)=>{requests.push({url,options});if(fetchOverride)return fetchOverride(url,options);const body=options.body&&JSON.parse(options.body);let value=url.includes('/license/')?license:{};if(url.endsWith('/capabilities'))value={licensing:true,providers:['doubao','aliyun'],oss_configured:ossConfigured,image_link_replacement:replacement,cloud_image_storage:cloudStorage,image_type_limits:true,aliyun_configured:configured,aliyun_price_per_image:0.06};if(url.endsWith('/folder'))value={path:'D:\\图片'};if(url.endsWith('/jobs'))batch=body;if(url.endsWith('/jobs')||url.includes('/state'))value=snapshot();if(url.endsWith('/action')){actions.push(body);if(body.action==='continue')status='running';if(body.action==='stop')status='paused';value=snapshot();}return {ok:true,json:async()=>value,blob:async()=>new Blob(['preview'])};},
     setTimer:callback=>{timers.push(callback);return timers.length;},clearTimer:()=>{},download:async()=>{},confirm
   });
   const click=id=>document.getElementById(id).dispatchEvent(new window.Event('click'));
@@ -55,6 +56,37 @@ test('expired license still offers existing-result continuation and retry while 
   assert.equal(f.document.getElementById('conversion-continue').disabled,false);
   const retry=f.document.querySelector('[data-conversion-action="retry"]'),redo=f.document.querySelector('[data-conversion-action="redo"]');
   assert.equal(retry.disabled,false);assert.equal(redo.disabled,true);retry.dispatchEvent(new f.window.Event('click'));await tick();assert.equal(f.actions[0].action,'retry');
+});
+
+for(const observation of ['panel refresh','activation','snapshot','native 423','connection loss','connection reset'])test(`observed ${observation} denial survives renewal before in-flight detail finishes`,async()=>{
+  const f=fixture();await connectFolder(f);
+  const job=f.task.jobs[0];f.task.status='paused';job.site='1688';job.status='paused';job.phase='detail';job.searchStatus='done';
+  job.groups[0].best.detailStatus='pending';job.groups.push({best:{id:'102',title:'第二个玻璃杯',cents:200,detailStatus:'pending'}});f.setCollecting(true);
+  let entered,finish;const started=new Promise(resolve=>{entered=resolve;}),pending=new Promise(resolve=>{finish=resolve;});const details=[],saved=[];
+  const p={authorize:()=>f.panel.requireLicense(),subscribeLicense:listener=>f.panel.subscribeLicense?.(listener),save:async task=>saved.push(structuredClone(task)),update(){},close:async()=>{},setTimer:()=>1,clearTimer:()=>{},enrich:async item=>{details.push(item.id);entered();return pending;}};
+  const runner=new Runner(f.task,p),running=runner.run();await started;
+  const denied={allowed:false,status:'expired',message:'授权已到期'};f.setLicense(denied);
+  if(['snapshot','native 423','connection loss'].includes(observation)){
+    f.panel.controller.sourceTaskId=f.task.id;f.panel.controller.job={id:'job-1',kind:'collector',source_task_id:f.task.id,status:'paused',items:[]};
+  }
+  if(observation==='panel refresh'){f.click('license-refresh');await tick();}
+  if(observation==='activation'){f.document.getElementById('license-code').value='denied-code';f.click('license-activate');await tick();}
+  if(observation==='snapshot')await f.panel.controller.poll();
+  if(observation==='native 423'){
+    f.setFetch(async()=>({ok:false,status:423,json:async()=>({license:denied})}));await assert.rejects(f.panel.controller.action('retry-upload',0),/到期/);f.setFetch(null);
+  }
+  if(observation==='connection loss'){f.setFetch(async()=>{throw new Error('closed');});await f.panel.controller.poll();f.setFetch(null);}
+  if(observation==='connection reset')await f.panel.controller.connect('http://localhost:53122/#token=new-pair');
+  f.setLicense(licensedStatus);f.document.getElementById('license-code').value='activated-after-owner-renewal';f.click('license-activate');await tick();
+  assert.equal(f.panel.controller.view().license.allowed,true);assert.deepEqual(details,['101']);
+  finish({descriptionText:'已保存的当前商品详情'});await running;
+  assert.deepEqual(details,['101'],observation);assert.equal(f.task.status,'paused');assert.equal(job.status,'paused');
+  assert.equal(job.groups[0].best.detailStatus,'done');assert.equal(job.groups[0].best.descriptionText,'已保存的当前商品详情');
+  assert.equal(job.groups[1].best.detailStatus,'pending');assert.ok(saved.some(task=>task.jobs[0].groups[0].best.descriptionText==='已保存的当前商品详情'));
+  await f.panel.requireLicense({refresh:true});p.enrich=async item=>{details.push(item.id);return {descriptionText:'手动继续后的详情'};};await runner.run();
+  assert.deepEqual(details,['101','102']);assert.equal(f.task.status,'done');
+  // A completed runner must no longer receive shared observations.
+  const previous=runner.licenseStop;f.setLicense(denied);await f.panel.checkLicense();assert.equal(runner.licenseStop,previous);f.panel.dispose();
 });
 
 test('new batch requires configured OSS and offers an actionable configuration or upgrade explanation',async()=>{

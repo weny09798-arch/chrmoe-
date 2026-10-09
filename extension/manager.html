@@ -49,9 +49,9 @@
           <p class="muted">每次运行先打开本地图片工具，复制连接码后粘贴。连接信息只保存在当前管理页会话。</p>
           <fieldset class="conversion-options"><legend>月度授权 · 采集与图片生成</legend>
             <label for="license-code">月度授权码</label>
-            <div class="input-group"><input id="license-code" type="password" autocomplete="off" spellcheck="false" placeholder="输入购买的月度授权码"><button id="license-activate" class="button" type="button">激活 / 续期</button><button id="license-refresh" class="button subtle" type="button">刷新授权</button></div>
+            <div class="input-group"><input id="license-code" type="password" autocomplete="off" spellcheck="false" placeholder="输入购买的月度授权码"><button id="license-activate" class="button" type="button">激活授权</button><button id="license-refresh" class="button subtle" type="button">刷新授权</button></div>
             <p id="license-status" role="status" aria-live="polite">请连接本地工具检查授权。</p><p id="license-expiry" class="muted"></p>
-            <p class="muted">授权码用于此电脑的月度授权；连接码用于连接本地工具。OSS 和阿里云配置在本地工具中管理。首次激活 30 天，续期增加 30 天；续期后请手动继续任务。已有结果始终可查看、删除和导出。</p>
+            <p class="muted">授权码用于此电脑的月度授权；连接码用于连接本地工具。OSS 和阿里云配置在本地工具中管理。首次激活 30 天；续期由管理员增加 30 天，完成后请刷新授权并手动继续任务。已有结果始终可查看、删除和导出。</p>
           </fieldset>
           <fieldset class="conversion-options"><legend>转换图片类型</legend><label><input id="conversion-kind-main" type="checkbox" checked> 主图</label><label>数量 <input id="conversion-limit-main" type="number" min="1" step="1" placeholder="不限" aria-label="主图数量" style="width:6em"></label><label><input id="conversion-kind-detail" type="checkbox" checked> 详情图</label><label>数量 <input id="conversion-limit-detail" type="number" min="1" step="1" placeholder="不限" aria-label="详情图数量" style="width:6em"></label><label><input id="conversion-kind-sku" type="checkbox" checked> SKU 图</label><label>数量 <input id="conversion-limit-sku" type="number" min="1" step="1" placeholder="不限" aria-label="SKU 图数量" style="width:6em"></label></fieldset>
           <p class="muted">数量留空表示不限；各类型按整批商品顺序选取前 N 个图片位置，相同 URL 也占数量，生成时再去重。未选位置保留原图或此前已替换链接。</p>

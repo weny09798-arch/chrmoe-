@@ -47,6 +47,9 @@ export class Runner {
   async run() {
     if (this.running) return;
     this.running = true; this.intent = ''; this.licenseStop = null; this.task.status = 'running';
+    const unsubscribeLicense = this.ports.subscribeLicense?.(status => {
+      if (this.running && status?.allowed !== true) this.licenseStop ||= licenseError(status);
+    });
     this.scheduleLicensePoll();
     try {
       await this.checkpoint();
@@ -86,6 +89,7 @@ export class Runner {
       } else if (this.task.status !== 'blocked') this.task.status = this.task.jobs.some(j => j.status === 'error') ? 'error' : 'done';
       await this.checkpoint();
     } finally {
+      unsubscribeLicense?.();
       if (this.licenseTimer != null) (this.ports.clearTimer || globalThis.clearTimeout)(this.licenseTimer);
       await this.ports.close?.({ preserveBlocked: this.task.status === 'blocked' });
       this.running = false; this.ports.update(this.task);

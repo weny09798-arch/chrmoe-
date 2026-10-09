@@ -103,7 +103,7 @@ export function conversionActionNeedsLicense(job, action, index) {
 }
 export class BridgeClient {
   constructor({ extensionId, fetch = globalThis.fetch?.bind(globalThis), storage = globalThis.sessionStorage } = {}) {
-    this.extensionId = extensionId; this.fetch = fetch; this.storage = storage; this.connection = null;
+    this.extensionId = extensionId; this.fetch = fetch; this.storage = storage; this.connection = null; this.denialListeners = new Set();
     try {
       const saved = JSON.parse(storage?.getItem(SESSION_KEY) || 'null');
       if (saved) this.connection = parseConnectionCode(`${saved.baseUrl}/#token=${encodeURIComponent(saved.token)}`);
@@ -113,21 +113,32 @@ export class BridgeClient {
     this.connection = connection;
     this.storage?.setItem(SESSION_KEY, JSON.stringify(connection));
   }
+  subscribeDenial(listener) { this.denialListeners.add(listener); return () => this.denialListeners.delete(listener); }
+  reportDenial(status, connection) { if (connection === this.connection) for (const listener of this.denialListeners) listener(status); }
   async request(route, { body, blob = false, connection = this.connection } = {}) {
-    if (!connection || !this.extensionId) throw new Error('请先在 Chrome 扩展中连接本地图片工具。');
+    if (!connection || !this.extensionId) {
+      const message = '请先在 Chrome 扩展中连接本地图片工具。';
+      this.reportDenial({allowed:false,status:'disconnected',message},connection); throw new Error(message);
+    }
     const headers = { 'X-Tool-Token': connection.token, 'X-Extension-Id': this.extensionId };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     let response;
     try { response = await this.fetch(`${connection.baseUrl}/api/bridge/${route}`, { method: body === undefined ? 'GET' : 'POST', headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), cache: 'no-store', redirect: 'error', credentials: 'omit' }); }
-    catch { throw new Error('无法连接本地图片工具，请确认工具仍在运行并重新复制连接码。'); }
+    catch {
+      const message = '无法连接本地图片工具，请确认工具仍在运行并重新复制连接码。';
+      this.reportDenial({allowed:false,status:'disconnected',message},connection); throw new Error(message);
+    }
     if (!response.ok) {
       if (response.status === 423) {
         const value = await response.json().catch(() => ({}));
-        const error = licenseError(value.license); error.status = 423; throw error;
+        const denied = {...value.license,allowed:false};
+        this.reportDenial(denied,connection);
+        const error = licenseError(denied); error.status = 423; throw error;
       }
       // Never surface a server URL/body that could accidentally include credentials.
       const messages = {401:'连接码已失效，请重新连接。',403:'本地工具未授权此扩展，请使用同一管理页的连接码重新连接。',409:'本地工具正在处理其他任务，或任务已失效，请先在工具中处理。',404:'本地任务或图片尚不可用。'};
       const error = new Error(messages[response.status] || `本地工具请求失败（${response.status}）。`);
+      if ([401,403].includes(response.status)) this.reportDenial({allowed:false,status:'disconnected',message:error.message},connection);
       error.status = response.status; throw error;
     }
     return blob ? response.blob() : response.json();
@@ -177,6 +188,7 @@ export class ConversionController {
   }
   checkLicense(options) { return this.licenseAuthority.check(options); }
   activateLicense(code) { return this.licenseAuthority.activate(code); }
+  subscribeLicense(listener) { return this.licenseAuthority.subscribe(listener); }
   async readCapabilities(connection) {
     try { return await this.client.request('capabilities', { connection }); }
     catch (error) { if (error.status === 404) return { providers:['doubao'], legacy:true, aliyun_configured:false, aliyun_price_per_image:0.06 }; throw error; }
@@ -223,7 +235,7 @@ export class ConversionController {
     const epoch = this.epoch;
     this.working = true; this.error = ''; this.emit();
     try { return await operation(epoch); }
-    catch (error) { if (this.current(epoch)) { if (error.licenseDenied && error.license) this.licenseAuthority.accept(error.license); this.error = error.message; this.emit(); } throw error; }
+    catch (error) { if (this.current(epoch)) { if (error.licenseDenied && error.license && this.licenseAuthority.status !== error.license) this.licenseAuthority.accept(error.license); this.error = error.message; this.emit(); } throw error; }
     finally { if (this.current(epoch)) { this.working = false; this.emit(); } }
   }
   async connect(code) {

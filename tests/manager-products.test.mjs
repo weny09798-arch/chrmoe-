@@ -124,3 +124,16 @@ test('automatic refill after a running deletion resumes despite its own temporar
     for(let i=0;i<8;i++)await tick();assert.equal(f.tabCreates,2);
   } finally {f.cleanup();}
 });
+test('panel denial while refill authorization awaits remains paused after renewal and an older allowed response',async()=>{
+  const nativeFetch=globalThis.fetch;let license={allowed:true,status:'active',message:'授权有效'},release,announce,refreshes=0;
+  const entered=new Promise(resolve=>{announce=resolve;}),pending=new Promise(resolve=>{release=resolve;});
+  globalThis.fetch=async(url,options)=>{if(url.endsWith('/license/refresh')&&refreshes++===0){announce();return pending;}return url.includes('/license/')?{ok:true,json:async()=>license}:nativeFetch(url,options);};
+  const f=await fixture();
+  try {
+    f.remove('1');f.fire();await entered;license={allowed:false,status:'expired',message:'授权到期'};
+    f.click('license-refresh');await tick();license={allowed:true,status:'active',message:'授权有效'};
+    f.document.getElementById('license-code').value='active-again';f.click('license-activate');await tick();release({ok:true,json:async()=>license});
+    for(let i=0;i<5;i++)await tick();assert.equal(f.tabCreates,0);assert.equal(f.saved.task.status,'paused');assert.equal(f.document.getElementById('resume').hidden,false);
+    assert.deepEqual(f.saved.task.jobs[0].groups.map(group=>group.best.id),['2']);f.click('resume');await tick();await tick();assert.equal(f.tabCreates,1);
+  } finally {release({ok:true,json:async()=>license});f.cleanup();}
+});

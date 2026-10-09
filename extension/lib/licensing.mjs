@@ -5,10 +5,18 @@ export function licenseError(license, fallback = '授权不可用，请连接本
 }
 
 export class LicenseAuthority {
-  constructor({ client, onChange = () => {} }) { this.client = client; this.onChange = onChange; this.status = null; this.capabilities = null; this.revision = 0; }
-  reset(capabilities = null) { ++this.revision; this.capabilities = capabilities; this.status = null; this.onChange(); }
+  constructor({ client, onChange = () => {} }) {
+    this.client = client; this.onChange = onChange; this.status = null; this.capabilities = null; this.revision = 0; this.listeners = new Set();
+    client.subscribeDenial(status => this.accept(status));
+  }
+  reset(capabilities = null) { ++this.revision; this.capabilities = capabilities; this.accept({allowed:false,status:'unavailable',message:'本地工具授权状态待检查，请检查授权后手动继续采集。'}); }
   invalidate() { ++this.revision; }
-  accept(status) { this.status = status && typeof status === 'object' ? status : {allowed:false,status:'unavailable'}; this.onChange(); return this.status; }
+  subscribe(listener) { this.listeners.add(listener); if (this.status) listener(this.status); return () => this.listeners.delete(listener); }
+  accept(status) {
+    this.status = status && typeof status === 'object' ? status : {allowed:false,status:'unavailable'};
+    for (const listener of this.listeners) listener(this.status);
+    this.onChange(); return this.status;
+  }
   async check({ refresh = false, code } = {}) {
     const revision = this.revision, connection = this.client.connection;
     try {
