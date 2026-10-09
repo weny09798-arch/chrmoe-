@@ -1,4 +1,8 @@
-# 本机图片繁体转换工具 1.6.4
+# 本机图片繁体转换工具 1.7.0（部署验收待完成）
+
+源码版本 1.7.0 新增绑定单台 Windows 电脑的 30 天软件授权。首次激活开始计时，续费从当前时间与到期时间的较大值追加 30 天。授权码独立于 RAM/阿里云/OSS 密钥；所有用户含所有者均需授权。到期、停用或解绑后停止新采集与生成，已提交图片可继续保存/上传，已有结果可查看、导出；续费不会自动继续任务。
+
+目前没有正式授权域名或服务，默认构建锁定。原交付目录中的可用 1.6.4 保持原状。激活步骤见 [客户授权说明](../docs/月度授权客户激活说明.md)，部署、构建及尚未完成的验收见 [月度授权部署与验收](../docs/月度授权部署与验收.md)。
 
 Windows 10/11 64 位工具。支持免费豆包网页和阿里云电商图片翻译。豆包模式需安装 Google Chrome 并手动登录；阿里云模式不需要打开豆包或 Chrome。
 
@@ -46,7 +50,7 @@ Windows 10/11 64 位工具。支持免费豆包网页和阿里云电商图片翻
 
 ## 从源码运行与构建
 
-安装 Python 3.12 64 位，创建虚拟环境，运行 `python -m pip install -r requirements.txt`，再运行 `python run.py`。依赖按 requirements 固定版本安装。构建另外安装 PyInstaller 6.22.3，运行 `powershell -ExecutionPolicy Bypass -File build.ps1 -Python <虚拟环境的python.exe>`。构建目录默认为上一级 `artifacts\doubao-portable\DoubaoImageTool`。`--help` 显示参数；`--no-open` 可启动服务而不打开页面，仅用于检查；Chrome 始终等到用户点击或提交才启动。
+安装 Python 3.12 64 位，创建虚拟环境，运行 `python -m pip install -r requirements.txt`。依赖按 requirements 固定版本安装，包括直接用于授权的 cryptography 和 requests。未配置授权时运行工具保持锁定。构建使用 `build.ps1 -Python <虚拟环境的python.exe> -EvaluationLocked` 生成明确标识的隔离锁定评估包；正式候选构建必须提供 `-PublicConfig <仅包含 server_url/public_key 的 JSON>`，缺失或不安全配置在打包前失败。仅允许写入本工作树 `artifacts/` 下的新目录，不覆盖旧包、不生成客户 ZIP。重新构建应使用源码仓库中的构建脚本；包内只附运行源码白名单。详见部署与验收文档。`--state-dir` 可指定隔离配置目录；评估不得使用默认 `%LOCALAPPDATA%\DoubaoImageTool`。Chrome 等到用户点击或提交才启动。
 
 便携目录包含 exe、运行依赖、web 页面、source 源码、说明和 licenses；不包含浏览器程序、模型、用户图片、测试图片、缓存或登录资料。复制整目录到另一台电脑时，该电脑需自己登录。
 

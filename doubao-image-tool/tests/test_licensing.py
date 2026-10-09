@@ -173,6 +173,26 @@ def test_offline_permission_never_passes_exact_license_expiry(rig):
     assert authority.status().state == 'expired'
 
 
+@pytest.mark.parametrize('bound,advance,state', [(100,79,'expired'),(2592000,86379,'lease_expired')])
+def test_response_round_trip_time_cannot_extend_signed_expiry_or_24h_lease(rig,bound,advance,state):
+    create,clock,store,service=rig
+    service.expiry=1800000000+bound
+    request=service.request
+    def delayed(*args):
+        response=request(*args)
+        clock.advance(20)
+        return response
+    service.request=delayed
+    authority=create()
+    assert authority.activate('isolated-delayed-response-code-1234567890').allowed
+    assert store.value['server_time']==1800000020
+    service.result='outage'
+    clock.advance(advance)
+    assert authority.refresh().allowed
+    clock.advance(1)
+    assert authority.status().state==state
+
+
 @pytest.mark.parametrize('denial', ['disabled', 'unbound', 'unknown_code', 'device_mismatch', 'expired'])
 def test_explicit_denial_irrevocably_clears_cache_but_preserves_code(rig, denial):
     authority = activate(rig)

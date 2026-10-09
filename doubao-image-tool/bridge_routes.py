@@ -96,7 +96,7 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
 
     @app.get('/api/bridge/capabilities')
     def capabilities():
-        return jsonify(licensing=True,version='1.6.4',cloud_image_storage=True,image_type_limits=True,providers=['doubao','aliyun'],image_kinds=['main','detail','sku'],
+        return jsonify(licensing=True,version='1.7.0',cloud_image_storage=True,image_type_limits=True,providers=['doubao','aliyun'],image_kinds=['main','detail','sku'],
                        **(credential_status() if credential_status else {'aliyun_configured':False,'aliyun_price_per_image':0.06}))
 
     @app.get('/api/bridge/license/status', endpoint='bridge_license_status')

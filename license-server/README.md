@@ -4,6 +4,13 @@ This is the standalone monthly licensing backend for version 1.7.0. It has no
 production URL or credentials. Do not place this directory or private state in
 customer packages. Protocol and client verification rules are in [PROTOCOL.md](PROTOCOL.md).
 
+Owner deployment, backup/restore, lost credential/key procedures and the exact
+remaining acceptance checklist are in [月度授权部署与验收](../docs/月度授权部署与验收.md).
+Client licensing is independent of RAM, translation and OSS accounts. Local
+evaluation uses ephemeral injected loopback configuration only; the frozen
+evaluation executable stays unconfigured/locked. No production deployment or
+two-physical-computer acceptance has been performed.
+
 ## Initialize private state
 
 Use a separate virtual environment and install `requirements.txt`. From this

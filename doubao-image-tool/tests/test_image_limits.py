@@ -152,7 +152,7 @@ def test_bridge_passes_limits_and_rejects_invalid_before_start(tmp_path, monkeyp
         with app.test_client() as client:
             pair(client)
             capabilities = client.get('/api/bridge/capabilities', headers=HEADERS).json
-            assert capabilities['version'] == '1.6.4' and capabilities['image_type_limits'] is True
+            assert capabilities['version'] == '1.7.0' and capabilities['image_type_limits'] is True
             payload = {'source_task_id': 'task', 'entries': [entry(), {**entry(), 'order': 2}], 'image_limits': {'main': 0}}
             assert client.post('/api/bridge/jobs', headers=HEADERS, json=payload).status_code == 400
             assert app.extensions['queue'].snapshot()['status'] == 'idle'

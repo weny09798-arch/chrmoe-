@@ -109,3 +109,24 @@ test('limited batch accepts only selected published positions in XLSX and XLS wh
   assert.equal(sheet.I10.v,published);assert.equal(sheet.S10.v,published);assert.equal(sheet.S11.v,'https://bucket.oss-cn-shanghai.aliyuncs.com/old.png');
  }
 });
+
+for(const deniedState of ['expired','native-closed'])test(`partial XLS and XLSX remain exportable after ${deniedState} with saved SKU mappings`,async()=>{
+ const task=fixture(),before=structuredClone(task),entries=buildImageManifest(task);
+ const f=await controllerFixture(task,{onReplacements:async(_,refs)=>mergeImageReplacements(task,refs)});
+ const refs=[entries[0],entries.find(ref=>ref.kind==='sku'&&ref.order===2)].map(ref=>({...ref,published_url:published}));
+ f.setSnapshot({id:'batch',kind:'collector',source_task_id:task.id,status:'paused',items:[{status:'completed',refs},{status:'failed',refs:[entries[1]]}]});
+ await f.controller.poll();
+ if(deniedState==='expired')f.controller.licenseAuthority.accept({allowed:false,status:'expired'});
+ else {f.client.fetch=async()=>{throw new Error('本地工具已关闭');};await assert.rejects(f.controller.checkLicense());}
+ assert.equal(f.controller.view().license.allowed,false);
+ for(const bytes of [workbookBytes(taskSheets(task)),workbookXlsBytes(taskSheets(task),XLSX)]){
+  const workbook=XLSX.read(bytes,{type:'array'}),sheet=workbook.Sheets['模版'];
+  assert.equal(XLSX.utils.decode_range(sheet['!ref']).e.c,21);
+  assert.equal(sheet.D10.v,published+'，https://img.example/b.jpg');assert.equal(sheet.I10.v,original);
+  assert.equal(sheet.S10.v,original);assert.equal(sheet.S11.v,published);assert.equal(sheet.D12.v,original);
+  assert.equal(sheet.B10.v,'玻璃杯');assert.equal(sheet.R10.v,'15.00');assert.equal(sheet.R11.v,'16.00');
+  assert.equal(sheet.Q11.v,'duplicate');assert.equal(sheet.O11.v,'蓝');
+  assert.deepEqual(sheet['!merges'],[{s:{r:0,c:0},e:{r:7,c:11}}]);
+ }
+ assert.deepEqual(task.jobs,before.jobs);
+});
