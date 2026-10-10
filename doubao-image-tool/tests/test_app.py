@@ -91,7 +91,7 @@ def test_default_redesign_options_are_off(client):
             values=dict(attrs)
             if tag=='input' and values.get('type')=='checkbox': self.inputs[values['id']]=values
     parser=Inputs();parser.feed(client.get('/').get_data(as_text=True))
-    assert set(parser.inputs)=={'background','typography'}
+    assert set(parser.inputs)=={'background','typography','translate-product-text'}
     assert all('checked' not in attrs for attrs in parser.inputs.values())
 
 @pytest.mark.parametrize('background,typography', [(False,False),(True,False),(False,True),(True,True)])

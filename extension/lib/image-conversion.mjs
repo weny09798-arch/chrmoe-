@@ -246,6 +246,8 @@ export class ConversionController {
     const imageKinds = Object.freeze([...new Set(options.imageKinds ?? ['main','detail','sku'])]);
     if (!imageKinds.length) throw new Error('请至少选择一种图片类型。');
     const provider = options.provider ?? 'doubao', paidConfirmed = options.paidConfirmed === true;
+    const translateProductText = options.translateProductText ?? false;
+    if (typeof translateProductText !== 'boolean') throw new Error('商品及包装文字设置无效。');
     if (!['doubao','aliyun'].includes(provider)) throw new Error('图片转换模式无效。');
     if (provider === 'aliyun' && !paidConfirmed) throw new Error('请确认付费后开始阿里云转换。');
     const imageLimits = normalizeImageLimits(imageKinds,options.imageLimits);
@@ -253,7 +255,7 @@ export class ConversionController {
     if (!entries.length) throw new Error('当前可导出的商品没有图片。');
     const sourceTaskId = task.id, connection = this.client.connection;
     this.currentTask = task;
-    this.pendingSource = { id: sourceTaskId, entries, imageKinds, imageLimits, provider, availableCounts };
+    this.pendingSource = { id: sourceTaskId, entries, imageKinds, imageLimits, provider, availableCounts, translateProductText };
     return this.guarded(async epoch => {
       let snapshot;
       try {
@@ -266,11 +268,12 @@ export class ConversionController {
           if (capabilities.aliyun_configured !== true) throw new Error('请先在本地工具配置阿里云密钥，再刷新配置状态。');
         }
         if (Object.values(imageLimits).some(value => value !== null) && capabilities?.image_type_limits !== true) throw new Error('本地工具需升级到 1.6.4 或更新版本，才能限制图片数量。');
+        if (translateProductText && capabilities?.product_text_translation !== true) throw new Error('本地工具需升级到 1.6.5 或更新版本，才能转换商品及包装文字。');
         if (capabilities?.image_link_replacement !== true) throw new Error('本地工具需升级到支持 OSS 图片链接自动替换的版本。');
         if (capabilities.cloud_image_storage !== true) throw new Error('本地工具需升级到 1.6.3 或更新版本，才能直接保存到 OSS。');
         if (capabilities.oss_configured !== true) throw new Error('请先在本地工具配置 OSS，再刷新配置状态。');
         if (!this.current(epoch)) return;
-        snapshot = await this.client.request('jobs', { body: { source_task_id: sourceTaskId, cloud_only:true, entries, provider, image_kinds:imageKinds, image_limits:imageLimits, paid_confirmed:paidConfirmed }, connection });
+        snapshot = await this.client.request('jobs', { body: { source_task_id: sourceTaskId, cloud_only:true, entries, provider, image_kinds:imageKinds, image_limits:imageLimits, paid_confirmed:paidConfirmed, translate_product_text:translateProductText }, connection });
       }
       finally { if (this.current(epoch)) this.pendingSource = null; }
       if (!this.current(epoch)) {
@@ -280,7 +283,7 @@ export class ConversionController {
       if (snapshot?.kind !== 'collector' || snapshot.source_task_id !== sourceTaskId || !snapshot.id) throw new Error('本地任务与当前图片批次不一致，请在本地工具中检查。');
       this.availableCounts = availableCounts; this.entries = entries; this.sourceTaskId = sourceTaskId; this.outputDir = outputDir;
       this.publishedSignature = '';
-      await this.acceptSnapshot({ ...snapshot, provider:snapshot.provider || provider, image_kinds:snapshot.image_kinds || imageKinds, image_limits:imageLimits }, snapshot.id);
+      await this.acceptSnapshot({ ...snapshot, provider:snapshot.provider || provider, image_kinds:snapshot.image_kinds || imageKinds, image_limits:imageLimits, translate_product_text:snapshot.translate_product_text ?? translateProductText }, snapshot.id);
       if (!this.current(epoch)) return;
       this.persistOwnership(); this.emit();
     });

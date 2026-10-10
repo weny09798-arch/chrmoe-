@@ -29,6 +29,9 @@ function render(){
  const running=state?.status==='running', terminal=state?.status==='storage-error';
  document.querySelectorAll('button').forEach(b=>b.disabled=busy || terminal);
  $('start').disabled=busy||terminal||!$('files').files.length||(state?.id&&state.status!=='completed')||($('provider').value==='aliyun'&&!aliyunConfigured);
+ const fixedText=Boolean(state?.id&&state.status!=='completed');
+ $('translate-product-text').disabled=busy||terminal||fixedText;
+ if(fixedText)$('translate-product-text').checked=state.translate_product_text===true;
  $('stop').disabled=busy||terminal||!running;
  $('continue').disabled=busy||terminal||!state?.id||running||state.status==='completed'||state.items.some(i=>i.status==='needs-review'||i.phase==='uncertain');
  $('exit').disabled=busy; $('open').disabled=busy||terminal||state?.browser_busy;
@@ -38,7 +41,7 @@ function render(){
  $('oss-delete').disabled=busy||fixedTarget;$('oss-save').disabled=busy||running;
  $('oss-check').disabled=busy||running||!ossConfigured;
  $('oss-key-id').disabled=busy||$('oss-mode').value==='translation';$('oss-key-secret').disabled=busy||$('oss-mode').value==='translation';
- $('status').textContent= (statuses[state?.status]||'')+' · '+(state?.message||'')+(state?.provider==='aliyun'?` · 付费调用尝试 ${state.paid_calls||0} 次（含不确定请求），预计费用上限 ¥${Number(state.estimated_cost_upper||0).toFixed(2)}`:'');
+ $('status').textContent= (statuses[state?.status]||'')+' · '+(state?.message||'')+(state?.id?(state.translate_product_text===true?' · 广告、商品及包装文字转繁体':' · 仅广告文字转繁体，保护包装文字'):'')+(state?.provider==='aliyun'?` · 付费调用尝试 ${state.paid_calls||0} 次（含不确定请求），预计费用上限 ¥${Number(state.estimated_cost_upper||0).toFixed(2)}`:'');
  $('browser').textContent=state?.browser_message || state?.browser_stage || '';
  const items=state?.items||[]; $('progress').max=Math.max(1,items.length);$('progress').value=items.filter(i=>i.status==='completed').length;
  const keys = new Set();
@@ -145,7 +148,7 @@ $('start').onclick=()=>{
   if(!aliyunConfigured){$('error').textContent='请先配置阿里云 AccessKey';return;}
   if(!window.confirm(`阿里云图片翻译按 ¥0.06/张计费，本批预计费用上限 ¥${($('files').files.length*0.06).toFixed(2)}。图片将上传阿里云，实体保护不能保证包装文字不变，请逐张检查。确认付费开始？`))return;
  }
- return command(()=>{const form=new FormData();for(const f of $('files').files)form.append('files',f);form.append('output_dir',$('output').value);form.append('provider',provider);if(provider==='aliyun')form.append('paid_confirmed','true');form.append('extra',$('extra').value);form.append('background',$('background').checked);form.append('typography',$('typography').checked);return api('/api/jobs',form);});
+ return command(()=>{const form=new FormData();for(const f of $('files').files)form.append('files',f);form.append('output_dir',$('output').value);form.append('provider',provider);if(provider==='aliyun')form.append('paid_confirmed','true');form.append('translate_product_text',String($('translate-product-text').checked));form.append('extra',$('extra').value);form.append('background',$('background').checked);form.append('typography',$('typography').checked);return api('/api/jobs',form);});
 };
 $('exit').onclick=async()=>{try{await api('/api/exit',{});closed=true;clearSelected();$('error').textContent='';$('status').textContent='工具正在关闭并清空任务，登录和已保存的图片保留，可以关闭此页面';document.querySelectorAll('button').forEach(b=>b.disabled=true);}catch(e){$('error').textContent=e.message;}};
 async function poll(){if(closed)return;if(!busy)try{const current=await api('/api/state');if(!closed){state=current;render();}}catch(e){if(!closed)$('error').textContent=e instanceof TypeError?'无法连接本机工具，请确认程序仍在运行；若已关闭，请重新启动。':e.message;}if(!closed)setTimeout(poll,1000);}poll();

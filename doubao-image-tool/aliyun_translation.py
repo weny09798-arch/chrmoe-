@@ -115,14 +115,15 @@ def _public_addresses(host):
 def validate_result_url(url):
     parsed=_result_url_parts(url);_public_addresses(parsed.hostname);return url
 
-def sdk_translate(credentials,path,client_factory=None):
+def sdk_translate(credentials,path,client_factory=None,translate_product_text=False):
+    if type(translate_product_text) is not bool:raise ValueError('商品及包装文字设置必须为布尔值')
     from alibabacloud_alimt20181012.client import Client
     from alibabacloud_alimt20181012.models import TranslateImageRequest
     from alibabacloud_tea_openapi.models import Config
     from alibabacloud_tea_util.models import RuntimeOptions
     data=validate_aliyun_image(Path(path).read_bytes(),Path(path).name)
     config=Config(access_key_id=credentials['access_key_id'],access_key_secret=credentials['access_key_secret'],endpoint='mt.cn-hangzhou.aliyuncs.com',protocol='https')
-    request=TranslateImageRequest(image_base_64=base64.b64encode(data).decode('ascii'),source_language='zh',target_language='zh-tw',field='e-commerce',ext=json.dumps({'ignoreEntityRecognize':'false'}))
+    request=TranslateImageRequest(image_base_64=base64.b64encode(data).decode('ascii'),source_language='zh',target_language='zh-tw',field='e-commerce',ext=json.dumps({'ignoreEntityRecognize':'true' if translate_product_text else 'false'}))
     runtime=RuntimeOptions(autoretry=False,connect_timeout=4000,read_timeout=18000)
     try:
         body=(client_factory or Client)(config).translate_image_with_options(request,runtime).body
@@ -138,9 +139,10 @@ def sdk_translate(credentials,path,client_factory=None):
 
 class AliyunTranslator:
     def __init__(self,credentials):self.credentials=dict(credentials)
-    def translate(self,path):
+    def translate(self,path,translate_product_text=False):
+        if type(translate_product_text) is not bool:raise ValueError('商品及包装文字设置必须为布尔值')
         try:
-            r=subprocess.run(_download_launcher()+['--aliyun-translate'],input=json.dumps({'credentials':self.credentials,'input_path':str(path)}),capture_output=True,text=True,encoding='utf-8',timeout=PAID_PROCESS_SECONDS,creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+            r=subprocess.run(_download_launcher()+['--aliyun-translate'],input=json.dumps({'credentials':self.credentials,'input_path':str(path),'translate_product_text':translate_product_text}),capture_output=True,text=True,encoding='utf-8',timeout=PAID_PROCESS_SECONDS,creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
             value=json.loads(r.stdout)
             if r.returncode or 'error' in value:raise AliyunError(value.get('error'))
             _result_url_parts(value['final_image_url'])
@@ -152,7 +154,7 @@ class AliyunTranslator:
 def translate_helper_main():
     try:
         payload=json.loads(sys.stdin.read())
-        print(json.dumps(sdk_translate(payload['credentials'],payload['input_path'])),flush=True);return 0
+        print(json.dumps(sdk_translate(payload['credentials'],payload['input_path'],translate_product_text=payload.get('translate_product_text',False))),flush=True);return 0
     except Exception as exc:
         print(json.dumps({'error':exc.kind if isinstance(exc,AliyunError) else 'uncertain'}),flush=True);return 1
 

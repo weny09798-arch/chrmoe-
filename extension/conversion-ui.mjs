@@ -22,6 +22,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
   let renderedEpoch = controller.epoch;
   let imageLimits = {main:'',detail:'',sku:''};
   let imageKinds = ['main','detail','sku'], provider = 'doubao', quoteSignature = '', batchOptionsSignature = '';
+  let translateProductText = false;
   function selection(task) {
     let limits, entries;
     try {
@@ -30,7 +31,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
       limits = normalizeImageLimits(imageKinds,imageLimits); entries = buildImageManifest(task, imageKinds,limits); }
     catch (error) { return {error:error.message,count:0,unique:0,amount:0,entries:[]}; }
     const unique = new Set(entries.map(entry => entry.url)).size;
-    return { entries, limits, availableCounts:imageKindCounts(buildImageManifest(task)), count:entries.length, unique, amount:unique * 0.06, signature:JSON.stringify([task?.id,provider,imageKinds,limits,entries]) };
+    return { entries, limits, availableCounts:imageKindCounts(buildImageManifest(task)), count:entries.length, unique, amount:unique * 0.06, signature:JSON.stringify([task?.id,provider,imageKinds,limits,translateProductText,entries]) };
   }
   function displayedSelection(task) {
     const job = controller.job, pending = controller.pendingSource;
@@ -106,20 +107,24 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     const state = controller.view(), { task, collecting = false, unavailable = false } = getCollection();
     const job = state.job, connected = state.connected, working = state.working || unavailable;
     const frozen = Boolean(controller.pendingSource || (job && !['completed','done'].includes(job.status)));
-    const batchSignature = job ? JSON.stringify([job.id,job.provider,job.image_kinds,job.image_limits]) : '';
+    const batchSignature = job ? JSON.stringify([job.id,job.provider,job.image_kinds,job.image_limits,job.translate_product_text]) : '';
     if (job && !controller.pendingSource && (frozen || batchSignature !== batchOptionsSignature)) { imageKinds = [...(job.image_kinds || ['main','detail','sku'])]; provider = job.provider || 'doubao'; imageLimits = {...(job.image_limits || {main:null,detail:null,sku:null})}; }
+    if (job && !controller.pendingSource && (frozen || batchSignature !== batchOptionsSignature)) translateProductText = job.translate_product_text === true;
     batchOptionsSignature = batchSignature;
     for (const kind of Object.keys(KIND)) { $('conversion-kind-'+kind).checked = imageKinds.includes(kind); $('conversion-kind-'+kind).disabled = working || frozen; const input = $('conversion-limit-'+kind); if (frozen || !input.validity?.badInput) input.value = imageLimits[kind] ?? ''; input.disabled = working || frozen || !imageKinds.includes(kind); }
     $('conversion-paid').checked = provider === 'aliyun'; $('conversion-paid').disabled = working || frozen;
+    $('conversion-product-text').checked = translateProductText; $('conversion-product-text').disabled = working || frozen;
     const paid = provider === 'aliyun', capabilities = state.capabilities;
     const chosen = displayedSelection(task), allEntries = chosen.frozen ? chosen.entries : buildImageManifest(task);
     if (!chosen.frozen) quoteSignature = chosen.signature;
     $('conversion-selection').textContent = chosen.error || (allEntries ? `${Object.entries(KIND).map(([kind,label]) => `${label} ${chosen.availableCounts?.[kind] ?? allEntries.filter(entry => entry.kind === kind).length}${chosen.availableCounts ? ` 可用，选中 ${(chosen.entries || []).filter(entry => entry.kind === kind).length}` : '（原可用数待恢复）'}`).join(' · ')} · 已选 ${chosen.count} 个位置 · 独立 URL ${chosen.unique}` : chosen.count === null ? '本批清单正在恢复，图片数量和费用待本地快照确认。' : `本批已选 ${chosen.count} 个位置 · 独立 URL 待恢复`);
     const limitsReady = !chosen.limits || !Object.values(chosen.limits).some(value => value !== null) || capabilities?.image_type_limits === true;
+    const productTextReady = !translateProductText || capabilities?.product_text_translation === true;
     const ossReady = capabilities?.image_link_replacement === true && capabilities.cloud_image_storage === true && capabilities.oss_configured === true;
     const ossStatus = !connected ? '连接本地工具后可查询 OSS 和阿里云配置状态。' : !capabilities ? '请刷新配置状态。' : capabilities.image_link_replacement !== true || capabilities.cloud_image_storage !== true ? '请升级本地工具到 1.6.3 或更新版本，以支持图片直接保存到 OSS。' : capabilities.oss_configured !== true ? '请在本地工具配置 OSS，返回后点击“刷新配置状态”。' : 'OSS 已配置，上传成功的图片将自动替换商品 Excel 链接。';
     $('conversion-provider-status').textContent = ossStatus + (ossReady ? !capabilities.providers?.includes('aliyun') ? ' 阿里云付费模式需要升级本地工具。' : capabilities.aliyun_configured === true ? ' 阿里云密钥已在本机配置（尚未验证云端服务）。' : ' 请在本地工具配置阿里云密钥，返回后点击“刷新配置状态”。' : '');
     if (!limitsReady) $('conversion-provider-status').textContent += ' 请升级本地工具到 1.6.4 或更新版本，以支持图片数量限制。';
+    if (!productTextReady) $('conversion-provider-status').textContent += ' 请升级本地工具到 1.6.5 或更新版本，以支持商品及包装文字转换。';
     $('conversion-settings').hidden = !connected;
     if (connected) $('conversion-settings').setAttribute('href',`${client.connection.baseUrl}/#token=${encodeURIComponent(client.connection.token)}`);
     else $('conversion-settings').removeAttribute('href');
@@ -133,10 +138,10 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     $('conversion-login').disabled = !connected || working;
     $('conversion-login').hidden = paid;
     $('conversion-start').textContent = paid ? chosen.amount === null ? '付费开始转换（费用待恢复）' : `付费开始转换（上限 ¥${chosen.amount.toFixed(2)}）` : '开始图片转换（豆包免费）';
-    $('conversion-start').disabled = !extensionId || !connected || !ossReady || !limitsReady || Boolean(chosen.error) || working || collecting || !task || !['done','stopped','error','short'].includes(task.status) || frozen || !chosen.count || (paid && (!capabilities?.providers?.includes('aliyun') || capabilities.aliyun_configured !== true));
+    $('conversion-start').disabled = !extensionId || !connected || !ossReady || !limitsReady || !productTextReady || Boolean(chosen.error) || working || collecting || !task || !['done','stopped','error','short'].includes(task.status) || frozen || !chosen.count || (paid && (!capabilities?.providers?.includes('aliyun') || capabilities.aliyun_configured !== true));
     $('conversion-stop').disabled = working || !job || ['completed','done','paused','stopped'].includes(job.status);
     $('conversion-continue').disabled = working || !job || !['paused','stopped','blocked'].includes(job.status);
-    $('conversion-status').textContent = job ? `${STATUS[job.status] || job.status} · ${job.provider === 'aliyun' ? '阿里云付费' : '豆包免费'} · ${(job.image_kinds || ['main','detail','sku']).map(kind => KIND[kind]).join('、')} · 付费请求 ${job.paid_calls || 0}${job.provider === 'aliyun' ? '（包含不确定请求，以实际账单为准）' : ''}${job.browser_message ? ` · ${job.browser_message}` : ''}` : collecting || (task && !['done','stopped','error','short'].includes(task.status)) ? '请先停止采集或等待采集结束' : connected ? '已连接，图片将保存到 OSS' : '等待连接本地工具';
+    $('conversion-status').textContent = job ? `${STATUS[job.status] || job.status} · ${job.provider === 'aliyun' ? '阿里云付费' : '豆包免费'} · ${job.translate_product_text === true ? '广告、商品及包装文字转繁体' : '仅广告文字转繁体，保护包装文字'} · ${(job.image_kinds || ['main','detail','sku']).map(kind => KIND[kind]).join('、')} · 付费请求 ${job.paid_calls || 0}${job.provider === 'aliyun' ? '（包含不确定请求，以实际账单为准）' : ''}${job.browser_message ? ` · ${job.browser_message}` : ''}` : collecting || (task && !['done','stopped','error','short'].includes(task.status)) ? '请先停止采集或等待采集结束' : connected ? '已连接，图片将保存到 OSS' : '等待连接本地工具';
     const counts = job?.counts || {};
     const replacedKeys = new Set(matchingImageReplacements(task,task?.imageReplacements).map(imagePositionKey)), exportManifest = buildImageManifest(task);
     const replaced = exportManifest.filter(ref => replacedKeys.has(imagePositionKey(ref))).length, total = exportManifest.length;
@@ -173,6 +178,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     render();
   });
   $('conversion-paid').addEventListener('change', () => { if (!$('conversion-paid').disabled) provider = $('conversion-paid').checked ? 'aliyun' : 'doubao'; render(); });
+  $('conversion-product-text').addEventListener('change', () => { if (!$('conversion-product-text').disabled) translateProductText = $('conversion-product-text').checked; render(); });
   $('conversion-forget').addEventListener('click', () => void run(() => {
     controller.forgetStale(); $('conversion-code').value = ''; message('已使用新连接，采集商品保留；需要重新转换时请手动开始。');
   }));
@@ -183,7 +189,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     if (current.unavailable) throw new Error('当前管理页不可操作。');
     if (selection(current.task).signature !== quoteSignature) { render(); throw new Error('图片清单或费用已变化，请检查新的数量和费用后再次开始。'); }
     message('本批已固定商品图片清单，后续新增商品将留到下一批。');
-    return controller.start(current.task, controller.outputDir, current.collecting, {imageKinds:[...imageKinds],imageLimits:{...imageLimits},provider,paidConfirmed:provider === 'aliyun'});
+    return controller.start(current.task, controller.outputDir, current.collecting, {imageKinds:[...imageKinds],imageLimits:{...imageLimits},provider,paidConfirmed:provider === 'aliyun',translateProductText});
   }));
   $('conversion-stop').addEventListener('click', () => void run(() => controller.action('stop')));
   $('conversion-continue').addEventListener('click', () => void run(() => controller.action('continue')));

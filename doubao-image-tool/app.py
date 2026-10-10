@@ -93,9 +93,12 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
         folder = Path(output).expanduser()
         if not folder.is_absolute(): raise ValueError('输出文件夹必须使用完整路径，例如 D:\\图片结果')
         files = [(f.filename or '', f.stream.read()) for f in request.files.getlist('files')]
-        prompt = build_prompt(request.form.get('background') == 'true', request.form.get('typography') == 'true', request.form.get('extra', ''))
+        product_text_value=request.form.get('translate_product_text','false')
+        if product_text_value not in ('true','false'):raise ValueError('商品及包装文字设置无效')
+        translate_product_text=product_text_value=='true'
+        prompt = build_prompt(request.form.get('background') == 'true', request.form.get('typography') == 'true', request.form.get('extra', ''),translate_product_text=translate_product_text)
         with lifecycle:
-            queue.start(files, folder, prompt,provider=request.form.get('provider','doubao'),paid_confirmed=request.form.get('paid_confirmed')=='true')
+            queue.start(files, folder, prompt,provider=request.form.get('provider','doubao'),paid_confirmed=request.form.get('paid_confirmed')=='true',translate_product_text=translate_product_text)
             return jsonify(queue.snapshot())
 
     @app.post('/api/action')

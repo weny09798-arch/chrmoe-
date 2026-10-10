@@ -80,6 +80,7 @@ class QueueService:
             self.job.setdefault('provider', 'doubao')
             self.job.setdefault('image_kinds', list(IMAGE_KINDS))
             self.job.setdefault('image_limits', dict.fromkeys(IMAGE_KINDS))
+            self.job.setdefault('translate_product_text', False)
             self.job.setdefault('paid_calls', 0)
             self.job.setdefault('estimated_cost_upper', 0)
             for item in self.job['items']:
@@ -121,7 +122,8 @@ class QueueService:
             self.job['message'] = f'任務狀態儲存失敗，請修復儲存位置並重新啟動：{exc}'
             raise StorageFailure(self.job['message']) from exc
 
-    def start(self, files, output_dir, prompt, provider='doubao', paid_confirmed=False):
+    def start(self, files, output_dir, prompt, provider='doubao', paid_confirmed=False, translate_product_text=False):
+        if type(translate_product_text) is not bool:raise ValueError('商品及包装文字设置必须为布尔值')
         conversion_options(provider,None)
         if provider=='aliyun':
             if paid_confirmed is not True:raise ValueError('阿里云转换按 ¥0.06/张计费，请先确认付费')
@@ -139,11 +141,12 @@ class QueueService:
                               'phase': 'aliyun-ready' if provider=='aliyun' else 'ready', 'message': '', 'result': None, 'review_needed': True})
             self.job = {'id': job_id, 'status': 'running', 'output_dir': str(Path(output_dir).resolve()),
                         'prompt': prompt, 'items': items, 'message': '', 'review_needed': True}
-            self.job.update(provider=provider,image_kinds=list(IMAGE_KINDS),paid_calls=0,
+            self.job.update(provider=provider,image_kinds=list(IMAGE_KINDS),translate_product_text=translate_product_text,paid_calls=0,
                             estimated_cost_upper=round(len(items)*PRICE_PER_IMAGE,2) if provider=='aliyun' else 0)
             self._persist(); self.cv.notify_all(); return job_id
 
-    def start_urls(self, entries, output_dir, prompt, source_task_id, provider='doubao', image_kinds=None, paid_confirmed=False, cloud_only=False, image_limits=None):
+    def start_urls(self, entries, output_dir, prompt, source_task_id, provider='doubao', image_kinds=None, paid_confirmed=False, cloud_only=False, image_limits=None, translate_product_text=False):
+        if type(translate_product_text) is not bool:raise ValueError('商品及包装文字设置必须为布尔值')
         kinds = conversion_options(provider, image_kinds)
         limits = image_limit_options(image_limits, kinds)
         if not isinstance(entries, list): raise ValueError('图片清单无效')
@@ -169,7 +172,7 @@ class QueueService:
                         'status': 'running', 'output_dir': str(output) if output is not None else None, 'run_dir': str(run), 'cloud_only':bool(cloud_only),
                         'mapping_path': str(run / '图片转换对应记录.json'),
                         'prompt': prompt, 'items': items, 'message': '', 'review_needed': True}
-            self.job.update(provider=provider, image_kinds=kinds, image_limits=limits, paid_calls=0,
+            self.job.update(provider=provider, image_kinds=kinds, image_limits=limits, translate_product_text=translate_product_text, paid_calls=0,
                             upload_enabled=publisher is not None,oss_target_id=publisher.target_id if publisher else None,
                             estimated_cost_upper=round(len(items)*PRICE_PER_IMAGE, 2) if provider=='aliyun' else 0)
             self._persist(); self.cv.notify_all(); return job_id
@@ -180,6 +183,7 @@ class QueueService:
             state = copy.deepcopy(self.job) if self.job else {'id': None, 'status': 'idle', 'items': [], 'message': ''}
             state.setdefault('provider', 'doubao'); state.setdefault('image_kinds', list(IMAGE_KINDS))
             state.setdefault('image_limits', dict.fromkeys(IMAGE_KINDS))
+            state.setdefault('translate_product_text', False)
             state.setdefault('paid_calls', 0); state.setdefault('estimated_cost_upper', 0)
             for item in state['items']:
                 item.pop('aliyun_result', None)
@@ -370,7 +374,7 @@ class QueueService:
                             self.job['paid_calls'] += 1
                             self._persist()
                         # The committed attempt includes timeouts and uncertain responses.
-                        result = translator.translate(Path(item['input_path']))
+                        result = translator.translate(Path(item['input_path']), translate_product_text=True) if active_job.get('translate_product_text') else translator.translate(Path(item['input_path']))
                         with self.cv:
                             self._check_storage()
                             if self.job is not active_job or item.get('revision',0) != revision: continue

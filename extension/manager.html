@@ -51,6 +51,8 @@
           <p class="muted">数量留空表示不限；各类型按整批商品顺序选取前 N 个图片位置，相同 URL 也占数量，生成时再去重。未选位置保留原图或此前已替换链接。</p>
           <p id="conversion-selection" class="muted" aria-live="polite"></p>
           <label class="conversion-paid-option"><input id="conversion-paid" type="checkbox"> 使用阿里云付费图片翻译（未勾选使用豆包免费模式）</label>
+          <label class="conversion-paid-option"><input id="conversion-product-text" type="checkbox"> 同时转换商品及包装文字</label>
+          <p class="muted">未勾选：只转换商品外广告文字；勾选：商品及包装上的简体文字也转繁体，数字、单位和商品外观保持原样。豆包和阿里云均适用，本批开始后固定。阿里云仍按电商版 ¥0.06/张计费，结果需人工核对。</p>
           <p id="conversion-provider-status" class="muted" role="status" aria-live="polite"></p>
           <div class="actions"><a id="conversion-settings" class="text-button" target="_blank" rel="noopener noreferrer" hidden>打开本地工具配置 OSS 和阿里云密钥 ↗</a><button id="conversion-refresh-config" class="button" type="button" disabled>刷新配置状态</button></div>
           <p id="conversion-cost" class="muted" hidden></p>

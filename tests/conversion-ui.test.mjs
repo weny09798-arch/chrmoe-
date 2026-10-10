@@ -18,7 +18,7 @@ test('cloud conversion starts without choosing a local folder and sends no local
   const call=f.requests.find(r=>r.url.endsWith('/jobs'));assert.ok(call);
   const body=JSON.parse(call.options.body);assert.equal(body.cloud_only,true);assert.equal(body.output_dir,undefined);
 });
-function fixture({configured=true,ossConfigured=true,replacement=true,cloudStorage=true,confirm=()=>true,restored=false}={}) {
+function fixture({configured=true,ossConfigured=true,replacement=true,cloudStorage=true,productText=true,confirm=()=>true,restored=false}={}) {
   const {document,window} = parseHTML(html), task = createTask(['杯']); task.status='done'; task.jobs[0].status='done';
   task.jobs[0].groups=[{best:{id:'101',title:'玻璃杯',image:'https://img.pddpic.com/a.jpg',cents:100}}];
   const actions=[], requests=[], timers=[], saved=new Map();
@@ -27,10 +27,10 @@ function fixture({configured=true,ossConfigured=true,replacement=true,cloudStora
   const snapshot=()=>{
     const entries=batch.entries||[{platform:'pdd',product_id:'101',title:'玻璃杯',kind:'main',order:1,url:'https://img.pddpic.com/a.jpg'}],groups=new Map();
     for(const entry of entries){if(!groups.has(entry.url))groups.set(entry.url,[]);groups.get(entry.url).push(entry);}
-    return {id:'job-1',kind:'collector',source_task_id:task.id,status,provider:batch.provider||'doubao',image_kinds:batch.image_kinds||['main','detail','sku'],paid_calls:batch.provider==='aliyun'?1:0,estimated_cost_upper:batch.provider==='aliyun'?groups.size*0.06:0,counts:{total:entries.length,unique:groups.size,downloaded:groups.size,converted:0,failed:1},items:[...groups.values()].map((refs,index)=>({index,...itemState,input_path:'input.png',refs}))};
+    return {id:'job-1',kind:'collector',source_task_id:task.id,status,provider:batch.provider||'doubao',image_kinds:batch.image_kinds||['main','detail','sku'],translate_product_text:batch.translate_product_text===true,paid_calls:batch.provider==='aliyun'?1:0,estimated_cost_upper:batch.provider==='aliyun'?groups.size*0.06:0,counts:{total:entries.length,unique:groups.size,downloaded:groups.size,converted:0,failed:1},items:[...groups.values()].map((refs,index)=>({index,...itemState,input_path:'input.png',refs}))};
   };
   const panel=createConversionPanel({document,extensionId:'test-extension',storage:{getItem:key=>saved.get(key),setItem:(key,val)=>saved.set(key,val),removeItem:key=>saved.delete(key)},getCollection:()=>({task,collecting,unavailable:false}),
-    fetch:async(url,options)=>{requests.push({url,options});if(fetchOverride)return fetchOverride(url,options);const body=options.body&&JSON.parse(options.body);let value={};if(url.endsWith('/capabilities'))value={providers:['doubao','aliyun'],oss_configured:ossConfigured,image_link_replacement:replacement,cloud_image_storage:cloudStorage,image_type_limits:true,aliyun_configured:configured,aliyun_price_per_image:0.06};if(url.endsWith('/folder'))value={path:'D:\\图片'};if(url.endsWith('/jobs'))batch=body;if(url.endsWith('/jobs')||url.includes('/state'))value=snapshot();if(url.endsWith('/action')){actions.push(body);if(body.action==='continue')status='running';if(body.action==='stop')status='paused';value=snapshot();}return {ok:true,json:async()=>value,blob:async()=>new Blob(['preview'])};},
+    fetch:async(url,options)=>{requests.push({url,options});if(fetchOverride)return fetchOverride(url,options);const body=options.body&&JSON.parse(options.body);let value={};if(url.endsWith('/capabilities'))value={providers:['doubao','aliyun'],oss_configured:ossConfigured,image_link_replacement:replacement,cloud_image_storage:cloudStorage,image_type_limits:true,product_text_translation:productText,aliyun_configured:configured,aliyun_price_per_image:0.06};if(url.endsWith('/folder'))value={path:'D:\\图片'};if(url.endsWith('/jobs'))batch=body;if(url.endsWith('/jobs')||url.includes('/state'))value=snapshot();if(url.endsWith('/action')){actions.push(body);if(body.action==='continue')status='running';if(body.action==='stop')status='paused';value=snapshot();}return {ok:true,json:async()=>value,blob:async()=>new Blob(['preview'])};},
     setTimer:callback=>{timers.push(callback);return timers.length;},clearTimer:()=>{},download:async()=>{},confirm
   });
   const click=id=>document.getElementById(id).dispatchEvent(new window.Event('click'));
@@ -234,4 +234,33 @@ test('native bad numeric input stays invalid for selected kinds and never submit
  // A genuine cleared input has no native badInput and means unlimited.
  badInput=false;input.value='';input.dispatchEvent(new f.window.Event('input'));assert.equal(f.document.getElementById('conversion-start').disabled,false);
  f.click('conversion-start');await tick();const body=JSON.parse(f.requests.find(r=>r.url.endsWith('/jobs')).options.body);assert.deepEqual(body.image_limits,{main:null,detail:null,sku:null});
+});
+
+
+test('packaging choice is submitted, frozen while paused and released for next batch',async()=>{
+  const f=fixture();await connectFolder(f);
+  const toggle=f.document.getElementById('conversion-product-text');assert.ok(toggle);assert.equal(toggle.checked,false);
+  f.change('conversion-product-text',true);f.change('conversion-paid',true);f.click('conversion-start');await tick();
+  const bodies=()=>f.requests.filter(r=>r.url.endsWith('/jobs')).map(r=>JSON.parse(r.options.body));
+  assert.equal(bodies()[0].translate_product_text,true);assert.equal(toggle.disabled,true);
+  f.change('conversion-product-text',false);assert.equal(toggle.checked,true);
+  assert.match(f.document.getElementById('conversion-status').textContent,/商品及包装/);
+  f.click('conversion-continue');await tick();assert.equal(toggle.checked,true);assert.equal(bodies().length,1);
+  f.panel.controller.acceptSnapshot({...f.panel.controller.job,status:'completed'},'job-1');f.panel.refresh();
+  f.change('conversion-product-text',false);f.click('conversion-start');await tick();assert.equal(bodies()[1].translate_product_text,false);
+});
+
+test('old tool cannot silently ignore enabled packaging translation',async()=>{
+  const f=fixture({productText:false});await connectFolder(f);f.change('conversion-product-text',true);
+  assert.equal(f.document.getElementById('conversion-start').disabled,true);
+  assert.match(f.document.getElementById('conversion-provider-status').textContent,/升级.*包装/);
+  await assert.rejects(f.panel.controller.start(f.task,undefined,false,{translateProductText:true}),/升级/);
+  assert.equal(f.requests.some(r=>r.url.endsWith('/jobs')),false);
+});
+
+test('restoring packaging snapshot restores frozen checkbox without another submission',async()=>{
+  const f=fixture();await connectFolder(f);f.panel.controller.sourceTaskId=f.task.id;
+  f.panel.controller.acceptSnapshot({id:'restored',kind:'collector',source_task_id:f.task.id,status:'paused',translate_product_text:true,items:[]},'restored');f.panel.refresh();
+  const toggle=f.document.getElementById('conversion-product-text');assert.ok(toggle);assert.equal(toggle.checked,true);assert.equal(toggle.disabled,true);
+  assert.equal(f.requests.some(r=>r.url.endsWith('/jobs')),false);
 });

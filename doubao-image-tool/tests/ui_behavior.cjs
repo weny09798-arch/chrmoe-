@@ -6,7 +6,7 @@ class Element {
  remove(){if(this.parent)this.parent.children=this.parent.children.filter(e=>e!==this);}
  set src(value){this._src=value;this.srcWrites++;}get src(){return this._src;}
 }
-const ids=['files','output','extra','background','typography','selected','results','start','stop','continue','reset','exit','open','error','status','browser','progress','connection-code','copy-code','connection-message','aliyun-key-id','aliyun-key-secret','aliyun-save','aliyun-delete','aliyun-status','provider','oss-bucket','oss-region','oss-mode','oss-key-id','oss-key-secret','oss-save','oss-delete','oss-check','oss-status'];
+const ids=['translate-product-text','files','output','extra','background','typography','selected','results','start','stop','continue','reset','exit','open','error','status','browser','progress','connection-code','copy-code','connection-message','aliyun-key-id','aliyun-key-secret','aliyun-save','aliyun-delete','aliyun-status','provider','oss-bucket','oss-region','oss-mode','oss-key-id','oss-key-secret','oss-save','oss-delete','oss-check','oss-status'];
 const nodes=Object.fromEntries(ids.map(id=>[id,new Element(['start','stop','continue','exit','open'].includes(id)?'button':'div')]));
 nodes.provider.value='doubao';nodes['oss-region'].value='cn-hangzhou';nodes['oss-mode'].value='independent';
 function all(root){return [root,...root.children.flatMap(all)];}
@@ -37,9 +37,11 @@ vm.createContext(context);vm.runInContext(fs.readFileSync(process.argv[2],'utf8'
  assert.strictEqual(requests.filter(r=>r.path==='/api/jobs').length,0,'Saving keys must never submit paid images');
  nodes.provider.value='aliyun';nodes.files.files=[{name:'paid.png'}];vm.runInContext('render()',context);
  assert.strictEqual(nodes.start.disabled,false,'Configured provider permits start');
+ nodes['translate-product-text'].checked=true;
  context.confirm=()=>false;const beforePaid=requests.length;await nodes.start.onclick();assert.strictEqual(requests.length,beforePaid,'Declining paid consent must not start');
  context.confirm=text=>{warnings.push(text);return true;};await nodes.start.onclick();
  assert.strictEqual(requests.at(-1).body.fields.provider,'aliyun');assert.strictEqual(requests.at(-1).body.fields.paid_confirmed,'true');
+ assert.strictEqual(requests.at(-1).body.fields.translate_product_text,'true');
  assert.ok(warnings.at(-1).includes('0.06')&&warnings.at(-1).includes('包装'));
  await nodes['aliyun-delete'].onclick();assert.strictEqual(nodes.start.disabled,true,'Deleting configuration prevents paid start');
  assert.ok(requests.some(r=>r.path==='/api/aliyun/credentials'&&r.method==='DELETE'));
@@ -62,8 +64,9 @@ vm.createContext(context);vm.runInContext(fs.readFileSync(process.argv[2],'utf8'
  nodes.files.files=[{name:'local.png'}];nodes.files.onchange();
  assert.ok(all(nodes.selected).some(e=>e.tag==='img'&&e.src.startsWith('blob:local/')),'selected file needs local blob thumbnail');
  nodes.files.files=[];nodes.files.onchange();assert.deepStrictEqual(revoked,created,'replaced selected thumbnails must release blob URLs');
- snapshot.status='paused';snapshot.items[0].status='paused';snapshot.items[0].phase='pending';
+ snapshot.status='paused';snapshot.translate_product_text=true;snapshot.items[0].status='paused';snapshot.items[0].phase='pending';
  vm.runInContext('render()',context);
+ assert.strictEqual(nodes['translate-product-text'].checked,true);assert.strictEqual(nodes['translate-product-text'].disabled,true);
  const regenerate=all(nodes.results).find(e=>e.tag==='button'&&e.textContent==='重新生成此图');
  assert.ok(regenerate,'Paused items need a distinct new-generation action');
  await regenerate.onclick();
