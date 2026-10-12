@@ -64,6 +64,7 @@ class StorageFailure(RuntimeError):
 class QueueService:
     generation_timeout = 8 * 60
     poll_interval = .1
+    close_timeout = 70  # The bounded OSS helper may need 65 seconds.
 
     def __init__(self, browser_factory, state_dir, aliyun_factory=None, oss_factory=None):
         self.factory = browser_factory
@@ -72,6 +73,7 @@ class QueueService:
         self.state_dir = Path(state_dir).resolve(); self.state_dir.mkdir(parents=True, exist_ok=True)
         self.cv = threading.Condition(threading.RLock()); self.closed = False; self.browser = None
         self.clear_on_close = False
+        self.draining = False; self.closing = False; self.worker_busy = False
         self.open_requested = False; self.browser_message = ""; self.browser_busy = False
         self.job = None
         path = self.state_dir / 'job.json'
@@ -132,7 +134,9 @@ class QueueService:
         checked = validate_inputs(files)
         with self.cv:
             if self.closed: raise RuntimeError('服務已關閉')
+            if self.closing: raise RuntimeError('服务正在关闭')
             if self.job and self.job['status'] != 'completed': raise ValueError('請先完成目前任務')
+            self.draining = False  # Starting a new batch is an explicit user action.
             job_id = uuid.uuid4().hex; folder = self.state_dir / job_id; folder.mkdir()
             items = []
             for index, (name, data) in enumerate(checked):
@@ -162,7 +166,9 @@ class QueueService:
         if output is not None and output.exists() and not output.is_dir(): raise ValueError('输出位置必须是目录')
         with self.cv:
             if self.closed: raise RuntimeError('服务已关闭')
+            if self.closing: raise RuntimeError('服务正在关闭')
             if self.job and self.job['status'] != 'completed': raise ValueError('请先完成目前任务')
+            self.draining = False
             job_id = uuid.uuid4().hex
             folder = self.state_dir / job_id; folder.mkdir()
             if output is not None:output.mkdir(parents=True, exist_ok=True)
@@ -195,6 +201,7 @@ class QueueService:
         with self.cv:
             self._check_storage()
             if self.closed: raise RuntimeError("服务已关闭，请重新启动")
+            if self.closing: raise RuntimeError('服务正在关闭')
             self.open_requested = True; self.browser_busy = True; self.browser_message = "正在打开 Chrome"; self.cv.notify_all()
 
     def _open(self):
@@ -211,7 +218,7 @@ class QueueService:
     def action(self, command, index=None, paid_confirmed=False):
         with self.cv:
             if not self.job: raise ValueError('沒有任務')
-            if self.closed or self.job['status'] == 'storage-error':
+            if self.closed or self.closing or self.job['status'] == 'storage-error':
                 raise RuntimeError('服務已停止，請修復儲存位置並重新啟動')
             if command == 'stop': self.job['status'] = 'stopped'
             elif command == 'continue':
@@ -269,7 +276,19 @@ class QueueService:
                 item['status'] = 'queued'; item['message'] = ''; item.pop('started', None)
                 self.job['status'] = 'running'; self.job['message'] = ''
             else: raise ValueError('未知操作')
+            if command in {'continue', 'retry', 'redo', 'retry-upload'}: self.draining = False
             self._persist(); self.cv.notify_all()
+
+    def begin_drain(self):
+        """Block submission commits; the worker may finish already submitted results."""
+        with self.cv:
+            self.draining = True
+            self.cv.notify_all()
+
+    def drain_complete(self):
+        with self.cv:
+            return self.draining and not self.worker_busy and not self.browser_busy and (
+                not self.job or self.job['status'] != 'running')
 
     def _pause(self, item, message):
         self._check_storage()
@@ -294,7 +313,7 @@ class QueueService:
         try:
             while True:
                 with self.cv:
-                    self.cv.wait_for(lambda: self.closed or self.open_requested or (self.job and self.job['status'] == 'running'))
+                    self.cv.wait_for(lambda: self.closed or (not self.closing and (self.open_requested or (self.job and self.job['status'] == 'running'))))
                     if self.closed: return
                     if self.open_requested:
                         self.open_requested = False
@@ -304,9 +323,16 @@ class QueueService:
                             message = "Chrome 已打开，请在独立窗口登录豆包"
                         except Exception as exc: message = str(exc)
                         finally: self.cv.acquire()
-                        self.browser_message = message; self.browser_busy = False
+                        self.browser_message = message; self.browser_busy = False; self.cv.notify_all()
                         continue
                     waiting = [i for i in self.job['items'] if i['status'] not in {'completed', 'failed'}]
+                    if self.draining and waiting:
+                        waiting = [i for i in waiting if i['status'] != 'needs-review' and (
+                            i['phase'] in {'pending', 'aliyun-downloading', 'saving', 'uploading'} or
+                            (i['phase'] == 'alias' and self.job['items'][i['alias_of']]['status'] in {'completed', 'failed'}))]
+                        if not waiting:
+                            self.job.update(status='paused', message='浏览器连接已断开；已保留任务，请连接后明确继续。')
+                            self._persist(); continue
                     item = next((i for i in waiting if i['phase'] != 'alias'
                         or self.job['items'][i['alias_of']]['status'] in {'completed','failed'}), None)
                     if item is None and waiting:
@@ -318,8 +344,12 @@ class QueueService:
                     phase = item['phase']
                     revision = item.get('revision', 0)
                     active_job = self.job
+                    self.worker_busy = True
                 try:
                     if phase in {'ready','aliyun-ready'}:self._publisher(active_job)
+                    if phase in {'downloading', 'ready', 'aliyun-ready'}:
+                        with self.cv:
+                            if self.closed or self.closing or self.draining: continue
                     if phase == 'downloading':
                         data, extension = download_image(item['url'])
                         digest = hashlib.sha256(data).hexdigest()
@@ -368,7 +398,7 @@ class QueueService:
                         except CredentialError: raise AliyunError('auth') from None
                         with self.cv:
                             self._check_storage()
-                            if self.closed or self.job is not active_job or self.job['status'] != 'running' or item.get('revision',0) != revision: continue
+                            if self.closed or self.closing or self.draining or self.job is not active_job or self.job['status'] != 'running' or item.get('revision',0) != revision: continue
                             self._publisher(active_job)
                             item.update(phase='submitting',status='running')
                             self.job['paid_calls'] += 1
@@ -398,7 +428,7 @@ class QueueService:
                                 raise
                             self.browser = browser
                         with self.cv:
-                            if self.closed or self.job['status'] != 'running' or item.get('revision', 0) != revision:
+                            if self.closed or self.closing or self.draining or self.job['status'] != 'running' or item.get('revision', 0) != revision:
                                 continue
                             item['phase'] = 'submitting'; item['status'] = 'running'; self._persist()
                         @contextmanager
@@ -407,7 +437,7 @@ class QueueService:
                             # serialize against this last authorization and Send commit.
                             with self.cv:
                                 self._check_storage()
-                                if self.closed or self.job['status'] != 'running' or item.get('revision', 0) != revision:
+                                if self.closed or self.closing or self.draining or self.job['status'] != 'running' or item.get('revision', 0) != revision:
                                     raise SubmissionCancelled()
                                 self._publisher(active_job)
                                 yield
@@ -545,6 +575,10 @@ class QueueService:
                             self._persist(); continue
                         if item['phase'] == 'submitting': item['phase'] = 'uncertain'
                         self._pause(item, f'{item["phase"]}：{exc}')
+                finally:
+                    with self.cv:
+                        self.worker_busy = False
+                        self.cv.notify_all()
         except StorageFailure:
             # _persist already records terminal failure in memory; never persist it again.
             pass
@@ -558,8 +592,22 @@ class QueueService:
             self.closed = True; self.cv.notify_all()
 
     def close(self, clear_state=False):
+        if clear_state:
+            # Reset must not irreversibly close a queue while an OSS operation is
+            # still running. On timeout the same stopped queue remains usable.
+            with self.cv:
+                if not self.closed:
+                    self.closing = True
+                    if self.open_requested:
+                        self.open_requested = False; self.browser_busy = False
+                    if self.job and self.job['status'] == 'running':
+                        self.job['status'] = 'stopped'; self._persist()
+                    if not self.cv.wait_for(lambda: not self.worker_busy and not self.browser_busy, timeout=self.close_timeout):
+                        self.closing = False
+                        self.cv.notify_all()
+                        raise RuntimeError('当前保存或上传尚未结束，任务已保留，请稍后重试清空')
         self.request_close(clear_state=clear_state)
-        self.worker.join(timeout=30)
+        self.worker.join(timeout=self.close_timeout)
         if self.worker.is_alive(): raise RuntimeError('瀏覽器操作尚未結束')
         with self.cv:
             if self.clear_on_close:

@@ -10,9 +10,19 @@ from cloud_images import image_response
 EXTENSION_ID = re.compile(r'[a-p]{32}\Z')
 ALLOWED_HEADERS = {'content-type', 'x-tool-token', 'x-extension-id'}
 
-def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, credential_status=None):
+def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, credential_status=None,
+                    *, aliyun_settings=None, oss_settings=None, check_oss=None):
     paired = None
     private_root = Path(private_root).resolve()
+
+    def allowed_methods():
+        if request.path in {'/api/bridge/settings/aliyun', '/api/bridge/settings/oss'}:
+            return ('GET', 'POST', 'DELETE')
+        if request.path in {'/api/bridge/state', '/api/bridge/current', '/api/bridge/capabilities', '/api/bridge/manifest'} or request.path.startswith('/api/bridge/images/'):
+            return ('GET',)
+        if request.path in {'/api/bridge/pair', '/api/bridge/folder', '/api/bridge/jobs', '/api/bridge/action', '/api/bridge/reset', '/api/bridge/settings/oss/check'}:
+            return ('POST',)
+        return ()
 
     def forbidden():
         return jsonify(error='采集插件连接无效，请重新配对'), 403
@@ -34,8 +44,7 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
             extension = origin_id()
             headers = {h.strip().lower() for h in request.headers.get('Access-Control-Request-Headers','').split(',') if h.strip()}
             method = request.headers.get('Access-Control-Request-Method')
-            expected = 'GET' if request.path.startswith(('/api/bridge/state', '/api/bridge/capabilities', '/api/bridge/manifest', '/api/bridge/images/')) else 'POST'
-            if not extension or (paired != extension and not (is_pair and paired is None)) or not headers.issubset(ALLOWED_HEADERS) or method != expected:
+            if not extension or (paired != extension and not (is_pair and paired is None)) or not headers.issubset(ALLOWED_HEADERS) or method not in allowed_methods():
                 return forbidden()
             return '', 204
         provided = request.headers.get('X-Tool-Token', '')
@@ -62,7 +71,7 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
         if request.path.startswith('/api/bridge/') and origin_id() and response.status_code != 403:
             response.headers['Access-Control-Allow-Origin'] = request.headers['Origin']
             response.headers['Vary'] = 'Origin'
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            response.headers['Access-Control-Allow-Methods'] = ', '.join((*allowed_methods(), 'OPTIONS'))
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Tool-Token, X-Extension-Id'
             response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
         return response
@@ -96,8 +105,41 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
 
     @app.get('/api/bridge/capabilities')
     def capabilities():
-        return jsonify(version='1.6.5',cloud_image_storage=True,image_type_limits=True,product_text_translation=True,providers=['doubao','aliyun'],image_kinds=['main','detail','sku'],
+        return jsonify(version='1.6.6',unified_plugin=True,automatic_backend=True,settings_in_plugin=True,cloud_image_storage=True,image_type_limits=True,product_text_translation=True,providers=['doubao','aliyun'],image_kinds=['main','detail','sku'],
                        **(credential_status() if credential_status else {'aliyun_configured':False,'aliyun_price_per_image':0.06}))
+
+    @app.route('/api/bridge/settings/aliyun', methods=['GET', 'POST', 'DELETE'])
+    def settings_aliyun():
+        return jsonify(aliyun_settings(request.method, request.get_json(silent=True)))
+
+    @app.route('/api/bridge/settings/oss', methods=['GET', 'POST', 'DELETE'])
+    def settings_oss():
+        return jsonify(oss_settings(request.method, request.get_json(silent=True)))
+
+    @app.post('/api/bridge/settings/oss/check')
+    def settings_oss_check():
+        return jsonify(check_oss())
+
+    @app.get('/api/bridge/current')
+    def current():
+        with lifecycle:
+            snap = get_queue().snapshot()
+            source = request.args.get('source_task_id')
+            if source is not None and snap.get('id') and source != snap.get('source_task_id'):
+                raise RuntimeError('采集任务已变更，拒绝读取其他任务')
+            return jsonify(snap)
+
+    @app.post('/api/bridge/reset', endpoint='bridge_reset')
+    def reset():
+        data = body()
+        with lifecycle:
+            snap = get_queue().snapshot()
+            if snap.get('id'):
+                if data.get('job_id') != snap['id'] or data.get('source_task_id') != snap.get('source_task_id'):
+                    raise RuntimeError('转换任务已变更，拒绝清空其他任务')
+            elif data.get('job_id') or data.get('source_task_id') or snap['status'] != 'idle':
+                raise RuntimeError('转换任务已变更，请重新连接当前任务')
+            return jsonify(reset_queue())
 
     @app.post('/api/bridge/folder')
     def folder():

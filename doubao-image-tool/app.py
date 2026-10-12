@@ -70,21 +70,26 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
 
     @app.route('/api/oss/config',methods=['GET','POST','DELETE'])
     def oss_configuration():
-        if request.method=='POST':oss_config.save(request.get_json(silent=True))
-        elif request.method=='DELETE':oss_config.delete()
-        return jsonify(oss_config.status())
+        return jsonify(update_oss_settings(request.method, request.get_json(silent=True)))
+
+    def update_oss_settings(method, value=None):
+        if method=='POST':oss_config.save(value)
+        elif method=='DELETE':oss_config.delete()
+        return oss_config.status()
 
     @app.post('/api/oss/check')
     def oss_check():return jsonify(oss_factory().check())
 
     @app.route('/api/aliyun/credentials', methods=['GET','POST','DELETE'])
     def aliyun_credentials():
-        if request.method=='POST':
-            value=request.get_json(silent=True)
+        return jsonify(update_aliyun_settings(request.method, request.get_json(silent=True)))
+
+    def update_aliyun_settings(method, value=None):
+        if method=='POST':
             if not isinstance(value,dict):raise ValueError('凭证配置内容无效')
             credentials.save(value.get('access_key_id'),value.get('access_key_secret'))
-        elif request.method=='DELETE':credentials.delete()
-        return jsonify(credential_status())
+        elif method=='DELETE':credentials.delete()
+        return credential_status()
 
     @app.post('/api/jobs')
     def jobs():
@@ -125,7 +130,9 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
         return jsonify(reset_queue())
 
     from bridge_routes import register_bridge
-    register_bridge(app, lambda: queue, lifecycle, root, reset_queue, credential_status)
+    register_bridge(app, lambda: queue, lifecycle, root, reset_queue, credential_status,
+                    aliyun_settings=update_aliyun_settings, oss_settings=update_oss_settings,
+                    check_oss=lambda: oss_factory().check())
 
     @app.get('/api/images/<job>/<int:index>/<kind>')
     def image(job, index, kind):
