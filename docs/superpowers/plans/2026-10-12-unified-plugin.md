@@ -69,9 +69,11 @@ Files: create extension/lib/native-backend.mjs, extension/settings-ui.mjs and te
 
 Files: update README.md, doubao-image-tool/README.md, docs/商品采集与本地图片转换使用说明.md; existing fixed delivery folder/ZIP; plan checkboxes and verification report.
 
-- [ ] Read each diff and run fresh full Python/Node tests, npm run check and git diff --check. Dispatch task reviews then whole-branch review; fix findings with failing regressions.
-- [ ] Compile existing portable runtime; launch isolated automatic service with temporary root. Verify four-byte native frames, exact registered ID, hidden startup, DPAPI descriptor, no paid_calls, full plugin settings and secret clear behavior using isolated Chromium and temporary native registration restored in finally.
-- [ ] Verify partial XLS/XLSX replacement mocks, received results surviving browser disconnect/restart, no stale results entering new collection; actual paid tests remain disabled.
-- [ ] Update customer instructions for install-ID once, no manual tool/code, safe uninstall, old version update and validation boundaries. Copy only verified plugin/runtime/doc files into existing delivery folder.
-- [ ] Create one replacement ZIP and verify every member hash against the fixed folder, no DPAPI/profile/task/cache/key files. Commit explicit source files only, integrate branch by fast-forward and tag1.6.6 after checks pass; no automatic GitHub push.
+- [x] Read delivery/documentation diff and run fresh full Python (451)/Node (423) tests and npm run check. Git diff --check is required before each delivery commit; logs retained as artifacts/unified-final-*.log.
+- [ ] Root-owned: finish task-scoped delivery review and whole-branch review; fix any findings with regressions when behavior changes.
+- [x] Root-built and root-verified compiled runtime at backend 8a2a62f; later edits are plugin UI only. Isolated protocol and real Chromium checks passed with temporary state/registration cleanup, real DPAPI and zero paid_calls; delivery reuses the unchanged verified EXE.
+- [x] Partial XLS/XLSX mocks, result drain/recovery and stale-source isolation covered by full tests; root additionally downloaded and inspected a partial XLSX from real Chromium with preseeded results. Actual paid tests remain disabled.
+- [x] Update customer instructions for one-time install-ID, automatic connection, plugin credentials, safe uninstall, upgrade and precise validation boundaries.
+- [ ] Copy verified plugin/runtime/source/docs into the existing fixed delivery folder; replace the single ZIP, verify every member hash and reject customer-state/key/profile/cache/test files.
+- [ ] Root-owned: commit final review fixes if needed, fast-forward integration and tag1.6.6 after all checks; no automatic GitHub push.
 
