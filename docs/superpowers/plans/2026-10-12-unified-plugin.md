@@ -75,4 +75,4 @@ Files: update README.md, doubao-image-tool/README.md, docs/商品采集与本地
 - [x] Partial XLS/XLSX mocks, result drain/recovery and stale-source isolation covered by full tests; root additionally downloaded and inspected a partial XLSX from real Chromium with preseeded results. Actual paid tests remain disabled.
 - [x] Update customer instructions for one-time install-ID, automatic connection, plugin credentials, safe uninstall, upgrade and precise validation boundaries.
 - [x] Copy verified plugin/runtime/source/docs into the existing fixed delivery folder; replace the single ZIP, verify all 2,677 member hashes and reject customer-state/key/profile/cache/test files. EXE unchanged; plugin/runtime/source matched verified inputs. Exact ZIP hash retained in delivery report and artifacts/unified-final-package.json.
-- [ ] Root-owned: commit final review fixes if needed, fast-forward integration and tag1.6.6 after all checks; no automatic GitHub push.
+- [x] Root-owned: final review approved, range whitespace check clean, local main integrated by fast-forward and release tagged 1.6.6; no automatic GitHub push.
