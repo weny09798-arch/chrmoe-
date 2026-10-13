@@ -305,13 +305,13 @@ export class ConversionController {
           if (!this.current(epoch)) return;
           this.capabilities = capabilities; this.emit();
           if (!capabilities.providers?.includes('aliyun')) throw new Error('本地工具需升级到支持阿里云的版本。');
-          if (capabilities.aliyun_configured !== true) throw new Error('请先在本地工具配置阿里云密钥，再刷新配置状态。');
+          if (capabilities.aliyun_configured !== true) throw new Error('请先在插件的图片服务设置中配置阿里云密钥，再刷新配置状态。');
         }
         if (Object.values(imageLimits).some(value => value !== null) && capabilities?.image_type_limits !== true) throw new Error('本地工具需升级到 1.6.4 或更新版本，才能限制图片数量。');
         if (translateProductText && capabilities?.product_text_translation !== true) throw new Error('本地工具需升级到 1.6.5 或更新版本，才能转换商品及包装文字。');
         if (capabilities?.image_link_replacement !== true) throw new Error('本地工具需升级到支持 OSS 图片链接自动替换的版本。');
         if (capabilities.cloud_image_storage !== true) throw new Error('本地工具需升级到 1.6.3 或更新版本，才能直接保存到 OSS。');
-        if (capabilities.oss_configured !== true) throw new Error('请先在本地工具配置 OSS，再刷新配置状态。');
+        if (capabilities.oss_configured !== true) throw new Error('请先在插件的图片服务设置中配置 OSS，再刷新配置状态。');
         if (!this.current(epoch)) return;
         snapshot = await this.client.request('jobs', { body: { source_task_id: sourceTaskId, cloud_only:true, entries, provider, image_kinds:imageKinds, image_limits:imageLimits, paid_confirmed:paidConfirmed, translate_product_text:translateProductText }, connection });
       }
