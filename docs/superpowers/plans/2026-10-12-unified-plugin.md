@@ -35,45 +35,44 @@
 
 Files: create doubao-image-tool/native_host.py, native_runtime.py, backend_install.py and tests/test_native_backend.py; modify run.py and build.ps1; create install/uninstall CMD entry points.
 
-- [ ] Write failing native framing, registered origin, concurrency/stale descriptor, fake spawn and registry tests. Assert `decode_frame(encode_frame({'action':'connect'})) == {'action':'connect'}` and reject frames over 1MiB.
-- [ ] Run targeted Python tests and retain expected RED output.
-- [ ] Implement bounded JSON framing; exact protocol/action/origin whitelist; token never printed except framed response. Host launches same installed exe hidden with --automatic/--no-open, validates encrypted ready descriptor against authenticated service, and attaches a random native session. Ping only renews own lease. No arbitrary message paths.
-- [ ] Implement installation to current-user fixed directory, transactional copy/rollback, HKCU native manifest exact allowed_origins, settings, repeat install and safe uninstall. Validate all owned removal targets before recursive cleanup. Installation reports actual error and does not reset configurations.
-- [ ] Add tests for no UI/no generation at startup, native EOF cleanup, last lease disconnect/drain, exit descriptor removal; run GREEN.
-- [ ] Build script includes entry points in existing portable/source directories. Root performs actual compiled/native Chrome smoke in isolated state.
+- [x] Write failing native framing, registered origin, concurrency/stale descriptor, fake spawn and registry tests. Assert `decode_frame(encode_frame({'action':'connect'})) == {'action':'connect'}` and reject frames over 1MiB.
+- [x] Run targeted Python tests and retain expected RED output.
+- [x] Implement bounded JSON framing; exact protocol/action/origin whitelist; token never printed except framed response. Host launches same installed exe hidden with --automatic/--no-open, validates encrypted ready descriptor against authenticated service, and attaches a random native session. Ping only renews own lease. No arbitrary message paths.
+- [x] Implement installation to current-user fixed directory, transactional copy/rollback, HKCU native manifest exact allowed_origins, settings, repeat install and safe uninstall. Validate all owned removal targets before recursive cleanup. Installation reports actual error and does not reset configurations.
+- [x] Add tests for no UI/no generation at startup, native EOF cleanup, last lease disconnect/drain, exit descriptor removal; run GREEN.
+- [x] Build script includes entry points in existing portable/source directories. Root performs actual compiled/native Chrome smoke in isolated state.
 
 ### Task 2: Paired settings, queue drain and recovery
 
 Files: modify doubao-image-tool/app.py, bridge_routes.py, core.py; create tests/test_unified_bridge.py and tests/test_queue_drain.py.
 
-- [ ] Write tests that nonpaired requests cannot mutate credentials, successful status does not contain Secret, OSS reuse mode needs no repeated keys, clear/current reject foreign sources, old statuses resume without submissions.
-- [ ] Run RED before adding routes.
-- [ ] Extend register_bridge through explicit settings callbacks from app; reuse existing credential stores and OSS check. Preflight GET/POST/DELETE methods must match settings endpoints and keep all origin/token checks. Add current/reset and capabilities described above.
-- [ ] Write drain tests with one submitted fake image and a second distinct image: `queue.begin_drain(); release_result(); assert first.public_url; assert submits == 1; assert queue.drain_complete()`. Include Aliyun timeout, already cached result, duplicate aliases, close and late return isolation.
-- [ ] Implement queue drain state: no new POST/prepare-send while draining; allow already submitted item and its aliases to publish then pause. Preserve stopped/uncertain/failed entries and old job compatibility. Reconnection alone doesn't continue jobs; explicit user continue clears drain.
-- [ ] Run targeted GREEN + previous bridge/core/Aliyun/OSS tests and report safe shutdown bound.
+- [x] Write tests that nonpaired requests cannot mutate credentials, successful status does not contain Secret, OSS reuse mode needs no repeated keys, clear/current reject foreign sources, old statuses resume without submissions.
+- [x] Run RED before adding routes.
+- [x] Extend register_bridge through explicit settings callbacks from app; reuse existing credential stores and OSS check. Preflight GET/POST/DELETE methods must match settings endpoints and keep all origin/token checks. Add current/reset and capabilities described above.
+- [x] Write drain tests with one submitted fake image and a second distinct image: `queue.begin_drain(); release_result(); assert first.public_url; assert submits == 1; assert queue.drain_complete()`. Include Aliyun timeout, already cached result, duplicate aliases, close and late return isolation.
+- [x] Implement queue drain state: no new POST/prepare-send while draining; allow already submitted item and its aliases to publish then pause. Preserve stopped/uncertain/failed entries and old job compatibility. Reconnection alone doesn't continue jobs; explicit user continue clears drain.
+- [x] Run targeted GREEN + previous bridge/core/Aliyun/OSS tests and report safe shutdown bound.
 
 ### Task 3: Single plugin UI and automatic controller
 
 Files: create extension/lib/native-backend.mjs, extension/settings-ui.mjs and tests/native-backend.test.mjs/tests/settings-ui.test.mjs; modify background.js, manifest.json, manager.html/manager.mjs, conversion-ui.mjs/lib/image-conversion.mjs and relevant tests.
 
-- [ ] Write RED broker tests for connect/ping, malformed reply, missing host, concurrent ensures, reconnect, wrong page sender; UI tests for automatic connection/no manual code, installation ID copy and provider credentials guards.
-- [ ] Add nativeMessaging permission, preserve extension identity, version1.6.6. Use service-worker native broker with one connection, small request IDs and timeout; dropped port rejects waiters and can reconnect, no automatic paid submission.
-- [ ] Replace customer-facing local tool/code fields with automatic backend status and reconnect/help controls. Existing collection rendering and export remain independent when backend missing.
-- [ ] Add plugin settings for Aliyun key/secret and OSS bucket/region/source/independent keys, password inputs, save/delete/check and redacted state. Clear secret fields after save and never storage.set secrets.
-- [ ] Restore same-source recovered job and published links after connecting; source mismatch keeps existing collection intact and offers explicit clear conversion task. Refresh/close manager does not clear backend state. Existing ownership and overlay guards remain.
-- [ ] Add explicit reset conversion task and open Doubao controls; return safe model/error/progress labels and preserve type limits/packaging/paid confirmation. Mock all external calls.
-- [ ] Run targeted Node and local behavior tests GREEN. Root regression checks all tests and compiled plugin.
+- [x] Write RED broker tests for connect/ping, malformed reply, missing host, concurrent ensures, reconnect, wrong page sender; UI tests for automatic connection/no manual code, installation ID copy and provider credentials guards.
+- [x] Add nativeMessaging permission, preserve extension identity, version1.6.6. Use service-worker native broker with one connection, small request IDs and timeout; dropped port rejects waiters and can reconnect, no automatic paid submission.
+- [x] Replace customer-facing local tool/code fields with automatic backend status and reconnect/help controls. Existing collection rendering and export remain independent when backend missing.
+- [x] Add plugin settings for Aliyun key/secret and OSS bucket/region/source/independent keys, password inputs, save/delete/check and redacted state. Clear secret fields after save and never storage.set secrets.
+- [x] Restore same-source recovered job and published links after connecting; source mismatch keeps existing collection intact and offers explicit clear conversion task. Refresh/close manager does not clear backend state. Existing ownership and overlay guards remain.
+- [x] Add explicit reset conversion task and open Doubao controls; return safe model/error/progress labels and preserve type limits/packaging/paid confirmation. Mock all external calls.
+- [x] Run targeted Node and local behavior tests GREEN. Root regression checks all tests and compiled plugin.
 
 ### Task 4: Review, compiled proof, delivery and Git
 
 Files: update README.md, doubao-image-tool/README.md, docs/商品采集与本地图片转换使用说明.md; existing fixed delivery folder/ZIP; plan checkboxes and verification report.
 
 - [x] Read delivery/documentation diff and run fresh full Python (451)/Node (423) tests and npm run check. Git diff --check is required before each delivery commit; logs retained as artifacts/unified-final-*.log.
-- [ ] Root-owned: finish task-scoped delivery review and whole-branch review; fix any findings with regressions when behavior changes.
+- [x] Root-owned: finish task-scoped delivery review and whole-branch review; fix any findings with regressions when behavior changes.
 - [x] Root-built and root-verified compiled runtime at backend 8a2a62f; later edits are plugin UI only. Isolated protocol and real Chromium checks passed with temporary state/registration cleanup, real DPAPI and zero paid_calls; delivery reuses the unchanged verified EXE.
 - [x] Partial XLS/XLSX mocks, result drain/recovery and stale-source isolation covered by full tests; root additionally downloaded and inspected a partial XLSX from real Chromium with preseeded results. Actual paid tests remain disabled.
 - [x] Update customer instructions for one-time install-ID, automatic connection, plugin credentials, safe uninstall, upgrade and precise validation boundaries.
 - [x] Copy verified plugin/runtime/source/docs into the existing fixed delivery folder; replace the single ZIP, verify all 2,677 member hashes and reject customer-state/key/profile/cache/test files. EXE unchanged; plugin/runtime/source matched verified inputs. Exact ZIP hash retained in delivery report and artifacts/unified-final-package.json.
 - [ ] Root-owned: commit final review fixes if needed, fast-forward integration and tag1.6.6 after all checks; no automatic GitHub push.
-
