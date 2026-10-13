@@ -3,7 +3,7 @@ import { parseConnectionCode } from './image-conversion.mjs';
 const INSTALL_ERROR = '后台未安装或启动失败，请按安装说明登记当前插件编号，然后重新连接。';
 const UPGRADE_ERROR = '请升级后台组件到 1.6.6 或更新版本后重新连接。';
 export class NativeBackendBroker {
-  constructor({ runtime, setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout } = {}) {
+  constructor({ runtime, setTimer = globalThis.setTimeout.bind(globalThis), clearTimer = globalThis.clearTimeout.bind(globalThis) } = {}) {
     this.runtime = runtime; this.setTimer = setTimer; this.clearTimer = clearTimer;
     this.port = null; this.connectionCode = null; this.pending = new Map(); this.serial = 0; this.connecting = null; this.heartbeat = null;
   }

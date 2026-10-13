@@ -63,3 +63,22 @@ test('heartbeat schedules its next twenty-second send while the native reply is 
   assert.ok([...f.timers.values()].some(timer=>timer.ms===20000),'next send is scheduled before the current reply');
   f.reply(undefined,{ok:true,version:'1.6.6'});
 });
+test('default browser timers keep their global receiver through connect heartbeat and disconnect cleanup',async()=>{
+  const previousSet=globalThis.setTimeout,previousClear=globalThis.clearTimeout;
+  const f=fixture(),timers=new Map();let serial=0;
+  globalThis.setTimeout=function(fn,ms){if(this!==globalThis)throw new TypeError('Illegal invocation');timers.set(++serial,{fn,ms});return serial;};
+  globalThis.clearTimeout=function(id){if(this!==globalThis)throw new TypeError('Illegal invocation');timers.delete(id);};
+  try {
+    const connectNative=f.runtime.connectNative;
+    f.runtime.connectNative=host=>{
+      const port=connectNative(host);
+      port.postMessage=value=>{port.sent.push(value);port.onMessage.emit({id:value.id,ok:true,version:'1.6.6',...(value.action==='connect'?{connection_code:code}:{})});};
+      return port;
+    };
+    const broker=new NativeBackendBroker({runtime:f.runtime});
+    assert.equal(await broker.ensureBackend(),code);
+    const [id,heartbeat]=[...timers].find(([,timer])=>timer.ms===20000);timers.delete(id);heartbeat.fn();
+    assert.deepEqual(f.ports[0].sent.map(request=>request.action),['connect','ping']);
+    f.ports[0].onDisconnect.emit();assert.equal(timers.size,0);assert.equal(broker.connectionCode,null);
+  } finally {globalThis.setTimeout=previousSet;globalThis.clearTimeout=previousClear;}
+});
