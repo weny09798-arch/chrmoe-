@@ -157,7 +157,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     const estimate = chosen.amount === null ? '本批费用上限待本地快照确认。' : chosen.frozen ? `本批累计费用上限 ¥${chosen.amount.toFixed(2)}（包含已确认的重新生成）。` : `按 ${chosen.unique} 个独立 URL × 0.06 元，本批首次提交费用上限 ¥${chosen.amount.toFixed(2)}。`;
     $('conversion-cost').textContent = `${estimate}相同内容可能去重；实际费用以阿里云账单为准。失败或不确定的请求也可能计费，重新生成可能增加费用。`;
     $('conversion-connected').textContent = connecting ? '正在启动后台' : backendStatus || (connected ? '后台已连接' : '未连接');
-    $('conversion-connect').disabled = working || !controller.canReconnect();
+    $('conversion-connect').disabled = working || (!controller.restored && !controller.canReconnect());
     $('conversion-reset').disabled = !connected || working;
     $('conversion-login').disabled = !connected || working || Boolean(conflict);
     $('conversion-login').hidden = paid;
