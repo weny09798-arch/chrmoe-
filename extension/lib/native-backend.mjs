@@ -48,9 +48,11 @@ export class NativeBackendBroker {
     });
   }
   pingLater() {
-    this.heartbeat = this.setTimer(async () => {
+    this.heartbeat = this.setTimer(() => {
       this.heartbeat = null;
-      try { await this.request('ping'); if (this.port) this.pingLater(); } catch {}
+      const port = this.port;
+      void this.request('ping').catch(() => {});
+      if (this.port === port) this.pingLater();
     }, 20000);
   }
   ensureBackend() {

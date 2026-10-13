@@ -56,3 +56,10 @@ test('native startup may use its full twenty-second discovery window before brok
   for(const timer of [...f.timers.values()].filter(timer=>timer.ms<=20000))timer.fn();
   f.reply();assert.equal(await pending,code);
 });
+test('heartbeat schedules its next twenty-second send while the native reply is pending',async()=>{
+  const f=fixture(),pending=f.broker.ensureBackend();f.reply();await pending;
+  const [id,heartbeat]=[...f.timers].find(([,timer])=>timer.ms===20000);f.timers.delete(id);heartbeat.fn();
+  assert.equal(f.ports[0].sent.at(-1).action,'ping');
+  assert.ok([...f.timers.values()].some(timer=>timer.ms===20000),'next send is scheduled before the current reply');
+  f.reply(undefined,{ok:true,version:'1.6.6'});
+});
