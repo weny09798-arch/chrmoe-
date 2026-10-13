@@ -41,12 +41,10 @@
         </section>
         <details class="panel links-panel" id="links-panel" hidden><summary>查看已收集的商品链接 <span id="links-count"></span></summary><p class="muted">点击 × 删除不需要的商品，稍后自动补齐数量；本次任务的所有搜索名称都会排除同平台的这个商品 ID。</p><div class="table-wrap"><table><thead><tr><th>搜索名称</th><th>商品图片</th><th>商品标题</th><th>展示价格</th><th>详情状态</th><th>详情说明</th><th>链接</th><th>操作</th></tr></thead><tbody id="link-rows"></tbody></table></div></details>
         <section class="panel conversion-panel" aria-labelledby="conversion-heading">
-          <div class="section-heading"><h3 id="conversion-heading">本地图片转换</h3><span id="conversion-connected" class="badge">未连接</span></div>
-          <p class="muted">采集停止或结束后，选择本次可导出的图片交给本地工具。广告文字转为繁体，尽量保留包装文字、数字、品牌和图案；结果仍需人工对照原图检查。开始后新增商品留到下一批。</p>
-          <label for="conversion-code">本地工具连接码</label>
-          <div class="input-group"><input id="conversion-code" type="password" placeholder="从本地工具复制完整连接码" autocomplete="off" spellcheck="false"><button id="conversion-connect" class="button" type="button">连接工具</button></div>
-          <button id="conversion-forget" class="button subtle" type="button" hidden>忘记旧批次，使用新连接（保留采集商品）</button>
-          <p class="muted">每次运行先打开本地图片工具，复制连接码后粘贴。连接信息只保存在当前管理页会话。</p>
+          <div class="section-heading"><h3 id="conversion-heading">图片转换</h3><span id="conversion-connected" class="badge">未连接</span></div>
+          <p class="muted">后台自动连接。采集停止或结束后，选择本次可导出的图片开始转换。广告文字转为繁体，尽量保留包装文字、数字、品牌和图案；结果仍需人工对照原图检查。开始后新增商品留到下一批。</p>
+          <div class="actions"><button id="conversion-connect" class="button" type="button">重新连接后台</button></div>
+          <details id="backend-install-help"><summary>首次安装／连接失败说明</summary><p class="muted">首次使用请点击“复制插件编号”，运行交付包中的“安装后台组件”，粘贴编号完成安装，然后点击“重新连接后台”。升级时覆盖原插件目录并重新加载；如果移动插件目录导致编号变化，请重新运行安装程序登记。</p><div class="actions"><code id="backend-extension-id"></code><button id="backend-copy-id" class="button" type="button">复制插件编号</button></div><p id="backend-copy-status" class="muted" role="status"></p></details>
           <fieldset class="conversion-options"><legend>转换图片类型</legend><label><input id="conversion-kind-main" type="checkbox" checked> 主图</label><label>数量 <input id="conversion-limit-main" type="number" min="1" step="1" placeholder="不限" aria-label="主图数量" style="width:6em"></label><label><input id="conversion-kind-detail" type="checkbox" checked> 详情图</label><label>数量 <input id="conversion-limit-detail" type="number" min="1" step="1" placeholder="不限" aria-label="详情图数量" style="width:6em"></label><label><input id="conversion-kind-sku" type="checkbox" checked> SKU 图</label><label>数量 <input id="conversion-limit-sku" type="number" min="1" step="1" placeholder="不限" aria-label="SKU 图数量" style="width:6em"></label></fieldset>
           <p class="muted">数量留空表示不限；各类型按整批商品顺序选取前 N 个图片位置，相同 URL 也占数量，生成时再去重。未选位置保留原图或此前已替换链接。</p>
           <p id="conversion-selection" class="muted" aria-live="polite"></p>
@@ -54,15 +52,35 @@
           <label class="conversion-paid-option"><input id="conversion-product-text" type="checkbox"> 同时转换商品及包装文字</label>
           <p class="muted">未勾选：只转换商品外广告文字；勾选：商品及包装上的简体文字也转繁体，数字、单位和商品外观保持原样。豆包和阿里云均适用，本批开始后固定。阿里云仍按电商版 ¥0.06/张计费，结果需人工核对。</p>
           <p id="conversion-provider-status" class="muted" role="status" aria-live="polite"></p>
-          <div class="actions"><a id="conversion-settings" class="text-button" target="_blank" rel="noopener noreferrer" hidden>打开本地工具配置 OSS 和阿里云密钥 ↗</a><button id="conversion-refresh-config" class="button" type="button" disabled>刷新配置状态</button></div>
+          <div class="actions"><button id="conversion-refresh-config" class="button" type="button" disabled>刷新配置状态</button></div>
+          <details id="conversion-settings"><summary>图片服务设置（阿里云与 OSS）</summary>
+            <p class="muted">密钥保存在当前 Windows 用户的加密配置中，保存后清空输入框。保存配置不会发起图片翻译。</p>
+            <div id="settings-message" class="notice" role="status" aria-live="polite" hidden></div>
+            <form id="settings-aliyun-form"><fieldset class="settings-fields"><legend>阿里云图片翻译</legend>
+              <label>AccessKey ID<input id="settings-aliyun-id" type="password" autocomplete="new-password" spellcheck="false"></label>
+              <label>AccessKey Secret<input id="settings-aliyun-secret" type="password" autocomplete="new-password" spellcheck="false"></label>
+              <p id="settings-aliyun-status" class="muted" role="status">连接后台后查询配置</p>
+              <div class="actions"><button id="settings-aliyun-save" class="button" type="submit">保存阿里云密钥</button><button id="settings-aliyun-delete" class="button subtle" type="button">删除阿里云密钥</button></div>
+            </fieldset></form>
+            <form id="settings-oss-form"><fieldset class="settings-fields"><legend>OSS 图片存储</legend>
+              <label>Bucket<input id="settings-oss-bucket" autocomplete="off" placeholder="例如 collector-images"></label>
+              <label>地域<input id="settings-oss-region" autocomplete="off" placeholder="例如 cn-hangzhou"></label>
+              <label>凭证来源<select id="settings-oss-mode"><option value="translation" selected>复用阿里云翻译密钥</option><option value="independent">独立 OSS 密钥</option></select></label>
+              <label>独立 AccessKey ID<input id="settings-oss-id" type="password" autocomplete="new-password" spellcheck="false"></label>
+              <label>独立 AccessKey Secret<input id="settings-oss-secret" type="password" autocomplete="new-password" spellcheck="false"></label>
+              <p id="settings-oss-status" class="muted" role="status">连接后台后查询配置</p>
+              <div class="actions"><button id="settings-oss-save" class="button" type="submit">保存 OSS 配置</button><button id="settings-oss-delete" class="button subtle" type="button">删除 OSS 配置</button><button id="settings-oss-check" class="button" type="button">检查上传和公开读取</button></div>
+              <p id="settings-oss-check-cost" class="muted">检查会上传并读取一张测试图，可能产生少量 OSS 请求和存储费用；不会发起翻译。</p>
+            </fieldset></form>
+          </details>
           <p id="conversion-cost" class="muted" hidden></p>
-          <div class="actions"><button id="conversion-login" class="text-button" type="button" disabled>打开豆包登录 ↗</button></div>
+          <div class="actions"><button id="conversion-login" class="text-button" type="button" disabled>打开豆包／处理验证 ↗</button></div>
           <p class="muted">转换图片保存到你配置的 OSS，上传验证成功后自动替换商品 Excel 图片链接。临时缓存由工具自动管理。</p>
           <div id="conversion-message" class="notice" role="status" aria-live="polite" hidden></div>
           <p id="conversion-status" class="conversion-status">等待连接本地工具</p>
           <p id="conversion-counts" class="muted">图片位置 0 · 独立图片 0 · 已下载 0 · 已转换 0 · 失败 0</p>
           <p id="conversion-current" class="muted"></p>
-          <div class="actions"><button id="conversion-start" class="button primary" type="button" disabled>开始图片转换</button><button id="conversion-stop" class="button subtle" type="button" disabled>停止转换</button><button id="conversion-continue" class="button" type="button" disabled>继续转换</button></div>
+          <div class="actions"><button id="conversion-start" class="button primary" type="button" disabled>开始图片转换</button><button id="conversion-stop" class="button subtle" type="button" disabled>停止转换</button><button id="conversion-continue" class="button" type="button" disabled>继续转换</button><button id="conversion-reset" class="button subtle" type="button" disabled>清空转换任务</button></div>
           <p class="muted">登录、验证或生成结果不确定时会暂停。豆包模式可检查浏览器页面后继续；阿里云模式不会自动切换到豆包。“继续获取此图”读取已有结果，“重新生成此图”会重新提交，阿里云模式可能再次计费。</p>
           <details id="conversion-details"><summary>查看原图、结果与每张图片进度</summary><div id="conversion-items" class="conversion-items"></div></details>
         </section>

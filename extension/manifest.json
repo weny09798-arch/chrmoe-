@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "拼多多 · 主图选品助手",
-  "version": "1.6.5",
+  "version": "1.6.6",
   "description": "采集拼多多、1688 和淘宝商品及 SKU，转换选中图片并上传 OSS，导出 Excel 自动使用转换图，未完成的位置保留原图。",
   "minimum_chrome_version": "116",
   "permissions": [
     "storage",
     "scripting",
-    "downloads"
+    "downloads",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "https://mobile.pinduoduo.com/*",
@@ -21,7 +22,8 @@
     "http://localhost/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "action": {
     "default_title": "打开主图选品助手"

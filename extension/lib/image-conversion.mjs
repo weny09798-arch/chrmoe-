@@ -103,16 +103,16 @@ export class BridgeClient {
     this.connection = connection;
     this.storage?.setItem(SESSION_KEY, JSON.stringify(connection));
   }
-  async request(route, { body, blob = false, connection = this.connection } = {}) {
+  async request(route, { body, method = body === undefined ? 'GET' : 'POST', blob = false, connection = this.connection } = {}) {
     if (!connection || !this.extensionId) throw new Error('请先在 Chrome 扩展中连接本地图片工具。');
     const headers = { 'X-Tool-Token': connection.token, 'X-Extension-Id': this.extensionId };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     let response;
-    try { response = await this.fetch(`${connection.baseUrl}/api/bridge/${route}`, { method: body === undefined ? 'GET' : 'POST', headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), cache: 'no-store', redirect: 'error', credentials: 'omit' }); }
-    catch { throw new Error('无法连接本地图片工具，请确认工具仍在运行并重新复制连接码。'); }
+    try { response = await this.fetch(`${connection.baseUrl}/api/bridge/${route}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), cache: 'no-store', redirect: 'error', credentials: 'omit' }); }
+    catch { throw new Error('无法连接图片后台，请点击重新连接；首次使用请先安装后台组件。'); }
     if (!response.ok) {
       // Never surface a server URL/body that could accidentally include credentials.
-      const messages = {401:'连接码已失效，请重新连接。',403:'本地工具未授权此扩展，请使用同一管理页的连接码重新连接。',409:'本地工具正在处理其他任务，或任务已失效，请先在工具中处理。',404:'本地任务或图片尚不可用。'};
+    const messages = {401:'后台连接已失效，请重新连接。',403:'后台未授权当前插件，请按安装说明重新登记插件编号。',409:'后台正在处理其他任务，或任务已失效，请重新连接检查。',404:'转换任务或图片尚不可用。'};
       const error = new Error(messages[response.status] || `本地工具请求失败（${response.status}）。`);
       error.status = response.status; throw error;
     }
@@ -128,7 +128,7 @@ export class ConversionController {
     this.outputDir = ''; this.working = false; this.error = '';
     this.reconnectCandidate = null;
     this.restored = false;
-    this.capabilities = null; this.availableCounts = null;
+    this.capabilities = null; this.availableCounts = null; this.conflict = null;
     // Restore ownership synchronously: deletion/clear must work before the first GET.
     try {
       const handle = JSON.parse(client.storage?.getItem(OWNED_JOB_KEY) || 'null');
@@ -154,7 +154,7 @@ export class ConversionController {
     this.currentTask = task;
     await this.poll();
   }
-  view() { return { job: this.job, capabilities: this.capabilities, connected: Boolean(this.client.connection), outputDir: this.outputDir, working: this.working, error: this.error, canForget: Boolean(this.reconnectCandidate) }; }
+  view() { return { job: this.job, conflict:this.conflict, capabilities: this.capabilities, connected: Boolean(this.client.connection), outputDir: this.outputDir, working: this.working, error: this.error, canForget: Boolean(this.reconnectCandidate) }; }
   async readCapabilities(connection) {
     try { return await this.client.request('capabilities', { connection }); }
     catch (error) { if (error.status === 404) return { providers:['doubao'], legacy:true, aliyun_configured:false, aliyun_price_per_image:0.06 }; throw error; }
@@ -234,6 +234,45 @@ export class ConversionController {
       if (this.current(epoch)) { this.capabilities = capabilities; this.client.remember(connection); this.outputDir = ''; this.emit(); }
     });
   }
+  async connectAutomatic(code, task) {
+    if (this.working || (!this.restored && !this.canReconnect())) throw new Error('请先停止当前图片批次，再重新连接。');
+    ++this.epoch;
+    return this.guarded(async epoch => {
+      const connection = parseConnectionCode(code);
+      await this.client.request('pair', { body:{extension_id:this.client.extensionId}, connection });
+      if (!this.current(epoch)) return;
+      const capabilities = await this.readCapabilities(connection);
+      if (!this.current(epoch)) return;
+      if (capabilities.unified_plugin !== true || capabilities.automatic_backend !== true || capabilities.settings_in_plugin !== true) throw new Error('请升级后台组件到 1.6.6 或更新版本，以支持插件自动连接和设置。');
+      const snapshot = await this.client.request('current', {connection});
+      if (!this.current(epoch)) return;
+      if (!snapshot || typeof snapshot !== 'object' || (snapshot.id ? typeof snapshot.id !== 'string' : snapshot.status !== 'idle')) throw new Error('后台任务状态不可用，请重新连接。');
+      this.job = null; this.entries = null; this.sourceTaskId = null; this.restored = false; this.conflict = null; this.publishedSignature = '';
+      this.client.storage?.removeItem(OWNED_JOB_KEY);
+      this.capabilities = capabilities; this.client.remember(connection); this.currentTask = task;
+      if (snapshot?.id) {
+        if (snapshot.kind === 'collector' && task?.id && snapshot.source_task_id === task.id && this.getTask()?.id === task.id) {
+          this.sourceTaskId = task.id;
+          this.entries = Object.freeze((snapshot.items || []).flatMap(item => item.refs || []).map(ref => Object.freeze({...ref})));
+          this.availableCounts = imageKindCounts(buildImageManifest(task));
+          await this.acceptSnapshot(snapshot,snapshot.id);
+          if (!this.current(epoch)) return;
+          this.persistOwnership();
+        } else this.conflict = {id:snapshot.id,source_task_id:snapshot.source_task_id ?? null};
+      } else if (snapshot?.status !== 'idle') throw new Error('后台任务状态不可用，请重新连接。');
+      this.emit();
+    });
+  }
+  async resetConversion() {
+    if (this.working) throw new Error('请等待当前操作完成。');
+    const target = this.conflict || this.job;
+    return this.guarded(async epoch => {
+      await this.client.request('reset', {body:target ? {job_id:target.id,source_task_id:target.source_task_id ?? this.sourceTaskId ?? null} : {}});
+      if (!this.current(epoch)) return;
+      ++this.epoch; this.job = null; this.conflict = null; this.entries = null; this.sourceTaskId = null; this.pendingSource = null; this.restored = false;
+      this.client.storage?.removeItem(OWNED_JOB_KEY); this.publishedSignature = ''; this.working = false; this.error = ''; this.emit();
+    });
+  }
   async chooseFolder() {
     return this.guarded(async epoch => {
       const result = await this.client.request('folder', { body: {} });
@@ -241,6 +280,7 @@ export class ConversionController {
     });
   }
   async start(task, outputDir = this.outputDir, collecting = false, options = {}) {
+    if (this.conflict) throw new Error('后台正在处理其他任务，请明确清空转换任务后再开始。');
     if (collecting || !task || !['done','stopped','error','short'].includes(task.status)) throw new Error('请先停止采集或等待采集结束，再开始图片转换。');
     if (this.working || (this.job && !['completed','done'].includes(this.job.status))) throw new Error('请先处理当前图片批次。');
     const imageKinds = Object.freeze([...new Set(options.imageKinds ?? ['main','detail','sku'])]);
@@ -301,6 +341,7 @@ export class ConversionController {
     } catch (error) { if (this.current(epoch) && this.job?.id === jobId) { this.error = error.message; this.emit(); } }
   }
   async action(action, index, taskId, options = {}) {
+    if (this.conflict) throw new Error('后台正在处理其他任务，请明确清空转换任务后再操作。');
     const job = this.job;
     if (this.working) throw new Error('请等待当前操作完成。');
     const paidRedo = job?.provider === 'aliyun' && action === 'redo';
@@ -316,7 +357,7 @@ export class ConversionController {
     const job = this.job, sourceTaskId = this.sourceTaskId, connection = this.client.connection;
     ++this.epoch;
     this.job = null; this.entries = null; this.sourceTaskId = null; this.pendingSource = null;
-    this.restored = false; this.reconnectCandidate = null; this.client.storage?.removeItem(OWNED_JOB_KEY);
+    this.restored = false; this.reconnectCandidate = null; this.conflict = null; this.client.storage?.removeItem(OWNED_JOB_KEY);
     this.working = false; this.error = ''; this.emit();
     if (job) await this.client.request('action', { body: { job_id: job.id, source_task_id: sourceTaskId, action: 'cancel' }, connection }).catch(() => {});
   }

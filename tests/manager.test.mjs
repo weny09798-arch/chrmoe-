@@ -17,18 +17,18 @@ test('manager saves published mapping through task writer and preserves it after
     globalThis.sessionStorage={getItem:key=>session.get(key),setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)};
     globalThis.setTimeout=()=>1;
     globalThis.fetch=async(url,options)=>{
-      const body=options.body&&JSON.parse(options.body);let value={};
-      if(url.endsWith('/capabilities'))value={providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true};
+      const body=options.body&&JSON.parse(options.body);let value=url.endsWith('/current')?{status:'idle'}:{};
+      if(url.endsWith('/capabilities'))value={unified_plugin:true,automatic_backend:true,settings_in_plugin:true,providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true};
       if(url.endsWith('/folder'))value={path:'D:\\图片'};
       if(url.endsWith('/jobs'))entries=body.entries;
       if(url.endsWith('/jobs')||url.includes('/state'))value={id:'job-1',kind:'collector',source_task_id:source.id,status:'completed',items:[{status:'completed',refs:entries.map(ref=>({...ref,published_url:published,published_revision:1}))}],counts:{uploaded:1}};
       return {ok:true,json:async()=>value};
     };
-    const f=await managerFixture(task=>{source=task;task.status='stopped';task.jobs[0].status='stopped';task.jobs[0].groups=[{best:{id:'1',title:'相机',image:original,cents:100}}];});
-    f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();f.click('conversion-start');await tick();await tick();
+    const f=await managerFixture(task=>{source=task;task.status='stopped';task.jobs[0].status='stopped';task.jobs[0].groups=[{best:{id:'1',title:'相机',image:original,cents:100}}];},undefined,true);
+    f.click('conversion-connect');await tick();f.click('conversion-start');await tick();await tick();
     assert.equal(f.saved.task.imageReplacements?.[0]?.published_url,published);assert.equal(f.saved.task.jobs[0].groups[0].best.image,original);
     assert.match(f.document.getElementById('conversion-counts').textContent,/已替换 1.*原图回退 0/);
-    f.document.getElementById('conversion-code').value='http://localhost:54121/#token=new';f.click('conversion-connect');await tick();
+    f.click('conversion-connect');await tick();
     assert.equal(f.saved.task.imageReplacements[0].published_url,published);
   } finally {globalThis.fetch=oldFetch;globalThis.sessionStorage=oldSession;globalThis.setTimeout=oldTimer;}
 });
@@ -40,21 +40,21 @@ test('manager retries published mapping persistence after transient storage fail
     globalThis.sessionStorage={getItem:key=>session.get(key),setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)};
     globalThis.setTimeout=fn=>{timers.push(fn);return timers.length;};
     globalThis.fetch=async(url,options)=>{
-      const body=options.body&&JSON.parse(options.body);let value={};
-      if(url.endsWith('/capabilities'))value={providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true};
+      const body=options.body&&JSON.parse(options.body);let value=url.endsWith('/current')?{status:'idle'}:{};
+      if(url.endsWith('/capabilities'))value={unified_plugin:true,automatic_backend:true,settings_in_plugin:true,providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true};
       if(url.endsWith('/folder'))value={path:'D:\\图片'};
       if(url.endsWith('/jobs'))entries=body.entries;
       if(url.endsWith('/jobs')||url.includes('/state'))value={id:'job-1',kind:'collector',source_task_id:source.id,status:'completed',items:[{status:'completed',refs:entries.map(ref=>({...ref,published_url:published,published_revision:1}))}],counts:{uploaded:1}};
       return {ok:true,json:async()=>value};
     };
-    const f=await managerFixture(task=>{source=task;task.status='stopped';task.jobs[0].status='stopped';task.jobs[0].groups=[{best:{id:'1',title:'相机',image:original,cents:100}}];});
+    const f=await managerFixture(task=>{source=task;task.status='stopped';task.jobs[0].status='stopped';task.jobs[0].groups=[{best:{id:'1',title:'相机',image:original,cents:100}}];},undefined,true);
     let writes=0;globalThis.chrome.storage.local.set=async values=>{if(values.task?.imageReplacements?.length&&++writes===1)throw new Error('transient storage failure');Object.assign(f.saved,structuredClone(values));};
-    f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();f.click('conversion-start');await tick();await tick();
+    f.click('conversion-connect');await tick();f.click('conversion-start');await tick();await tick();
     assert.equal(writes,1);assert.equal(f.saved.task.imageReplacements,undefined);
     for(const poll of timers.splice(0))poll();await tick();await tick();
     assert.equal(writes,2);assert.equal(f.saved.task.imageReplacements?.[0]?.published_url,published);assert.equal(f.saved.task.jobs[0].groups[0].best.image,original);
     assert.match(f.document.getElementById('conversion-counts').textContent,/已替换 1.*原图回退 0/);
-    f.document.getElementById('conversion-code').value='http://localhost:54121/#token=new';f.click('conversion-connect');await tick();
+    f.click('conversion-connect');await tick();
     assert.equal(f.saved.task.imageReplacements[0].published_url,published);
   } finally {globalThis.fetch=oldFetch;globalThis.sessionStorage=oldSession;globalThis.setTimeout=oldTimer;}
 });
@@ -66,15 +66,15 @@ test('delayed replacement save followed by deletion retains the remaining produc
     globalThis.sessionStorage={getItem:key=>session.get(key),setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)};
     globalThis.setTimeout=()=>1;
     globalThis.fetch=async(url,options)=>{
-      const body=options.body&&JSON.parse(options.body);let value={};
-      if(url.endsWith('/capabilities'))value={providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true};
+      const body=options.body&&JSON.parse(options.body);let value=url.endsWith('/current')?{status:'idle'}:{};
+      if(url.endsWith('/capabilities'))value={unified_plugin:true,automatic_backend:true,settings_in_plugin:true,providers:['doubao'],image_link_replacement:true,cloud_image_storage:true,oss_configured:true};
       if(url.endsWith('/folder'))value={path:'D:\\图片'};
       if(url.endsWith('/jobs')){entries=body.entries;value={id:'job-race',kind:'collector',source_task_id:source.id,status:'completed',items:[{status:'completed',refs:entries.map(ref=>({...ref,published_url:published,published_revision:1}))}],counts:{uploaded:1}};}
       return {ok:true,json:async()=>value};
     };
-    const f=await managerFixture(task=>{source=task;task.status='stopped';task.jobs[0].status='stopped';task.jobs[0].groups=['A','B'].map(id=>({best:{id,title:`相机${id}`,image:original,cents:100}}));});
+    const f=await managerFixture(task=>{source=task;task.status='stopped';task.jobs[0].status='stopped';task.jobs[0].groups=['A','B'].map(id=>({best:{id,title:`相机${id}`,image:original,cents:100}}));},undefined,true);
     globalThis.chrome.storage.local.set=async values=>{writes.push(structuredClone(values));if(writes.length===1)await pendingWrite;Object.assign(f.saved,structuredClone(values));};
-    f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();f.click('conversion-start');await tick();
+    f.click('conversion-connect');await tick();f.click('conversion-start');await tick();
     assert.equal(writes.length,1);assert.equal(writes[0].task.imageReplacements.length,2);
     const panel=f.document.getElementById('links-panel');panel.open=true;panel.dispatchEvent(new window.Event('toggle'));
     f.document.querySelector('[data-remove-product="A"]').dispatchEvent(new window.Event('click'));await tick();
@@ -243,7 +243,7 @@ test('clear all stops an active search before old checkpoints can restore data',
   assert.equal(document.getElementById('export').disabled,true);
 });
 
-async function managerFixture(configureTask = () => {}, create = async () => { throw new Error('unexpected collection'); }) {
+async function managerFixture(configureTask = () => {}, create = async () => { throw new Error('unexpected collection'); }, automaticBackend = false) {
   const { document, window } = parseHTML(html);
   const task = createTask(['相机']);
   task.status = 'paused'; task.jobs[0].status = 'paused'; task.permissionOrigin = 'https://img.pddpic.com/*';
@@ -255,7 +255,7 @@ async function managerFixture(configureTask = () => {}, create = async () => { t
   globalThis.document = document;
   globalThis.window = window;
   globalThis.chrome = {
-    runtime: { id: 'test-extension' },
+    runtime: { id: 'test-extension', ...(automaticBackend ? {sendMessage:async()=>({ok:true,connection_code:'http://localhost:53121/#token=secret'})} : {}) },
     storage: { local: { async get() { return saved; }, async set(values) { Object.assign(saved, values); } } },
     permissions: { request: async () => { permissionRequests++; return permission; } },
     tabs: {

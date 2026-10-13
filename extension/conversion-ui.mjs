@@ -1,4 +1,5 @@
 import { BridgeClient, ConversionController, buildImageManifest, imagePositionKey, matchingImageReplacements, normalizeImageLimits, imageKindCounts } from './lib/image-conversion.mjs';
+import { createSettingsPanel } from './settings-ui.mjs';
 
 const STATUS = { recovering:'正在恢复本批进度', running:'转换中', queued:'等待', pending:'等待', paused:'已暂停', stopped:'已停止', blocked:'等待处理', 'needs-review':'请检查结果', completed:'本批已结束', done:'本批已结束', failed:'失败' };
 const PHASE = { downloading:'正在下载原图', ready:'原图就绪', submitting:'正在提交', pending:'等待生成结果', saving:'正在保存结果', uploading:'正在上传 OSS', 'upload-failed':'OSS 上传失败，导出保留原图', alias:'复用相同图片', done:'已完成', 'download-failed':'原图下载失败', uncertain:'请检查生成结果', 'aliyun-ready':'等待阿里云翻译', 'aliyun-downloading':'正在下载阿里云结果', 'aliyun-failed':'阿里云翻译失败，重新生成可能再次计费' };
@@ -13,7 +14,11 @@ function retryLabel(item, provider) {
   return '';
 }
 
-export function createConversionPanel({ document, extensionId, getCollection, onReplacements = async () => {}, storage = globalThis.sessionStorage, fetch = globalThis.fetch?.bind(globalThis), setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout, confirm = text => globalThis.confirm?.(text) === true } = {}) {
+export function createConversionPanel({ document, extensionId, getCollection, onReplacements = async () => {}, storage = globalThis.sessionStorage, fetch = globalThis.fetch?.bind(globalThis), setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout, ensureBackend = globalThis.chrome?.runtime?.sendMessage ? async () => {
+  const reply = await globalThis.chrome.runtime.sendMessage({type:'ensure-backend'});
+  if (reply?.ok !== true) throw new Error(reply?.error || '后台未安装或启动失败，请先安装后台组件后重新连接。');
+  return reply.connection_code;
+} : null, confirm = text => globalThis.confirm?.(text) === true } = {}) {
   const $ = id => document.getElementById(id);
   const node = (tag, text, className = '') => { const el = document.createElement(tag); el.textContent = text; el.className = className; return el; };
   const client = new BridgeClient({ extensionId, storage, fetch });
@@ -23,6 +28,27 @@ export function createConversionPanel({ document, extensionId, getCollection, on
   let imageLimits = {main:'',detail:'',sku:''};
   let imageKinds = ['main','detail','sku'], provider = 'doubao', quoteSignature = '', batchOptionsSignature = '';
   let translateProductText = false;
+  let connecting = false, backendStatus = '', settings;
+  settings = createSettingsPanel({document,client,unavailable:()=>Boolean(getCollection().unavailable) || controller.working || connecting,getConnection:()=>Boolean(client.connection) && controller.capabilities?.settings_in_plugin === true,refreshCapabilities:()=>controller.refreshCapabilities(),confirm});
+  async function connectAutomatically(task = getCollection().task) {
+    if (disposed || connecting || getCollection().unavailable) return;
+    if (!ensureBackend) { await controller.restoreForTask(task); return; }
+    let epoch = controller.epoch;
+    connecting = true; backendStatus = '正在启动后台'; render();
+    try {
+      const code = await ensureBackend();
+      if (disposed || !controller.current(epoch)) return;
+      const connection = controller.connectAutomatic(code,task); epoch = controller.epoch;
+      await connection;
+      if (disposed || !controller.current(epoch)) return;
+      backendStatus = '后台已连接'; message('');
+      connecting = false;
+      await settings.refresh();
+    } catch (error) {
+      if (disposed || !controller.current(epoch)) return;
+      backendStatus = '未安装或启动失败'; message(error.message,true); $('backend-install-help').open = true;
+    } finally { connecting = false; render(); }
+  }
   function selection(task) {
     let limits, entries;
     try {
@@ -105,7 +131,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     if (disposed) return;
     if (renderedEpoch !== controller.epoch) { stopPoll(); renderedEpoch = controller.epoch; }
     const state = controller.view(), { task, collecting = false, unavailable = false } = getCollection();
-    const job = state.job, connected = state.connected, working = state.working || unavailable;
+    const job = state.job, connected = state.connected && (!ensureBackend || backendStatus === '后台已连接'), working = state.working || unavailable || connecting, conflict = state.conflict;
     const frozen = Boolean(controller.pendingSource || (job && !['completed','done'].includes(job.status)));
     const batchSignature = job ? JSON.stringify([job.id,job.provider,job.image_kinds,job.image_limits,job.translate_product_text]) : '';
     if (job && !controller.pendingSource && (frozen || batchSignature !== batchOptionsSignature)) { imageKinds = [...(job.image_kinds || ['main','detail','sku'])]; provider = job.provider || 'doubao'; imageLimits = {...(job.image_limits || {main:null,detail:null,sku:null})}; }
@@ -121,27 +147,25 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     const limitsReady = !chosen.limits || !Object.values(chosen.limits).some(value => value !== null) || capabilities?.image_type_limits === true;
     const productTextReady = !translateProductText || capabilities?.product_text_translation === true;
     const ossReady = capabilities?.image_link_replacement === true && capabilities.cloud_image_storage === true && capabilities.oss_configured === true;
-    const ossStatus = !connected ? '连接本地工具后可查询 OSS 和阿里云配置状态。' : !capabilities ? '请刷新配置状态。' : capabilities.image_link_replacement !== true || capabilities.cloud_image_storage !== true ? '请升级本地工具到 1.6.3 或更新版本，以支持图片直接保存到 OSS。' : capabilities.oss_configured !== true ? '请在本地工具配置 OSS，返回后点击“刷新配置状态”。' : 'OSS 已配置，上传成功的图片将自动替换商品 Excel 链接。';
-    $('conversion-provider-status').textContent = ossStatus + (ossReady ? !capabilities.providers?.includes('aliyun') ? ' 阿里云付费模式需要升级本地工具。' : capabilities.aliyun_configured === true ? ' 阿里云密钥已在本机配置（尚未验证云端服务）。' : ' 请在本地工具配置阿里云密钥，返回后点击“刷新配置状态”。' : '');
+    const ossStatus = !connected ? '连接后台后可查询 OSS 和阿里云配置状态。' : !capabilities ? '请刷新配置状态。' : capabilities.image_link_replacement !== true || capabilities.cloud_image_storage !== true ? '请升级后台组件，以支持图片直接保存到 OSS。' : capabilities.oss_configured !== true ? '请展开“图片服务设置”配置 OSS。' : 'OSS 已配置，上传成功的图片将自动替换商品 Excel 链接。';
+    $('conversion-provider-status').textContent = ossStatus + (ossReady ? !capabilities.providers?.includes('aliyun') ? ' 阿里云付费模式需要升级后台组件。' : capabilities.aliyun_configured === true ? ' 阿里云密钥已在本机配置（尚未验证云端服务）。' : ' 请展开“图片服务设置”配置阿里云密钥。' : '');
     if (!limitsReady) $('conversion-provider-status').textContent += ' 请升级本地工具到 1.6.4 或更新版本，以支持图片数量限制。';
     if (!productTextReady) $('conversion-provider-status').textContent += ' 请升级本地工具到 1.6.5 或更新版本，以支持商品及包装文字转换。';
-    $('conversion-settings').hidden = !connected;
-    if (connected) $('conversion-settings').setAttribute('href',`${client.connection.baseUrl}/#token=${encodeURIComponent(client.connection.token)}`);
-    else $('conversion-settings').removeAttribute('href');
+    settings?.render();
     $('conversion-refresh-config').disabled = !connected || working;
     $('conversion-cost').hidden = !paid;
     const estimate = chosen.amount === null ? '本批费用上限待本地快照确认。' : chosen.frozen ? `本批累计费用上限 ¥${chosen.amount.toFixed(2)}（包含已确认的重新生成）。` : `按 ${chosen.unique} 个独立 URL × 0.06 元，本批首次提交费用上限 ¥${chosen.amount.toFixed(2)}。`;
     $('conversion-cost').textContent = `${estimate}相同内容可能去重；实际费用以阿里云账单为准。失败或不确定的请求也可能计费，重新生成可能增加费用。`;
-    $('conversion-connected').textContent = connected ? '本地工具已连接' : '未连接';
+    $('conversion-connected').textContent = connecting ? '正在启动后台' : backendStatus || (connected ? '后台已连接' : '未连接');
     $('conversion-connect').disabled = working || !controller.canReconnect();
-    $('conversion-forget').hidden = !state.canForget; $('conversion-forget').disabled = working;
-    $('conversion-login').disabled = !connected || working;
+    $('conversion-reset').disabled = !connected || working;
+    $('conversion-login').disabled = !connected || working || Boolean(conflict);
     $('conversion-login').hidden = paid;
     $('conversion-start').textContent = paid ? chosen.amount === null ? '付费开始转换（费用待恢复）' : `付费开始转换（上限 ¥${chosen.amount.toFixed(2)}）` : '开始图片转换（豆包免费）';
-    $('conversion-start').disabled = !extensionId || !connected || !ossReady || !limitsReady || !productTextReady || Boolean(chosen.error) || working || collecting || !task || !['done','stopped','error','short'].includes(task.status) || frozen || !chosen.count || (paid && (!capabilities?.providers?.includes('aliyun') || capabilities.aliyun_configured !== true));
+    $('conversion-start').disabled = !extensionId || !connected || !ossReady || !limitsReady || !productTextReady || Boolean(conflict) || Boolean(chosen.error) || working || collecting || !task || !['done','stopped','error','short'].includes(task.status) || frozen || !chosen.count || (paid && (!capabilities?.providers?.includes('aliyun') || capabilities.aliyun_configured !== true));
     $('conversion-stop').disabled = working || !job || ['completed','done','paused','stopped'].includes(job.status);
     $('conversion-continue').disabled = working || !job || !['paused','stopped','blocked'].includes(job.status);
-    $('conversion-status').textContent = job ? `${STATUS[job.status] || job.status} · ${job.provider === 'aliyun' ? '阿里云付费' : '豆包免费'} · ${job.translate_product_text === true ? '广告、商品及包装文字转繁体' : '仅广告文字转繁体，保护包装文字'} · ${(job.image_kinds || ['main','detail','sku']).map(kind => KIND[kind]).join('、')} · 付费请求 ${job.paid_calls || 0}${job.provider === 'aliyun' ? '（包含不确定请求，以实际账单为准）' : ''}${job.browser_message ? ` · ${job.browser_message}` : ''}` : collecting || (task && !['done','stopped','error','short'].includes(task.status)) ? '请先停止采集或等待采集结束' : connected ? '已连接，图片将保存到 OSS' : '等待连接本地工具';
+    $('conversion-status').textContent = conflict ? '后台正在处理其他任务。当前采集商品保留；若要开始本批，请先明确清空转换任务。' : job ? `${STATUS[job.status] || '等待处理'} · ${job.provider === 'aliyun' ? '阿里云付费' : '豆包免费'} · ${job.translate_product_text === true ? '广告、商品及包装文字转繁体' : '仅广告文字转繁体，保护包装文字'} · ${(job.image_kinds || ['main','detail','sku']).map(kind => KIND[kind]).filter(Boolean).join('、')} · 付费请求 ${job.paid_calls || 0}${job.provider === 'aliyun' ? '（包含不确定请求，以实际账单为准）' : ''}${job.browser_message ? ` · ${job.browser_message}` : ''}` : collecting || (task && !['done','stopped','error','short'].includes(task.status)) ? '请先停止采集或等待采集结束' : connected ? '已连接，图片将保存到 OSS' : '等待连接后台';
     const counts = job?.counts || {};
     const replacedKeys = new Set(matchingImageReplacements(task,task?.imageReplacements).map(imagePositionKey)), exportManifest = buildImageManifest(task);
     const replaced = exportManifest.filter(ref => replacedKeys.has(imagePositionKey(ref))).length, total = exportManifest.length;
@@ -166,12 +190,8 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     if (!job) { stopPoll(); $('conversion-details').open = false; }
     else schedulePoll();
   }
-  $('conversion-connect').addEventListener('click', () => void run(async () => {
-    const connecting = controller.connect($('conversion-code').value), epoch = controller.epoch;
-    await connecting;
-    if (controller.current(epoch) && client.connection) { $('conversion-code').value = ''; message('已连接本地工具。'); }
-  }));
-  $('conversion-refresh-config').addEventListener('click', () => { if (!$('conversion-refresh-config').disabled) void run(() => controller.refreshCapabilities()); });
+  $('conversion-connect').addEventListener('click', () => { if (!$('conversion-connect').disabled) void connectAutomatically(); });
+  $('conversion-refresh-config').addEventListener('click', () => { if (!$('conversion-refresh-config').disabled) void run(async () => { await controller.refreshCapabilities(); await settings.refresh(); }); });
   for (const kind of Object.keys(KIND)) $('conversion-limit-'+kind).addEventListener('input', () => { if (!$('conversion-limit-'+kind).disabled) imageLimits[kind] = $('conversion-limit-'+kind).value; render(); });
   for (const kind of Object.keys(KIND)) $('conversion-kind-'+kind).addEventListener('change', () => {
     if (!$('conversion-kind-'+kind).disabled) imageKinds = Object.keys(KIND).filter(kind => $('conversion-kind-'+kind).checked);
@@ -179,9 +199,10 @@ export function createConversionPanel({ document, extensionId, getCollection, on
   });
   $('conversion-paid').addEventListener('change', () => { if (!$('conversion-paid').disabled) provider = $('conversion-paid').checked ? 'aliyun' : 'doubao'; render(); });
   $('conversion-product-text').addEventListener('change', () => { if (!$('conversion-product-text').disabled) translateProductText = $('conversion-product-text').checked; render(); });
-  $('conversion-forget').addEventListener('click', () => void run(() => {
-    controller.forgetStale(); $('conversion-code').value = ''; message('已使用新连接，采集商品保留；需要重新转换时请手动开始。');
-  }));
+  $('conversion-reset').addEventListener('click', () => {
+    if ($('conversion-reset').disabled || !confirm('清空后台转换任务？正在处理的步骤会安全收尾。采集商品、已经保存的替换链接、密钥和豆包登录会保留。')) return;
+    void run(async () => { await controller.resetConversion(); message('转换任务已清空，采集商品和已保存图片链接保留。'); });
+  });
   $('conversion-login').addEventListener('click', () => void run(() => controller.action('open-browser', undefined, getCollection().task?.id)));
   $('conversion-start').addEventListener('click', () => void run(() => {
     if ($('conversion-start').disabled) return;
@@ -196,10 +217,10 @@ export function createConversionPanel({ document, extensionId, getCollection, on
   render();
   return {
     controller, refresh: render,
-    recover(task) { return controller.restoreForTask(task); },
+    recover(task) { return connectAutomatically(task); },
     clear() { stopPoll(); message(''); return controller.clear(); },
     removeProduct(taskId, platform, productId) { return controller.removeProduct(taskId,platform,productId); },
-    dispose() { disposed = true; stopPoll(); revokeImages(); },
+    dispose() { disposed = true; ++controller.epoch; stopPoll(); revokeImages(); settings.dispose(); },
     selectedCount() { return displayedSelection(getCollection().task).count; }
   };
 }

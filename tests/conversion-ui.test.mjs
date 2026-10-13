@@ -9,8 +9,7 @@ const html = await readFile(new URL('../extension/manager.html', import.meta.url
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 test('cloud conversion starts without choosing a local folder and sends no local destination',async()=>{
-  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';
-  f.click('conversion-connect');await tick();
+  const f=fixture();await f.panel.controller.connect('http://localhost:53121/#token=secret');
   assert.equal(Boolean(f.document.getElementById('conversion-folder')),false);
   assert.equal(Boolean(f.document.getElementById('conversion-output')),false);
   assert.equal(f.document.getElementById('conversion-start').disabled,false);
@@ -61,8 +60,7 @@ test('replacement counts include each exported occurrence of a product shared by
   f.panel.refresh();assert.match(f.document.getElementById('conversion-counts').textContent,/已替换 2.*原图回退 0/);
 });
 test('panel connects without a local folder and exposes counts with distinct stop/continue/retry/redo actions',async()=>{
-  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';
-  f.click('conversion-connect');await tick();
+  const f=fixture();await f.panel.controller.connect('http://localhost:53121/#token=secret');
   assert.equal(Boolean(f.document.getElementById('conversion-output')),false);
   f.click('conversion-start');await tick();
   assert.match(f.document.getElementById('conversion-counts').textContent,/图片位置 1.*独立图片 1.*已下载 1.*已转换 0.*失败 1/);
@@ -73,7 +71,7 @@ test('panel connects without a local folder and exposes counts with distinct sto
   f.document.querySelector('[data-conversion-action="redo"]').dispatchEvent(new f.window.Event('click'));await tick();
   assert.deepEqual(f.actions.map(a=>a.action),['continue','stop','retry','redo']);
   assert.equal(f.actions[2].index,0);assert.equal(f.actions[3].index,0);
-  assert.equal(f.document.getElementById('conversion-code').value,'');
+  assert.equal(f.document.getElementById('conversion-code'),null);
 });
 test('active paid batch selection and fee remain frozen after live source updates and release for the next batch',async()=>{
   const f=fixture();await connectFolder(f);f.change('conversion-paid',true);f.click('conversion-start');await tick();
@@ -106,7 +104,7 @@ test('paid capability validation displays the synchronous pending manifest despi
   assert.equal(f.document.getElementById('conversion-selection').textContent,before);assert.equal(f.document.getElementById('conversion-cost').textContent,cost);
   await f.panel.clear();release({ok:true,json:async()=>({providers:['doubao','aliyun'],aliyun_configured:true})});await tick();
 });
-async function connectFolder(f){f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();}
+async function connectFolder(f){await f.panel.controller.connect('http://localhost:53121/#token=secret');}
 test('checkbox selections count all positions and unique URLs, reject empty selection and send selected types',async()=>{
   const f=fixture(),item=f.task.jobs[0].groups[0].best;item.galleryImages=[item.image,item.image];item.detailImages=[item.image,'https://img.pddpic.com/detail.jpg'];item.skus=[{id:'a',image:item.image},{id:'b',image:'https://img.pddpic.com/sku.jpg'}];
   await connectFolder(f);
@@ -117,11 +115,11 @@ test('checkbox selections count all positions and unique URLs, reject empty sele
   const body=JSON.parse(f.requests.find(r=>r.url.endsWith('/jobs')).options.body);assert.deepEqual(body.image_kinds,['sku']);assert.equal(body.entries.length,2);
   for(const id of ['conversion-kind-main','conversion-kind-detail','conversion-kind-sku','conversion-paid'])assert.equal(f.document.getElementById(id).disabled,true);
 });
-test('paid UI exposes configured status refresh and local settings link then quotes and explicitly starts paid batch',async()=>{
+test('paid UI exposes inline service settings then refreshes the configured status and explicitly starts paid batch',async()=>{
   const f=fixture({configured:false});await connectFolder(f);f.change('conversion-paid',true);
   assert.equal(f.document.getElementById('conversion-login').hidden,true);assert.equal(f.document.getElementById('conversion-start').disabled,true);
   assert.match(f.document.getElementById('conversion-provider-status').textContent,/配置/);
-  assert.equal(f.document.getElementById('conversion-settings').getAttribute('href'),'http://localhost:53121/#token=secret');
+  assert.equal(f.document.getElementById('conversion-settings').tagName,'DETAILS');assert.equal(f.document.getElementById('conversion-settings').getAttribute('href'),null);
   f.setConfigured(true);f.click('conversion-refresh-config');await tick();assert.equal(f.document.getElementById('conversion-start').disabled,false);
   assert.match(f.document.getElementById('conversion-start').textContent,/付费.*0\.06/);assert.match(f.document.getElementById('conversion-cost').textContent,/实际.*账单/);
   f.click('conversion-start');await tick();const body=JSON.parse(f.requests.find(r=>r.url.endsWith('/jobs')).options.body);
@@ -157,7 +155,7 @@ test('recovering a paid snapshot restores the actual frozen provider, types and 
   f.change('conversion-paid',false);assert.equal(f.document.getElementById('conversion-paid').checked,true);
 });
 test('completed and uncertain items offer explicit regeneration and cannot resubmit through retry',async()=>{
-  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();f.click('conversion-start');await tick();
+  const f=fixture();await f.panel.controller.connect('http://localhost:53121/#token=secret');f.click('conversion-start');await tick();
   for(const item of [{status:'completed',phase:'done'},{status:'needs-review',phase:'pending'},{status:'paused',phase:'uncertain'}]){
     f.setItem(item);await f.panel.controller.poll();
     const retry=f.document.querySelector('[data-conversion-action="retry"]'), redo=f.document.querySelector('[data-conversion-action="redo"]');
@@ -169,27 +167,26 @@ test('completed and uncertain items offer explicit regeneration and cannot resub
   assert.equal(f.document.querySelector('[data-conversion-action="retry"]').textContent,'继续处理此图');
 });
 test('polling status changes preserves existing image preview DOM',async()=>{
-  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();f.click('conversion-start');await tick();
+  const f=fixture();await f.panel.controller.connect('http://localhost:53121/#token=secret');f.click('conversion-start');await tick();
   const row=f.document.querySelector('.conversion-item');
   f.setItem({status:'paused',phase:'ready',message:'另一条进度消息'});await f.panel.controller.poll();
   assert.ok(f.document.querySelector('.conversion-item')===row,'status-only poll keeps preview row');
   assert.match(row.textContent,/另一条进度消息/);
 });
-test('panel permits new connection code after auth failure and offers explicit forgetting when old job is absent',async()=>{
-  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=old';f.click('conversion-connect');await tick();f.click('conversion-start');await tick();
+test('internal direct reconnection preserves failed batch until explicit forgetting when old job is absent',async()=>{
+  const f=fixture();await f.panel.controller.connect('http://localhost:53121/#token=old');f.click('conversion-start');await tick();
   f.setFetch(async()=>({ok:false,status:401}));await f.panel.controller.poll();
   assert.equal(f.document.getElementById('conversion-connect').disabled,false);
   f.setFetch(async url=>url.endsWith('/pair')?{ok:true,json:async()=>({})}:{ok:false,status:409});
-  f.document.getElementById('conversion-code').value='http://localhost:54121/#token=new';f.click('conversion-connect');await tick();await tick();
-  assert.equal(f.document.getElementById('conversion-forget').hidden,false);
-  assert.equal(f.panel.controller.client.connection.token,'old');
-  const count=f.requests.length;f.click('conversion-forget');await tick();
+  await assert.rejects(f.panel.controller.connect('http://localhost:54121/#token=new'));
+  assert.equal(f.panel.controller.view().canForget,true);assert.equal(f.panel.controller.client.connection.token,'old');
+  const count=f.requests.length;f.panel.controller.forgetStale();
   assert.equal(f.requests.length,count);assert.equal(f.panel.controller.client.connection.token,'new');
   assert.equal(f.panel.controller.job,null);assert.equal(f.task.jobs[0].groups.length,1);
-  assert.equal(f.document.getElementById('conversion-code').value,'');
 });
+
 test('panel disables conversion while collection is active and clear removes old items and scheduled poll work',async()=>{
-  const f=fixture();f.document.getElementById('conversion-code').value='http://localhost:53121/#token=secret';f.click('conversion-connect');await tick();
+  const f=fixture();await f.panel.controller.connect('http://localhost:53121/#token=secret');
   f.setCollecting(true);assert.equal(f.document.getElementById('conversion-start').disabled,true);
   f.setCollecting(false);f.click('conversion-start');await tick();assert.equal(f.document.querySelectorAll('.conversion-item').length,1);
   const oldTimers=[...f.timers];await f.panel.clear();const count=f.requests.length;

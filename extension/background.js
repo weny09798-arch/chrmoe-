@@ -1,3 +1,11 @@
+import { NativeBackendBroker, handleBackendMessage } from './lib/native-backend.mjs';
+
+const backend = new NativeBackendBroker({ runtime:chrome.runtime });
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== 'ensure-backend') return false;
+  void handleBackendMessage(message, sender, backend, chrome.runtime).then(sendResponse);
+  return true;
+});
 let opening;
 chrome.action.onClicked.addListener(() => {
   if (opening) return;

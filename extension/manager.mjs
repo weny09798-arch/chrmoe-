@@ -382,6 +382,7 @@ $('export').addEventListener('click', async () => {
 });
 $('links-panel').addEventListener('toggle', () => { if ($('links-panel').open) renderLinks(); });
 window.addEventListener('beforeunload', event => { if (busy) { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('pagehide', () => conversion.dispose());
 
 async function initialize() {
   const saved = await storage.get(['keywords', 'task', 'sourceUrl', 'targetCount', 'priceMin', 'priceMax']);
