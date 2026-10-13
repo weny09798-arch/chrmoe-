@@ -6,6 +6,7 @@ from flask import request, jsonify, send_file
 from folder_picker import choose_folder
 from prompts import build_prompt
 from cloud_images import image_response
+from oss_storage import CONFIG_KEYS as OSS_CONFIG_KEYS
 
 EXTENSION_ID = re.compile(r'[a-p]{32}\Z')
 ALLOWED_HEADERS = {'content-type', 'x-tool-token', 'x-extension-id'}
@@ -81,6 +82,13 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
         if not isinstance(value, dict): raise ValueError('请求内容无效')
         return value
 
+    def settings_body(allowed_keys=()):
+        # Fieldless operations accept no body or {}, never ignored payloads.
+        if not allowed_keys and not request.get_data(): return None
+        value = body()
+        if not set(value).issubset(allowed_keys): raise ValueError('配置请求包含未知字段')
+        return value
+
     def output_folder(value):
         if not isinstance(value, str) or not value.strip(): raise ValueError('请选择本机输出文件夹')
         folder = Path(value.strip()).expanduser()
@@ -110,14 +118,17 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
 
     @app.route('/api/bridge/settings/aliyun', methods=['GET', 'POST', 'DELETE'])
     def settings_aliyun():
-        return jsonify(aliyun_settings(request.method, request.get_json(silent=True)))
+        value = settings_body({'access_key_id', 'access_key_secret'} if request.method == 'POST' else ())
+        return jsonify(aliyun_settings(request.method, value))
 
     @app.route('/api/bridge/settings/oss', methods=['GET', 'POST', 'DELETE'])
     def settings_oss():
-        return jsonify(oss_settings(request.method, request.get_json(silent=True)))
+        value = settings_body(OSS_CONFIG_KEYS if request.method == 'POST' else ())
+        return jsonify(oss_settings(request.method, value))
 
     @app.post('/api/bridge/settings/oss/check')
     def settings_oss_check():
+        settings_body()
         return jsonify(check_oss())
 
     @app.get('/api/bridge/current')

@@ -91,6 +91,68 @@ def test_paired_settings_still_validate_body_and_token(client, resource):
         assert getattr(client, method)(path, headers={**HEADERS, 'X-Tool-Token': 'invalid'}, json={}).status_code == 403
 
 
+@pytest.mark.parametrize('resource', ['aliyun', 'oss'])
+@pytest.mark.parametrize('already_saved', [False, True])
+def test_settings_unknown_fields_rejected_before_any_write(client, resource, already_saved):
+    pair(client)
+    credentials = client.application.extensions['aliyun_credentials']
+    oss = client.application.extensions['oss_config']
+    store = credentials if resource == 'aliyun' else oss
+    valid = {'access_key_id': 'new-key', 'access_key_secret': 'new-secret'}
+    if resource == 'oss':
+        valid.update(bucket='new-bucket', region='cn-hangzhou', credential_mode='independent')
+    if already_saved:
+        if resource == 'aliyun': credentials.save('old-key', 'old-secret')
+        else: oss.save({'bucket': 'old-bucket', 'region': 'cn-beijing', 'credential_mode': 'independent',
+                        'access_key_id': 'old-key', 'access_key_secret': 'old-secret'})
+    before = store.path.read_bytes() if store.path.exists() else None
+    response = client.post('/api/bridge/settings/' + resource, headers=HEADERS,
+                           json={**valid, 'unexpected': True})
+    assert response.status_code == 400
+    assert (store.path.read_bytes() if store.path.exists() else None) == before
+    assert not store.path.with_suffix('.tmp').exists()
+
+
+@pytest.mark.parametrize('mode', ['independent', 'translation'])
+def test_strict_oss_settings_preserve_optional_keys_and_credential_source(client, mode):
+    pair(client)
+    client.application.extensions['aliyun_credentials'].save('translation-key', 'translation-secret')
+    response = client.post('/api/bridge/settings/oss', headers=HEADERS, json={
+        'bucket': 'fixture-bucket', 'region': 'cn-hangzhou', 'credential_mode': mode,
+        'access_key_id': 'oss-key', 'access_key_secret': 'oss-secret'})
+    assert response.status_code == 200 and response.json['credential_mode'] == mode
+    assert client.application.extensions['oss_config'].load()['access_key_secret'] == (
+        'oss-secret' if mode == 'independent' else 'translation-secret')
+
+
+@pytest.mark.parametrize('method,resource', [
+    ('get', 'aliyun'), ('delete', 'aliyun'), ('get', 'oss'), ('delete', 'oss'), ('post', 'oss/check')])
+@pytest.mark.parametrize('payload', [{'unexpected': True}, [], 'malformed'])
+def test_settings_fieldless_operations_reject_payload_without_side_effects(client, monkeypatch, method, resource, payload):
+    from oss_fakes import FakePublisher
+    monkeypatch.setattr(FakePublisher, 'check', lambda self: {'ok': True}, raising=False)
+    pair(client)
+    credentials = client.application.extensions['aliyun_credentials']
+    credentials.save('old-key', 'old-secret')
+    oss = client.application.extensions['oss_config']
+    oss.save({'bucket': 'old-bucket', 'region': 'cn-hangzhou', 'credential_mode': 'translation'})
+    before = [store.path.read_bytes() for store in (credentials, oss)]
+    body = {'data': '{', 'content_type': 'application/json'} if payload == 'malformed' else {'json': payload}
+    response = getattr(client, method)('/api/bridge/settings/' + resource, headers=HEADERS, **body)
+    assert response.status_code == 400
+    assert [store.path.read_bytes() for store in (credentials, oss)] == before
+
+
+@pytest.mark.parametrize('resource', ['aliyun', 'oss'])
+def test_legacy_settings_keep_existing_extra_field_behavior(client, resource):
+    valid = {'access_key_id': 'legacy-key', 'access_key_secret': 'legacy-secret', 'unexpected': True}
+    path = '/api/aliyun/credentials'
+    if resource == 'oss':
+        path = '/api/oss/config'
+        valid.update(bucket='legacy-bucket', region='cn-hangzhou', credential_mode='independent')
+    assert client.post(path, headers={'X-Tool-Token': 'secret'}, json=valid).status_code == 200
+
+
 def test_reset_timeout_keeps_same_queue_for_later_safe_reset(client, tmp_path, monkeypatch):
     import threading
     from test_core import Cloud, wait, png
