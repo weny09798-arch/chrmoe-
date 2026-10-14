@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>百炼卖点图配置说明</title><link rel="stylesheet" href="manager.css"></head>
+<body><main class="app"><section class="panel">
+<h1>百炼商品卖点图配置</h1>
+<p>这个功能识别商品图片，先写繁体卖点供你确认，再由本机程序在原图下方新增文字栏。不会重新绘制商品或包装，不自动修改采集商品 Excel。</p>
+<ol><li>进入<a href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener">百炼控制台</a>，选择华北2（北京）业务空间并开通模型调用及按量计费。</li>
+<li>按<a href="https://help.aliyun.com/zh/model-studio/get-api-key" target="_blank" rel="noopener">官方步骤</a>创建百炼 API Key。它不是原有图片翻译或 OSS 的 AccessKey。</li>
+<li>在北京空间的调用说明找到业务空间 ID（WorkspaceId）。参考<a href="https://help.aliyun.com/zh/model-studio/vision" target="_blank" rel="noopener">官方调用说明</a>。填写 ID，不能填写网址或 cn-beijing。</li>
+<li>回插件勾选“生成商品卖点图”，展开百炼设置，填 API Key 和北京业务空间 ID并保存。沿用现有 OSS 配置；上传失败时仍可下载已排好的 PNG。</li></ol>
+<h2>使用与费用</h2><p>上传单张图，填商品名称及真实参数，点击“付费生成卖点”并确认。编辑标题和1～5条卖点，再点击“制作卖点图”。默认繁体，原图区域保持，图片下方增加白色栏。确认后可以复制 OSS 链接或下载 PNG。</p>
+<p>qwen3-vl-plus 北京、非思考模式。输入不超过32K Token时，输入¥1／百万Token、输出¥10／百万Token。输入10000、输出500 Token约¥0.015，仅为示例，不是每图固定价或上限；<a href="https://help.aliyun.com/zh/model-studio/qwen3-vl-plus" target="_blank" rel="noopener">实际按官方账单</a>。OSS费用另计。改字、排字和重试上传不再次调用模型；重新生成卖点可能再次计费。</p>
+<p>图片无法证明的材质、性能、功率或认证请提供真实信息。密钥仅保存在当前 Windows 用户的加密配置中，请勿截图或发送给他人。详细步骤另见交付包《百炼商品卖点图配置与使用说明.md》。</p>
+</section></main></body></html>

@@ -84,9 +84,34 @@
           <p class="muted">登录、验证或生成结果不确定时会暂停。豆包模式可检查浏览器页面后继续；阿里云模式不会自动切换到豆包。“继续获取此图”读取已有结果，“重新生成此图”会重新提交，阿里云模式可能再次计费。</p>
           <details id="conversion-details"><summary>查看原图、结果与每张图片进度</summary><div id="conversion-items" class="conversion-items"></div></details>
         </section>
+<section id="selling-panel" class="panel selling-panel" aria-labelledby="selling-heading">
+<h2 id="selling-heading">单张商品卖点图</h2>
+<label><input id="selling-enable" type="checkbox">生成商品卖点图</label>
+<p id="selling-status" role="status">等待连接本地工具</p>
+<div id="selling-fields" hidden>
+<p class="muted">上传一张静态商品照（≤10 MiB、≤2000 万像素）。保留原图尺寸、商品与背景，在白色页脚添加黑色标题和绿色卖点，默认繁体中文。</p>
+<label>本地图片<input id="selling-image" type="file" accept="image/jpeg,image/png,image/webp"></label>
+<label>商品名称（必填）<input id="selling-name" maxlength="100"></label>
+<label>可确认的商品事实（可选）<textarea id="selling-facts" maxlength="2000" rows="3"></textarea></label>
+<details><summary>百炼设置</summary>
+<label>APIKey<input id="selling-key" type="password" autocomplete="new-password" spellcheck="false"></label>
+<label>北京业务空间 ID<input id="selling-workspace" autocomplete="off" placeholder="百炼业务空间的 WorkspaceId"></label>
+<p id="selling-config-status" class="muted"></p><div class="actions"><button id="selling-save" type="button" class="button">保存百炼配置</button><button id="selling-delete" type="button" class="button">删除百炼配置</button></div>
+<a href="selling-point-help.html" target="_blank" rel="noopener">配置与使用教程</a>
+</details>
+<p class="muted">输入 ¥1/百万 Token，输出 ¥10/百万 Token。例如 10000 输入/500 输出约 ¥0.015，仅为示例，非固定价或费用上限；OSS 另计。手动改字、制作图片、重试上传和下载不会调用 AI。</p>
+<div class="actions"><button id="selling-generate" type="button" class="button primary">付费生成卖点</button><button id="selling-clear" type="button" class="button">清空单张任务</button></div>
+<div id="selling-message" role="status" class="notice" hidden></div>
+<p id="selling-job-message" class="muted" role="status"></p><p id="selling-calls" class="muted"></p>
+<div id="selling-draft" hidden><label>标题（≤40 字）<input id="selling-headline"></label><label>卖点（1–5 行，每行≤60 字）<textarea id="selling-points" rows="5"></textarea></label><button id="selling-render" type="button" class="button primary">制作卖点图</button></div>
+<div class="selling-previews"><figure><figcaption>原图</figcaption><img id="selling-original" alt="上传原图"></figure><figure><figcaption>卖点图结果</figcaption><img id="selling-result" alt="卖点图结果"></figure></div>
+<div class="actions"><button id="selling-preview" type="button" class="button">预览结果</button><button id="selling-download" type="button" class="button">下载 PNG</button><button id="selling-retry" type="button" class="button">重试上传（不重新生成）</button><a id="selling-cloud" target="_blank" rel="noopener" hidden>打开 OSS 图片</a><button id="selling-copy" type="button" class="button" hidden>复制图片链接</button></div>
+</div></section>
+
         <footer>价格以本次扫描到的页面展示价为准，可能因规格或优惠条件不同而变化。图片采集失败会保留链接并显示原因。</footer>
       </section>
     </main>
   </div>
   <script type="module" src="manager.mjs"></script>
 </body></html>
+

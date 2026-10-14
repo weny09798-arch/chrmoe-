@@ -1,3 +1,4 @@
+import { createSellingPointPanel } from './selling-point-ui.mjs';
 import { BridgeClient, ConversionController, buildImageManifest, imagePositionKey, matchingImageReplacements, normalizeImageLimits, imageKindCounts } from './lib/image-conversion.mjs';
 import { createSettingsPanel } from './settings-ui.mjs';
 
@@ -28,6 +29,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
   let imageLimits = {main:'',detail:'',sku:''};
   let imageKinds = ['main','detail','sku'], provider = 'doubao', quoteSignature = '', batchOptionsSignature = '';
   let translateProductText = false;
+  const selling = createSellingPointPanel({document,client,confirm,setTimer,clearTimer});
   let connecting = false, backendStatus = '', settings;
   settings = createSettingsPanel({document,client,unavailable:()=>Boolean(getCollection().unavailable) || controller.working || connecting,getConnection:()=>Boolean(client.connection) && controller.capabilities?.settings_in_plugin === true,refreshCapabilities:()=>controller.refreshCapabilities(),confirm});
   async function connectAutomatically(task = getCollection().task) {
@@ -132,6 +134,7 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     if (renderedEpoch !== controller.epoch) { stopPoll(); renderedEpoch = controller.epoch; }
     const state = controller.view(), { task, collecting = false, unavailable = false } = getCollection();
     const job = state.job, connected = state.connected && (!ensureBackend || backendStatus === '后台已连接'), working = state.working || unavailable || connecting, conflict = state.conflict;
+    selling.update({connected,capabilities:controller.capabilities});
     const frozen = Boolean(controller.pendingSource || (job && !['completed','done'].includes(job.status)));
     const batchSignature = job ? JSON.stringify([job.id,job.provider,job.image_kinds,job.image_limits,job.translate_product_text]) : '';
     if (job && !controller.pendingSource && (frozen || batchSignature !== batchOptionsSignature)) { imageKinds = [...(job.image_kinds || ['main','detail','sku'])]; provider = job.provider || 'doubao'; imageLimits = {...(job.image_limits || {main:null,detail:null,sku:null})}; }
@@ -216,11 +219,12 @@ export function createConversionPanel({ document, extensionId, getCollection, on
   $('conversion-continue').addEventListener('click', () => void run(() => controller.action('continue')));
   render();
   return {
-    controller, refresh: render,
+    controller, selling, refresh: render,
     recover(task) { return connectAutomatically(task); },
     clear() { stopPoll(); message(''); return controller.clear(); },
     removeProduct(taskId, platform, productId) { return controller.removeProduct(taskId,platform,productId); },
-    dispose() { disposed = true; ++controller.epoch; stopPoll(); revokeImages(); settings.dispose(); },
+    dispose() { disposed = true; ++controller.epoch; stopPoll(); revokeImages(); settings.dispose(); selling.dispose(); },
     selectedCount() { return displayedSelection(getCollection().task).count; }
   };
 }
+

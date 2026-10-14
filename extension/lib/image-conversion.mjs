@@ -106,9 +106,10 @@ export class BridgeClient {
   async request(route, { body, method = body === undefined ? 'GET' : 'POST', blob = false, connection = this.connection } = {}) {
     if (!connection || !this.extensionId) throw new Error('请先在 Chrome 扩展中连接本地图片工具。');
     const headers = { 'X-Tool-Token': connection.token, 'X-Extension-Id': this.extensionId };
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const multipart = typeof FormData !== 'undefined' && body instanceof FormData;
+    if (body !== undefined && !multipart) headers['Content-Type'] = 'application/json';
     let response;
-    try { response = await this.fetch(`${connection.baseUrl}/api/bridge/${route}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), cache: 'no-store', redirect: 'error', credentials: 'omit' }); }
+    try { response = await this.fetch(`${connection.baseUrl}/api/bridge/${route}`, { method, headers, ...(body === undefined ? {} : { body: multipart ? body : JSON.stringify(body) }), cache: 'no-store', redirect: 'error', credentials: 'omit' }); }
     catch { throw new Error('无法连接图片后台，请点击重新连接；首次使用请先安装后台组件。'); }
     if (!response.ok) {
       // Never surface a server URL/body that could accidentally include credentials.
@@ -379,3 +380,4 @@ export class ConversionController {
     return this.current(epoch) && this.job?.id === jobId ? blob : null;
   }
 }
+
