@@ -19,14 +19,15 @@ export function createSellingPointPanel({document,client,confirm=text=>globalThi
   $('render').disabled=!ready||busy||ACTIVE.has(job?.status)||!editable||!$('headline').value.trim()||!$('points').value.trim();
   $('clear').disabled=!ready||busy||!job?.id;
   $('retry').disabled=!ready||busy||job?.phase!=='upload-failed'||!job?.result_available;
-  for(const id of ['download','preview'])$(id).disabled=!ready||busy||!job?.result_available;
+  $('download').disabled=!ready||busy||!job?.result_available;
+  $('preview').disabled=!ready||busy||!job?.id;
   $('config-status').textContent=configured?'百炼 APIKey 已配置':'请先配置百炼 APIKey';
   $('draft').hidden=!editable;
   const published=job?.result_revision===job?.draft_revision&&validPublishedUrl(job?.public_url);$('cloud').hidden=!published;$('copy').hidden=!published;$('cloud').href=published?job.public_url:'';
  }
  function schedule(){stop();if(!disposed&&connected&&supported&&$('enable').checked&&ACTIVE.has(job?.status))timer=setTimer(()=>{timer=null;void enqueue(refresh);},1800);}
  async function previews(e){if(!job?.id)return;const sig=JSON.stringify([job.id,job.result_available,job.result_revision]);if(sig===previewSignature)return;revoke();previewSignature=sig;const id=job.id;
-  for(const kind of ['original',...(job.result_available?['result']:[])]){try{const blob=await client.request(`selling-points/${encodeURIComponent(id)}/images/${kind}`,{blob:true});if(!alive(e)||job?.id!==id)return;const url=urlAPI.createObjectURL(blob);urls.push(url);$(kind).src=url;}catch{/* A preview is optional; never expose backend bodies. */}}
+  for(const kind of ['original',...(job.result_available?['result']:[])]){try{const blob=await client.request(`selling-points/${encodeURIComponent(id)}/images/${kind}`,{blob:true});if(!alive(e)||job?.id!==id)return;const url=urlAPI.createObjectURL(blob);urls.push(url);$(kind).src=url;}catch{if(alive(e)&&job?.id===id&&previewSignature===sig)previewSignature='';/* A preview is optional; never expose backend bodies. */}}
  }
  async function accept(value,e){if(!alive(e))return;const previousId=job?.id;job=value;if(job?.id&&(previousId!==job.id||!metadataDirty)){$('name').value=job.product_name||$('name').value;$('facts').value=job.facts??$('facts').value;}const sig=JSON.stringify([job?.id,job?.draft_revision]);if(sig!==textRevision){dirty=false;textRevision=sig;$('headline').value=job?.headline||'';$('points').value=(job?.points||[]).join('\n');}else if(!dirty){$('headline').value=job?.headline||'';$('points').value=(job?.points||[]).join('\n');}render();await previews(e);schedule();}
  async function refresh(){if(!connected||!supported||!$('enable').checked)return;const e=epoch;await accept(await client.request('selling-points/current'),e);}
