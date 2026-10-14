@@ -61,7 +61,10 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
     @app.errorhandler(RuntimeError)
     def conflict(exc): return jsonify(error=str(exc)), 409
     @app.errorhandler(OSError)
-    def file_error(exc): return jsonify(error=f'本机文件操作失败：{exc}'), 400
+    def file_error(exc):
+        if request.path.startswith('/api/bridge/selling-points/') or request.path=='/api/bridge/settings/bailian':
+            return jsonify(error='賣點圖片快取不可讀取或保存，請重新上傳原圖；已保存的設定及採集任務保留。',error_code='cache-unavailable'),400
+        return jsonify(error=f'本机文件操作失败：{exc}'), 400
     @app.errorhandler(413)
     def too_large(exc): return jsonify(error='总大小不能超过 80MB'), 413
 

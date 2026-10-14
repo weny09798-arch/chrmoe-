@@ -124,8 +124,9 @@ class SellingPointService:
                         self.persist()
             finally:
                 with self.lock:
-                    self.workers.pop(identifier,None)
-                    if identifier in self.retired:
+                    owns_entry=self.workers.get(identifier) is threading.current_thread()
+                    if owns_entry:self.workers.pop(identifier,None)
+                    if owns_entry and identifier in self.retired:
                         self.retired.discard(identifier)
                         try:self.cleanup(identifier)
                         except (OSError,ValueError):pass

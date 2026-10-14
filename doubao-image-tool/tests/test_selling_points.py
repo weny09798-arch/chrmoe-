@@ -298,3 +298,77 @@ def test_product_input_matches_frontend_limits(tmp_path,name,facts):
     from selling_points import SellingPointService
     service=SellingPointService(tmp_path,lambda:Client(),lambda:Publisher())
     with pytest.raises(ValueError):service.create('a.png',png(),name,facts)
+
+@pytest.mark.parametrize('retire',['clear','replace'])
+def test_previous_worker_finally_keeps_successor_upload_owned(tmp_path,monkeypatch,retire):
+    import sys
+    from selling_points import SellingPointService
+    operation_returned=threading.Event();release_first=threading.Event()
+    upload_entered=threading.Event();release_upload=threading.Event()
+    original_thread=threading.Thread;created=[]
+    def thread_factory(*args,**kwargs):
+        target=kwargs['target']
+        if not created:
+            def traced_target():
+                def trace(frame,event,arg):
+                    if event=='return' and frame.f_code.co_name=='operation':
+                        operation_returned.set();assert release_first.wait(3)
+                        sys.settrace(None)
+                    return trace
+                sys.settrace(trace)
+                try:target()
+                finally:sys.settrace(None)
+            kwargs['target']=traced_target
+        thread=original_thread(*args,**kwargs);created.append(thread);return thread
+    class BlockingPublisher:
+        def publish(self,path):
+            upload_entered.set();assert release_upload.wait(3)
+            assert path.is_file()
+            return {'url':'https://example.test/result.png'}
+    monkeypatch.setattr(threading,'Thread',thread_factory)
+    service=SellingPointService(tmp_path,lambda:Client(),lambda:BlockingPublisher())
+    identifier=service.create('a.png',png(),'商品','')['id']
+    try:
+        service.generate(identifier,True);assert operation_returned.wait(2)
+        snap=service.snapshot();assert snap['status']=='draft'
+        service.render(identifier,snap['draft_revision']);assert upload_entered.wait(2)
+        successor=service.workers[identifier]
+        release_first.set();created[0].join(2)
+        assert service.workers.get(identifier) is successor
+        directory=service.directory(identifier)
+        if retire=='clear':service.clear(identifier)
+        else:service.create('b.png',png(),'新商品','')
+        assert directory.exists()
+        release_upload.set();successor.join(2)
+        assert not directory.exists() and identifier not in service.workers
+    finally:
+        release_first.set();release_upload.set()
+        for thread in created:thread.join(3)
+
+@pytest.mark.parametrize('failure',['missing-original','state-write','image-read'])
+def test_selling_http_file_errors_hide_paths(tmp_path,monkeypatch,failure):
+    import selling_points
+    from app import create_app
+    app=create_app(browser_factory=lambda:None,state_dir=tmp_path,token='secret',bailian_factory=lambda:Client())
+    http=app.test_client();extension='a'*32
+    headers={'X-Tool-Token':'secret','X-Extension-Id':extension,'Origin':'chrome-extension://'+extension}
+    http.post('/api/bridge/pair',headers=headers,json={'extension_id':extension})
+    service=app.extensions['selling_points'];identifier=service.create('a.png',png(),'商品','')['id']
+    base='/api/bridge/selling-points/'+identifier
+    try:
+        if failure=='state-write':
+            def broken(*args):raise OSError('private failure '+str(tmp_path/'selling-points'/'current.json'))
+            monkeypatch.setattr(selling_points,'atomic',broken)
+            response=http.post(base+'/draft',headers=headers,json={'headline':'商品','points':['外觀'],'draft_revision':0})
+        else:
+            service.file(identifier,'original').unlink()
+            response=http.get(base+'/images/original',headers=headers) if failure=='image-read' else http.post(base+'/generate',headers=headers,json={'paid_confirmed':True})
+        assert response.status_code==400
+        assert response.json['error_code']=='cache-unavailable'
+        assert str(tmp_path) not in response.json['error'] and 'private failure' not in response.json['error']
+        # Collector requests retain their existing error handling contract.
+        def collector_failure():raise OSError('collector-file-error')
+        monkeypatch.setattr(app.extensions['queue'],'snapshot',collector_failure)
+        collector_response=http.get('/api/state',headers={'X-Tool-Token':'secret'})
+        assert collector_response.status_code==400 and 'collector-file-error' in collector_response.json['error']
+    finally:app.extensions['queue'].close();service.close()
