@@ -18,7 +18,7 @@ export function createSellingPointPanel({document,client,confirm=text=>globalThi
   const editable=Boolean(job?.id&&(job.status==='draft'||job.paid_calls>0||job.headline));
   $('render').disabled=!ready||busy||ACTIVE.has(job?.status)||!editable||!$('headline').value.trim()||!$('points').value.trim();
   $('clear').disabled=!ready||busy||!job?.id;
-  $('retry').disabled=!ready||busy||job?.phase!=='upload-failed'||!job?.result_available;
+  $('retry').disabled=!ready||busy||ACTIVE.has(job?.status)||!job?.result_available||!(job?.phase==='upload-failed'||(job?.status==='paused'&&job?.phase==='interrupted'));
   $('download').disabled=!ready||busy||!job?.result_available;
   $('preview').disabled=!ready||busy||!job?.id;
   $('config-status').textContent=configured?'百炼 APIKey 已配置':'请先配置百炼 APIKey';
