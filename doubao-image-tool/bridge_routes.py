@@ -17,8 +17,12 @@ def register_bridge(app, get_queue, lifecycle, private_root, reset_queue, creden
     private_root = Path(private_root).resolve()
 
     def allowed_methods():
-        if request.path in {'/api/bridge/settings/aliyun', '/api/bridge/settings/oss'}:
+        if request.path in {'/api/bridge/settings/aliyun', '/api/bridge/settings/oss', '/api/bridge/settings/bailian'}:
             return ('GET', 'POST', 'DELETE')
+        if request.path=='/api/bridge/selling-points/current' or re.fullmatch(r'/api/bridge/selling-points/[a-f0-9]{32}/images/(?:original|result)',request.path):
+            return ('GET',)
+        if request.path=='/api/bridge/selling-points/jobs' or re.fullmatch(r'/api/bridge/selling-points/[a-f0-9]{32}/(?:generate|draft|render|retry-upload|clear)',request.path):
+            return ('POST',)
         if request.path in {'/api/bridge/state', '/api/bridge/current', '/api/bridge/capabilities', '/api/bridge/manifest'} or request.path.startswith('/api/bridge/images/'):
             return ('GET',)
         if request.path in {'/api/bridge/pair', '/api/bridge/folder', '/api/bridge/jobs', '/api/bridge/action', '/api/bridge/reset', '/api/bridge/settings/oss/check'}:

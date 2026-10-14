@@ -5,7 +5,7 @@ if (!$Destination) { $Destination = Join-Path (Split-Path $ToolRoot) "artifacts\
 $Destination = [IO.Path]::GetFullPath($Destination)
 $BuildRoot = Join-Path (Split-Path $ToolRoot) "artifacts\doubao-build"
 New-Item -ItemType Directory -Force $Destination, $BuildRoot | Out-Null
-& $Python -m PyInstaller --noconfirm --onedir --name DoubaoImageTool --distpath $Destination --workpath $BuildRoot --specpath $BuildRoot --add-data "$ToolRoot\web;web" --collect-all alibabacloud_oss_v2 --collect-all Crypto --collect-all crcmod --collect-all playwright --collect-all alibabacloud_alimt20181012 --collect-all alibabacloud_tea_openapi --collect-all alibabacloud_tea_util --collect-all alibabacloud_credentials "$ToolRoot\run.py"
+& $Python -m PyInstaller --noconfirm --onedir --name DoubaoImageTool --distpath $Destination --workpath $BuildRoot --specpath $BuildRoot --add-data "$ToolRoot\web;web" --add-data "$ToolRoot\assets;assets" --collect-all opencc --copy-metadata opencc-python-reimplemented --collect-all alibabacloud_oss_v2 --collect-all Crypto --collect-all crcmod --collect-all playwright --collect-all alibabacloud_alimt20181012 --collect-all alibabacloud_tea_openapi --collect-all alibabacloud_tea_util --collect-all alibabacloud_credentials "$ToolRoot\run.py"
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 $Package = Join-Path $Destination "DoubaoImageTool"
 Copy-Item -LiteralPath "$ToolRoot\README.md", "$ToolRoot\THIRD_PARTY_NOTICES.md", "$ToolRoot\启动豆包图片转换.cmd", "$ToolRoot\安装后台组件.cmd", "$ToolRoot\卸载后台组件.cmd" -Destination $Package
@@ -15,4 +15,5 @@ $Source = Join-Path $Package "source"
 New-Item -ItemType Directory -Force $Source | Out-Null
 Get-ChildItem -LiteralPath $ToolRoot -File | Where-Object { $_.Extension -in '.py','.md','.txt','.ps1','.cmd' } | Copy-Item -Destination $Source
 Copy-Item -LiteralPath "$ToolRoot\web" -Destination $Source -Recurse -Force
+Copy-Item -LiteralPath "$ToolRoot\assets" -Destination $Source -Recurse -Force
 Write-Output $Package

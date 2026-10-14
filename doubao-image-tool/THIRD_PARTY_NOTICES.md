@@ -7,3 +7,5 @@
 阿里云接口使用官方 alibabacloud-alimt20181012、Tea OpenAPI 与 Tea Util Python SDK。便携包同时收集 SDK 及其传递依赖（包括 credentials、Tea、requests、aiohttp、cryptography、Darabonba 等）的实际版本和许可文件；完整列表以 licenses/dependencies.json 为准。阿里云在线服务不随工具分发，服务收费及使用条款独立适用。
 
 OSS 上传使用阿里云官方 alibabacloud-oss-v2 1.4.0，并附带 crcmod-plus 与 PyCryptodome 运行依赖。各许可证见 licenses 目录。
+
+卖点图使用 opencc-python-reimplemented 0.1.7（Apache-2.0）转换繁体文字，使用 Noto Sans CJK TC Regular（SIL Open Font License 1.1）绘制商品说明。字体及许可来自官方 https://github.com/notofonts/noto-cjk，随包保存在 assets，并在 licenses 提供许可副本；运行时无需联网下载字体。

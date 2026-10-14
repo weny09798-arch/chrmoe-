@@ -10,7 +10,7 @@ from core import QueueService, StorageFailure
 from prompts import build_prompt
 from cloud_images import image_response
 
-def create_app(browser_factory=None, state_dir=None, output_default=None, token=None, aliyun_factory=None, oss_factory=None):
+def create_app(browser_factory=None, state_dir=None, output_default=None, token=None, aliyun_factory=None, oss_factory=None, bailian_factory=None):
     root = Path(state_dir or Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'DoubaoImageTool')
     if browser_factory is None:
         from browser import DoubaoBrowser
@@ -26,6 +26,13 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
     oss_config=OSSConfigStore(root,credentials.load)
     oss_factory=oss_factory or (lambda:OSSPublisher(oss_config.load()))
     app.extensions['oss_config']=oss_config
+    from bailian import BailianCredentials,BailianClient
+    from selling_points import SellingPointService
+    from selling_routes import register_selling_routes
+    bailian_credentials=BailianCredentials(root)
+    selling_points=SellingPointService(root,bailian_factory or (lambda:BailianClient(bailian_credentials.load())),oss_factory)
+    app.extensions['bailian_credentials']=bailian_credentials
+    app.extensions['selling_points']=selling_points
     queue = QueueService(browser_factory, root / 'state', aliyun_factory=aliyun_factory,oss_factory=oss_factory)
     app.extensions['queue'] = queue
     lifecycle = threading.RLock()
@@ -130,9 +137,11 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
         return jsonify(reset_queue())
 
     from bridge_routes import register_bridge
-    register_bridge(app, lambda: queue, lifecycle, root, reset_queue, credential_status,
+    register_bridge(app, lambda: queue, lifecycle, root, reset_queue,
+                    lambda: {**credential_status(),'selling_point_images':True,'bailian_configured':bailian_credentials.status()['bailian_configured']},
                     aliyun_settings=update_aliyun_settings, oss_settings=update_oss_settings,
                     check_oss=lambda: oss_factory().check())
+    register_selling_routes(app,selling_points,bailian_credentials)
 
     @app.get('/api/images/<job>/<int:index>/<kind>')
     def image(job, index, kind):
@@ -145,6 +154,7 @@ def create_app(browser_factory=None, state_dir=None, output_default=None, token=
     @app.post('/api/exit')
     def exit_app():
         with lifecycle:
+            selling_points.close()
             queue.request_close(clear_state=True)
             shutdown = app.extensions.get('shutdown')
             if shutdown:

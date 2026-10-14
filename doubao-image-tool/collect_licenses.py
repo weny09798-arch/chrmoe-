@@ -6,6 +6,7 @@ from pathlib import Path
 
 PACKAGES = ['flask','werkzeug','jinja2','markupsafe','itsdangerous','click','blinker','pillow','playwright','pyee','greenlet','typing_extensions','colorama','openpyxl','et-xmlfile']
 PACKAGES += ['alibabacloud-oss-v2','crcmod-plus','pycryptodome']
+PACKAGES += ['opencc-python-reimplemented']
 PACKAGES += ['alibabacloud-alimt20181012','alibabacloud-tea-openapi','alibabacloud-tea-util',
     'alibabacloud-credentials','alibabacloud-credentials-api','alibabacloud-endpoint-util',
     'alibabacloud-openapi-util','alibabacloud-gateway-spi','alibabacloud-tea','alibabacloud-tea-fileform',
@@ -26,6 +27,9 @@ def collect(destination):
                     import shutil
                     shutil.copy2(source,folder/source.name)
     (destination/'dependencies.json').write_text(json.dumps(records,ensure_ascii=False,indent=2),encoding='utf-8')
+    import shutil
+    font_license=Path(__file__).resolve().parent/'assets'/'OFL-LICENSE.txt'
+    shutil.copy2(font_license,destination/'NotoSansCJK-OFL-LICENSE.txt')
     import sys, shutil
     python_license=Path(sys.base_prefix)/'LICENSE.txt'
     if python_license.exists(): shutil.copy2(python_license,destination/'Python-LICENSE.txt')
