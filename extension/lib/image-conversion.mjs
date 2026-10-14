@@ -380,4 +380,3 @@ export class ConversionController {
     return this.current(epoch) && this.job?.id === jobId ? blob : null;
   }
 }
-

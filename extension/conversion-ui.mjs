@@ -227,4 +227,3 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     selectedCount() { return displayedSelection(getCollection().task).count; }
   };
 }
-
