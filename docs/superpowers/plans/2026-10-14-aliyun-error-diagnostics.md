@@ -20,8 +20,9 @@
 
 ## Task 2: verified release and customer instructions
 
-- [ ] Bump plugin/backend version to 1.6.7, update exact current-version test expectations while retaining older compatibility fixtures.
-- [ ] Run full Python/Node/check and range whitespace checks once on final code; rebuild the existing portable runtime.
-- [ ] Verify compiled helper/native startup in isolated state only; no customer state or live paid calls. Document limits: old failure detail unavailable and old result cannot be recovered without its address.
-- [ ] Explain update/reinstall backend with existing plugin ID, only second image's explicit redo, existing confirmation and first-image preservation; error-code categories lead to network/account/permission/service checks.
-- [ ] Replace fixed delivery folder/ZIP in-place, compare source/runtime and all archive member hashes, exclude personal state and keys. Final review then root merges locally and tags 1.6.7, without an automatic push.
+- [x] Bump plugin/backend version to 1.6.7, update exact current-version test expectations while retaining older compatibility fixtures.
+- [x] Run full Python/Node/check and range whitespace checks on final code; rebuild the existing portable runtime. Initial native current-version fake failed; refreshed only that fake and reran full Python successfully.
+- [x] Verify compiled helper/native startup in isolated state only; no customer state or live paid calls. Document limits: old failure detail unavailable and old result cannot be recovered without its address.
+- [x] Explain update/reinstall backend with existing plugin ID, only second image's explicit redo, existing confirmation and first-image preservation; error-code categories lead to network/account/permission/service checks.
+- [x] Replace fixed delivery folder/ZIP in-place, compare source/runtime and all archive member hashes, exclude personal state and keys.
+- [ ] Final root review, then root merges locally and tags 1.6.7, without an automatic push.
