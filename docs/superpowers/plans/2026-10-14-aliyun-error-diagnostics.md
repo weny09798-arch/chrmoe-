@@ -25,4 +25,4 @@
 - [x] Verify compiled helper/native startup in isolated state only; no customer state or live paid calls. Document limits: old failure detail unavailable and old result cannot be recovered without its address.
 - [x] Explain update/reinstall backend with existing plugin ID, only second image's explicit redo, existing confirmation and first-image preservation; error-code categories lead to network/account/permission/service checks.
 - [x] Replace fixed delivery folder/ZIP in-place, compare source/runtime and all archive member hashes, exclude personal state and keys.
-- [ ] Final root review, then root merges locally and tags 1.6.7, without an automatic push.
+- [x] Final root review clean; locally integrated by fast-forward and release tagged 1.6.7, without an automatic push.
