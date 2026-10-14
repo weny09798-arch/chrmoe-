@@ -31,10 +31,80 @@ MESSAGES={
     'rate':'阿里云限流，请稍后继续。',
     'uncertain':'阿里云提交结果不确定，可能已计费；继续不会重新提交，重新生成需再次确认付费。',
 }
+DIAGNOSTIC_REASONS={
+    'provider-error':'服务返回错误',
+    'sdk-timeout':'请求网络超时',
+    'sdk-connection':'请求连接失败',
+    'sdk-error':'请求异常，未取得有效结果',
+    'response-invalid':'服务返回的结果内容无效',
+    'helper-timeout':'本机处理进程超时',
+    'helper-protocol':'本机处理进程返回内容无效',
+    'helper-failure':'本机处理进程异常退出',
+}
+
+def sanitize_aliyun_diagnostics(value,credentials=None):
+    """Copy bounded metadata only; never stringify arbitrary provider/process data."""
+    if type(value) is not dict:return {}
+    blocked=[]
+    if type(credentials) is dict:
+        for key in ('access_key_id','access_key_secret','security_token'):
+            secret=credentials.get(key)
+            if type(secret) is str and secret:blocked.append(secret.casefold())
+    safe={}
+    reason=value.get('reason')
+    if type(reason) is str and len(reason)<=32 and reason in DIAGNOSTIC_REASONS:safe['reason']=reason
+    for key,pattern in (('code',r'[A-Za-z0-9_.:-]{1,128}'),('request_id',r'[A-Za-z0-9_-]{1,200}')):
+        token=value.get(key)
+        if type(token) is not str or not re.fullmatch(pattern,token):continue
+        if any(secret in token.casefold() for secret in blocked):continue
+        if re.search(r'(?:LTAI|AKIA|ASIA)[A-Za-z0-9_]{8,}',token):continue
+        safe[key]=token
+    status=value.get('status')
+    if type(status) is int and 100<=status<=599:safe['status']=status
+    return safe
+
 class AliyunError(RuntimeError):
-    def __init__(self,kind='uncertain'):
-        self.kind=kind if kind in MESSAGES else 'uncertain'
-        super().__init__(MESSAGES[self.kind])
+    def __init__(self,kind='uncertain',diagnostics=None):
+        self.kind=kind if type(kind) is str and kind in MESSAGES else 'uncertain'
+        self.diagnostics=sanitize_aliyun_diagnostics(diagnostics)
+        details=[]
+        if 'reason' in self.diagnostics:details.append(DIAGNOSTIC_REASONS[self.diagnostics['reason']])
+        for key,label in (('code','错误码'),('status','HTTP 状态'),('request_id','请求 ID')):
+            if key in self.diagnostics:details.append(f'{label}：{self.diagnostics[key]}')
+        super().__init__(MESSAGES[self.kind]+(' 诊断：'+'；'.join(details)+'。' if details else ''))
+
+def _diagnostic_code(value):
+    if type(value) is int:return str(value) if 0<=value<10**128 else None
+    return value if type(value) is str else None
+
+def _sdk_exception_diagnostics(exception,credentials):
+    from requests.exceptions import Timeout,ConnectionError
+    pending=[exception];seen=set();safe={};classification={};reason='sdk-error'
+    # Tea UnretryableException wraps requests failures in inner_exception.
+    # Bound all links and cycles; only known typed metadata crosses this boundary.
+    for _ in range(8):
+        if not pending:break
+        current=pending.pop(0)
+        if not isinstance(current,BaseException) or id(current) in seen:continue
+        seen.add(id(current))
+        if isinstance(current,(Timeout,TimeoutError)):reason='sdk-timeout'
+        elif isinstance(current,ConnectionError) and reason!='sdk-timeout':reason='sdk-connection'
+        data=getattr(current,'data',None)
+        data=data if type(data) is dict else {}
+        code=_diagnostic_code(getattr(current,'code',None))
+        candidate=sanitize_aliyun_diagnostics({'code':code,
+            'status':getattr(current,'statusCode',getattr(current,'status_code',data.get('statusCode'))),
+            'request_id':data.get('RequestId',data.get('request_id',data.get('requestId')))})
+        for key in ('code','status'):
+            if key in candidate:classification.setdefault(key,candidate[key])
+        candidate=sanitize_aliyun_diagnostics(candidate,credentials)
+        for key,value in candidate.items():safe.setdefault(key,value)
+        for link in ('inner_exception','__cause__','__context__'):
+            child=getattr(current,link,None)
+            if isinstance(child,BaseException) and id(child) not in seen:pending.append(child)
+    if reason=='sdk-error' and ('code' in safe or 'status' in safe):reason='provider-error'
+    safe['reason']=reason
+    return classify_error(classification.get('code'),classification.get('status')),safe
 
 def classify_error(code,status=None):
     code=str(code or '')
@@ -126,16 +196,26 @@ def sdk_translate(credentials,path,client_factory=None,translate_product_text=Fa
     request=TranslateImageRequest(image_base_64=base64.b64encode(data).decode('ascii'),source_language='zh',target_language='zh-tw',field='e-commerce',ext=json.dumps({'ignoreEntityRecognize':'true' if translate_product_text else 'false'}))
     runtime=RuntimeOptions(autoretry=False,connect_timeout=4000,read_timeout=18000)
     try:
-        body=(client_factory or Client)(config).translate_image_with_options(request,runtime).body
-        if str(body.code)!='200':raise AliyunError(classify_error(body.code))
+        response=(client_factory or Client)(config).translate_image_with_options(request,runtime)
+        body=getattr(response,'body',None)
+        code=_diagnostic_code(getattr(body,'code',None))
+        diagnostics=sanitize_aliyun_diagnostics({'code':code,'status':getattr(response,'status_code',None),
+            'request_id':getattr(body,'request_id',None)},credentials)
+        if code!='200':
+            diagnostics['reason']='provider-error' if code is not None else 'response-invalid'
+            raise AliyunError(classify_error(code if type(code) is str else None,diagnostics.get('status')),diagnostics)
         url=getattr(getattr(body,'data',None),'final_image_url',None)
         request_id=getattr(body,'request_id',None)
-        _result_url_parts(url)
-        if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',request_id):raise AliyunError()
+        diagnostics.pop('code',None)
+        diagnostics['reason']='response-invalid'
+        try:_result_url_parts(url)
+        except ValueError:raise AliyunError('uncertain',diagnostics) from None
+        if 'request_id' not in diagnostics:raise AliyunError('uncertain',diagnostics)
         return {'request_id':request_id,'final_image_url':url}
     except AliyunError:raise
     except Exception as exc:
-        raise AliyunError(classify_error(getattr(exc,'code',None),getattr(exc,'statusCode',getattr(exc,'status_code',None)))) from None
+        kind,diagnostics=_sdk_exception_diagnostics(exc,credentials)
+        raise AliyunError(kind,diagnostics) from None
 
 class AliyunTranslator:
     def __init__(self,credentials):self.credentials=dict(credentials)
@@ -143,20 +223,32 @@ class AliyunTranslator:
         if type(translate_product_text) is not bool:raise ValueError('商品及包装文字设置必须为布尔值')
         try:
             r=subprocess.run(_download_launcher()+['--aliyun-translate'],input=json.dumps({'credentials':self.credentials,'input_path':str(path),'translate_product_text':translate_product_text}),capture_output=True,text=True,encoding='utf-8',timeout=PAID_PROCESS_SECONDS,creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+            if not isinstance(r.stdout,str) or len(r.stdout)>65536:raise ValueError()
             value=json.loads(r.stdout)
-            if r.returncode or 'error' in value:raise AliyunError(value.get('error'))
+            if type(value) is not dict:raise ValueError()
+            if 'error' in value:
+                if type(value['error']) is not str or value['error'] not in MESSAGES:raise ValueError()
+                raise AliyunError(value['error'],sanitize_aliyun_diagnostics(value.get('diagnostics'),self.credentials))
+            if r.returncode:raise AliyunError('uncertain',{'reason':'helper-failure'})
             _result_url_parts(value['final_image_url'])
-            if not isinstance(value.get('request_id'),str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',value['request_id']):raise AliyunError()
+            if 'request_id' not in sanitize_aliyun_diagnostics({'request_id':value.get('request_id')},self.credentials):raise ValueError()
             return {'request_id':value['request_id'],'final_image_url':value['final_image_url']}
         except AliyunError:raise
-        except Exception:raise AliyunError() from None
+        except subprocess.TimeoutExpired:raise AliyunError('uncertain',{'reason':'helper-timeout'}) from None
+        except (OSError,subprocess.SubprocessError):raise AliyunError('uncertain',{'reason':'helper-failure'}) from None
+        except Exception:raise AliyunError('uncertain',{'reason':'helper-protocol'}) from None
 
 def translate_helper_main():
+    payload=None
     try:
         payload=json.loads(sys.stdin.read())
         print(json.dumps(sdk_translate(payload['credentials'],payload['input_path'],translate_product_text=payload.get('translate_product_text',False))),flush=True);return 0
     except Exception as exc:
-        print(json.dumps({'error':exc.kind if isinstance(exc,AliyunError) else 'uncertain'}),flush=True);return 1
+        reply={'error':exc.kind if isinstance(exc,AliyunError) else 'uncertain'}
+        if isinstance(exc,AliyunError):
+            diagnostics=sanitize_aliyun_diagnostics(exc.diagnostics,payload.get('credentials') if type(payload) is dict else None)
+            if diagnostics:reply['diagnostics']=diagnostics
+        print(json.dumps(reply),flush=True);return 1
 
 class PublicHTTPSConnection(http.client.HTTPSConnection):
     """Pin vetted DNS address; keep original hostname for TLS and HTTP Host."""

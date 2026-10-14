@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from storage import validate_inputs, save_result, clear_task_state
 from image_batch import build_items, counts, download_image, save_positions, write_report
-from aliyun_translation import AliyunError, validate_aliyun_image, download_aliyun_result, PRICE_PER_IMAGE
+from aliyun_translation import AliyunError, sanitize_aliyun_diagnostics, validate_aliyun_image, download_aliyun_result, PRICE_PER_IMAGE
 from credentials import CredentialError
 from oss_storage import OSSError
 from cloud_images import save_cached_result,clean_cached_images
@@ -86,6 +86,10 @@ class QueueService:
             self.job.setdefault('paid_calls', 0)
             self.job.setdefault('estimated_cost_upper', 0)
             for item in self.job['items']:
+                if 'aliyun_error' in item:
+                    diagnostics=sanitize_aliyun_diagnostics(item['aliyun_error'])
+                    if diagnostics:item['aliyun_error']=diagnostics
+                    else:item.pop('aliyun_error',None)
                 for ref in item.get('refs',[]):
                     ref.setdefault('sku_index',ref['order']-1 if ref['kind']=='sku' else None)
                 if item['status'] not in {'completed', 'failed'}:
@@ -94,6 +98,10 @@ class QueueService:
                     elif item.get('aliyun_result'):
                         item['phase'] = 'saving' if item.get('cached_path') and Path(item['cached_path']).is_file() else 'aliyun-downloading'
                         item['status'] = 'queued'; item['message'] = '程序已重新启动，继续将获取已有阿里云结果，不重新提交。'
+                    elif self.job['provider']=='aliyun' and item['phase']=='uncertain':
+                        item['status']='needs-review'
+                        if item.get('aliyun_error') or not item.get('message'):
+                            item['message']=str(AliyunError('uncertain',item.get('aliyun_error')))
                     elif item['phase'] in {'ready', 'aliyun-ready', 'downloading', 'alias', 'saving'}:
                         item['status'] = 'queued'; item['message'] = '程式已重新啟動；此圖片尚未發送，待繼續處理。'
                     elif item['phase'] == 'pending' and item.get('download_recovery',{}).get('conversation_url'):
@@ -193,6 +201,10 @@ class QueueService:
             state.setdefault('paid_calls', 0); state.setdefault('estimated_cost_upper', 0)
             for item in state['items']:
                 item.pop('aliyun_result', None)
+                if 'aliyun_error' in item:
+                    diagnostics=sanitize_aliyun_diagnostics(item['aliyun_error'])
+                    if diagnostics:item['aliyun_error']=diagnostics
+                    else:item.pop('aliyun_error',None)
             state.update(browser_stage=getattr(self.browser, 'stage', '尚未开启'), browser_message=self.browser_message, browser_busy=self.browser_busy)
             if state.get('kind') == 'collector': state['counts'] = counts(state)
             return state
@@ -271,8 +283,10 @@ class QueueService:
                     for dependent in self.job['items']:
                         if dependent.get('alias_of') == item['index']:
                             dependent.update(phase='alias', status='queued', message='', result=None)
+                            dependent.pop('aliyun_error',None)
                             dependent['revision'] = dependent.get('revision', 0) + 1
                             for ref in dependent['refs']: ref['output_path'] = None
+                item.pop('aliyun_error',None)
                 item['status'] = 'queued'; item['message'] = ''; item.pop('started', None)
                 self.job['status'] = 'running'; self.job['message'] = ''
             else: raise ValueError('未知操作')
@@ -534,13 +548,16 @@ class QueueService:
                     with self.cv:
                         self._check_storage()
                         if self.job is not active_job or item.get('revision',0) != revision: continue
+                        safe_error=AliyunError(exc.kind,sanitize_aliyun_diagnostics(exc.diagnostics))
+                        if safe_error.diagnostics:item['aliyun_error']=safe_error.diagnostics
+                        else:item.pop('aliyun_error',None)
                         if exc.kind == 'image':
-                            item.update(status='failed',phase='aliyun-failed',message=str(exc));self._persist()
+                            item.update(status='failed',phase='aliyun-failed',message=str(safe_error));self._persist()
                         else:
                             item['phase'] = 'uncertain' if exc.kind=='uncertain' else 'aliyun-ready'
-                            if self.job['status']=='running' and not self.closed:self._pause(item,str(exc))
+                            if self.job['status']=='running' and not self.closed:self._pause(item,str(safe_error))
                             else:
-                                item.update(status='paused',message=str(exc));self._persist()
+                                item.update(status='paused',message=str(safe_error));self._persist()
                 except NeedsUser as exc:
                     with self.cv:
                         self._check_storage()
