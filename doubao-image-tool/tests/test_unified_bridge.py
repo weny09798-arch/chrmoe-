@@ -77,7 +77,7 @@ def test_current_foreign_source_can_be_detected_without_resuming(client, tmp_pat
     assert response.status_code == 409
     assert queue.snapshot()['status'] == 'stopped'
     caps = client.get('/api/bridge/capabilities', headers=HEADERS).json
-    assert caps['version'] == '1.6.6'
+    assert caps['version'] == '1.6.7'
     assert all(caps[name] for name in ('unified_plugin', 'automatic_backend', 'settings_in_plugin'))
 
 

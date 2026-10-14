@@ -9,7 +9,7 @@ from pathlib import Path
 from credentials import _crypt
 
 HOST_NAME = 'com.productcollector.images'
-VERSION = '1.6.6'
+VERSION = '1.6.7'
 PROTOCOL = 1
 
 

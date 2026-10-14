@@ -110,7 +110,7 @@ def test_broker_serializes_spawn_and_rejects_stale_descriptor(tmp_path):
     def request(desc, action, session):
         calls.append(action)
         if desc.get('instance') == 'stale': raise OSError('stale')
-        return {'ok': True, 'instance': desc['instance'], 'protocol': 1, 'version': '1.6.6', 'extension_id': EXT}
+        return {'ok': True, 'instance': desc['instance'], 'protocol': 1, 'version': mod.VERSION, 'extension_id': EXT}
     (tmp_path / 'backend-ready.dpapi').write_bytes(b'ENC' + json.dumps({'port': 12345, 'token': 'old', 'instance': 'stale', 'extension_id': EXT, 'protocol': 1, 'version': '1.6.6'}).encode())
     brokers = [host.BackendBroker(tmp_path, tmp_path / 'tool.exe', EXT, spawn=spawn, request=request,
                                  decrypt=lambda b: b[3:], timeout=2) for _ in range(2)]
