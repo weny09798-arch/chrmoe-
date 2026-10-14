@@ -1,14 +1,14 @@
 # 1.6.8 单张商品卖点图验收记录
 
-日期：2026-10-14。原基线085b96f；后台实现5d5f2d2、审查修复e07c8ee；插件实现0b70a87、预览恢复修复db5e441。
+日期：2026-10-14。原基线085b96f；后台实现5d5f2d2、审查修复e07c8ee；插件实现0b70a87、预览恢复修复db5e442。
 
 ## 自动验证
 
 | 项目 | 实际结果 | 证据 |
 | --- | --- | --- |
 | 完整 Python 回归 | 512 passed、1 skipped、0 failed | artifacts/selling-point-full-python.log |
-| 完整 Node 回归 | 441 passed、0 failed、0 skipped | artifacts/selling-point-full-node.log |
-| 单图界面重点测试 | 18 passed | tests/selling-point*.test.mjs |
+| 完整 Node 回归 | 442 passed、0 failed、0 skipped | artifacts/selling-point-full-node.log |
+| 单图界面重点测试 | 19 passed | tests/selling-point*.test.mjs |
 | 新后台重点测试 | 34 passed、1 skipped | doubao-image-tool/tests/test_selling_points.py |
 | 插件脚本与清单 | npm run check通过 | scripts/check.mjs |
 | 源码空白检查 | git diff 085b96f --check通过 | Git范围检查 |
@@ -16,7 +16,7 @@
 
 Python唯一跳过项是当前Windows没有创建符号链接的权限；另有不跳过的模拟链接和junction拒绝测试，不能把它们宣称为真实符号链接完整验收。原基线完整Python曾有一次既有queue_drain别名并发测试间歇失败，立即重跑该文件20项通过；新版本最终完整512项通过，未为该基线现象修改采集队列。
 
-测试先验证缺失行为再实现；六个插件边界回归在初版代码下失败，修复后通过。独立代码审查发现并修复后台worker清理误删后继上传缓存、文件异常泄露绝对路径、原图预览失败无法重试三个问题，各有确定性回归及复审。升级版本的三个旧能力断言先失败，再统一至1.6.8并验证135项通过。
+测试先验证缺失行为再实现；六个插件边界回归在初版代码下失败，修复后通过。独立代码审查发现并修复后台worker清理误删后继上传缓存、文件异常泄露绝对路径、原图预览失败无法重试、重启后缓存上传不可重试四个问题，各有确定性回归及复审。升级版本的三个旧能力断言先失败，再统一至1.6.8并验证135项通过。
 
 ## 真实程序与浏览器的隔离验收
 

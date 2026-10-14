@@ -1,6 +1,6 @@
 # 1.6.8 验证记录 · 2026-10-14
 
-512项Python通过、1项Windows符号链接权限跳过；441项Node通过。真实重新构建EXE在隔离状态中验证Windows DPAPI、OpenCC/中文字体、手工草稿排字、原图像素保持、PNG下载和未配置OSS失败后缓存重试。隔离MV3界面测试使用模拟视觉模型与OSS，验证编辑、下载、刷新恢复和独立清空。实际付费/OSS调用均为0，未使用客户配置、注册表或个人浏览器。详细新验收记录见交付包《验收记录.md》及仓库docs/superpowers/plans/2026-10-14-selling-point-image-verification.md。
+512项Python通过、1项Windows符号链接权限跳过；442项Node通过。真实重新构建EXE在隔离状态中验证Windows DPAPI、OpenCC/中文字体、手工草稿排字、原图像素保持、PNG下载和未配置OSS失败后缓存重试。隔离MV3界面测试使用模拟视觉模型与OSS，验证编辑、下载、刷新恢复和独立清空。实际付费/OSS调用均为0，未使用客户配置、注册表或个人浏览器。详细新验收记录见交付包《验收记录.md》及仓库docs/superpowers/plans/2026-10-14-selling-point-image-verification.md。
 
 下面是历史2026-10-04独立豆包流程证据，不代表1.6.8重复进行在线生成：
 

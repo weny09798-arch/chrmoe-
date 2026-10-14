@@ -32,7 +32,7 @@
 
 升级需同时刷新插件并运行新版“安装后台组件.cmd”，更新已安装的后台副本。目录历史名称仍为“商品采集与图片转换_1.6.1”，包内版本为1.6.8。真实付费账号和文字效果由你配置后点击按钮验收，自动测试不消耗真实额度。
 
-本版441项Node及512项Python回归通过（另有1项Windows符号链接权限跳过），重新构建EXE和隔离Chrome单图流程验证通过；详见 [1.6.8验收记录](docs/superpowers/plans/2026-10-14-selling-point-image-verification.md)。
+本版442项Node及512项Python回归通过（另有1项Windows符号链接权限跳过），重新构建EXE和隔离Chrome单图流程验证通过；详见 [1.6.8验收记录](docs/superpowers/plans/2026-10-14-selling-point-image-verification.md)。
 
 ## 1.6.7 阿里云错误诊断
 
