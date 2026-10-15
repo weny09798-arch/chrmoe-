@@ -7,6 +7,7 @@ import { productImage, removeProduct, prepareRefill } from './lib/products.mjs';
 import { createRefillScheduler } from './lib/refill.mjs';
 import { createConversionPanel } from './conversion-ui.mjs';
 import { mergeImageReplacements } from './lib/image-conversion.mjs';
+import { duplicateItems, restoreDuplicate } from './lib/product-dedup.mjs';
 
 const $ = id => document.getElementById(id);
 const installed = Boolean(globalThis.chrome?.runtime?.id);
@@ -101,7 +102,7 @@ function scanSummary(job) {
   const reasons=Object.entries(job.skipReasons || {}).map(([name,count])=>`${name} ${count}`).join('、');
   const start=job.statsStart ? `此前 ${job.statsStart} 条未记录分类；以下为恢复后的统计：` : '';
   const skips=Math.max(0,(job.skipped || 0)-(job.statsStartSkipped || 0));
-  return `${start}按商品 ID 去重 · 识别跳过 ${skips} 条${reasons ? `（${reasons}）` : ''}${job.excluded ? ` · 已删除商品排除 ${job.excluded} 条` : ''}`;
+  return `${start}按商品 ID 去重${job.imageDedup ? ` · 主图重复 ${duplicateItems(job).length} 条` : ''} · 识别跳过 ${skips} 条${reasons ? `（${reasons}）` : ''}${job.imageDedupFailures ? ` · 未完成主图去重 ${job.imageDedupFailures} 条` : ''}${job.excluded ? ` · 已删除商品排除 ${job.excluded} 条` : ''}`;
 }
 function renderTask() {
   const jobs = task?.jobs || [];
@@ -141,13 +142,13 @@ function renderTask() {
     const row = document.createElement('tr'), status = document.createElement('td'); status.append(badge(job.status));
     const action = document.createElement('td');
     if (['done', 'short', 'error', 'stopped'].includes(job.status)) {
-      const retry = element('button', '重新搜索', 'text-button');
+      const retry = element('button', job.sourceMode === 'current' ? '重新读取当前商品' : '重新搜索', 'text-button');
       retry.type = 'button'; retry.dataset.retryJob = String(index); retry.disabled = busy || lockedOut || clearing;
       retry.title = '替换此名称的旧结果，其他名称保留';
       retry.addEventListener('click', async () => {
         if (busy || lockedOut || clearing) return;
         retryJob(task, index); renderTask();
-        try { await saveTask(task); if (canAutoRun()) await execute(); }
+        try { await saveTask(task); if (job.sourceMode === 'current') await execute(task.jobs[index]); else if (canAutoRun()) await execute(); }
         catch (error) { notice(`重新搜索失败：${error.message}`, 'error'); }
       });
       action.append(retry);
@@ -162,9 +163,33 @@ function renderTask() {
     return row;
   }));
   $('links-panel').hidden = !totalLinks; $('links-count').textContent = `${totalLinks} 条`;
+  const duplicates = jobs.reduce((sum,job) => sum + duplicateItems(job).length,0);
+  $('duplicates-panel').hidden = !duplicates; $('duplicates-count').textContent = `${duplicates} 条`;
+  if ($('duplicates-panel').open) renderDuplicates();
   // Avoid constructing every hyperlink on every checkpoint while collapsed.
   if ($('links-panel').open) renderLinks();
   conversion.refresh();
+}
+function renderDuplicates() {
+  $('duplicate-items').replaceChildren(...(task?.jobs || []).flatMap(job => duplicateItems(job).map(({item,representative}) => {
+    const card = element('div','','duplicate-preview');
+    for (const product of [representative,item]) {
+      const column = element('div'), image = document.createElement('img'), label = element('p',`${product === representative ? '已保留' : '重复项'} · ${product.title}`);
+      image.src = product.originalListImage || productImage(product); image.alt = product.title || '原始主图'; image.loading = 'lazy'; image.referrerPolicy = 'no-referrer';
+      const link = element('a','打开商品 ↗');link.href = product.url;link.target = '_blank';link.rel = 'noopener noreferrer';
+      column.append(image,label,element('p',Number.isSafeInteger(product.cents) && product.cents > 0 ? `¥${(product.cents/100).toFixed(2)}` : '未读取到价格'),link);
+      card.append(column);
+    }
+    const restore = element('button','保留为独立商品','button');restore.type = 'button';restore.dataset.restoreDuplicate = item.id;
+    restore.disabled = busy || lockedOut || clearing;
+    restore.addEventListener('click',async () => {
+      if (busy || lockedOut || clearing || !task?.jobs.includes(job) || !restoreDuplicate(job,item.id)) return;
+      renderTask();
+      try { await saveTask(task);notice(`已恢复「${item.title}」为独立商品，保留其自己的 SKU 和图片链接；恢复后可能超过设定数量。`,'success'); }
+      catch(error) {notice(`恢复保存失败：${error.message}`,'error');}
+    });
+    card.append(element('p',job.keyword,'muted'),restore);return card;
+  })));
 }
 function renderLinks() {
   $('link-rows').replaceChildren(...(task?.jobs || []).flatMap(job => selected(job).map(item => {
@@ -198,7 +223,18 @@ function renderLinks() {
       refillScheduler.schedule();
     });
     action.append(remove);
-    row.append(element('td', job.keyword), imageCell, element('td', item.title), element('td', `¥${(item.cents / 100).toFixed(2)}`),
+    if (['partial','error'].includes(item.detailStatus)) {
+      const retry = element('button', '补采未完成详情', 'text-button');
+      retry.type = 'button'; retry.dataset.retryDetail = item.id; retry.disabled = busy || lockedOut || clearing;
+      retry.addEventListener('click', async () => {
+        if (busy || lockedOut || clearing || !task?.jobs.includes(job) || !selected(job).includes(item)) return;
+        item.detailStatus = 'pending'; item.detailNote = ''; job.phase = 'detail'; job.status = 'paused';
+        try { await saveTask(task); if (!clearing) await execute(job); }
+        catch (error) { notice(`补采失败：${error.message}`, 'error'); }
+      });
+      action.append(retry);
+    }
+    row.append(element('td', job.keyword), imageCell, element('td', item.title), element('td', Number.isSafeInteger(item.cents) && item.cents > 0 ? `¥${(item.cents / 100).toFixed(2)}` : '未读取到价格'),
       element('td', status), element('td', note, 'note'), linkCell, action); return row;
   })));
 }
@@ -284,7 +320,7 @@ $('current-product-refresh').addEventListener('click', async () => {
     currentProductTabs = await browserPorts({ save:saveTask, update:renderTask }).listCurrentTabs();
     const options = currentProductTabs.map(tab => { const option = element('option', tab.title || tab.url); option.value = String(tab.id); return option; });
     $('current-product-tab').replaceChildren(...options);
-    if (options.length) $('current-product-tab').value = options[0].value;
+    if (options.length) options[0].selected = true;
     $('current-product-note').textContent = options.length ? `找到 ${options.length} 个商品标签页。` : '没有找到淘宝／天猫商品页，请先手动打开商品。';
   } catch (error) { currentProductTabs = []; $('current-product-note').textContent = error.message; }
   finally { refreshingTabs = false; renderTask(); }
@@ -295,8 +331,8 @@ $('collect-current-product').addEventListener('click', async () => {
   if (!tab) return;
   const settings = collectSettings(); if (!settings) return;
   const keyword = `当前商品 · ${tab.title || tab.id}`;
-  task = enqueueKeyword(task, keyword, 'taobao', { ...settings, limit:1, sourceMode:'current', sourceTabId:tab.id });
-  const job = task.jobs.at(-1); job.sourceMode = 'current'; job.sourceTabId = tab.id;
+  task = enqueueKeyword(task, keyword, 'taobao', { ...settings, limit:1, sourceMode:'current', sourceTabId:tab.id, sourceProductId:resolveSite(tab.url).productId(tab.url) });
+  const job = task.jobs.at(-1); job.sourceMode = 'current'; job.sourceTabId = tab.id; job.sourceProductId = resolveSite(tab.url).productId(tab.url);
   // Explicit manual capture runs only this job; the paused search queue stays paused.
   job.manualOnly = true;
   if (!keywords.includes(keyword)) keywords.push(keyword);
@@ -419,6 +455,7 @@ $('export').addEventListener('click', async () => {
   finally { exporting = false; button.textContent = '↓ 导出 Excel'; renderTask(); }
 });
 $('links-panel').addEventListener('toggle', () => { if ($('links-panel').open) renderLinks(); });
+$('duplicates-panel').addEventListener('toggle', () => { if ($('duplicates-panel').open) renderDuplicates(); });
 window.addEventListener('beforeunload', event => { if (busy) { event.preventDefault(); event.returnValue = ''; } });
 window.addEventListener('pagehide', () => conversion.dispose());
 

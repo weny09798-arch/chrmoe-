@@ -28,6 +28,7 @@
         <div class="aside-note"><span class="dot"></span><p>清单会自动保存，下次打开继续使用。</p></div>
       </aside>
       <section class="workspace">
+        <details class="panel" id="duplicates-panel" hidden><summary>查看重复商品 <span id="duplicates-count"></span></summary><p class="muted">仅在同平台同搜索任务内比较原始主图，默认保留先采集商品。图片相似不代表规格一致，误合并时可保留为独立商品；恢复后可能超过设定数量。</p><div id="duplicate-items"></div></details>
         <div class="section-heading workspace-heading"><div><h2>采集工作台</h2><p class="muted">搜索商品 → 收集链接 → 采集详情 → 导出 Excel</p></div><div class="export-controls"><label class="sr-only" for="export-format">导出文件类型</label><select id="export-format" aria-label="导出文件类型"><option value="xlsx" selected>新版 .xlsx</option><option value="xls">模板同款 .xls</option></select><button id="export" class="button export" disabled>↓ 导出 Excel</button></div></div>
         <div class="stats"><div class="stat"><span>本次商品名称</span><strong id="stat-keywords">0<small>个</small></strong></div><div class="stat"><span>已处理名称</span><strong id="stat-done">0<small>个</small></strong></div><div class="stat"><span>已收集链接</span><strong id="stat-links">0<small>条</small></strong></div></div>
         <section class="panel progress-panel" aria-label="任务进度">

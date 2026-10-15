@@ -2,12 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { parseHTML } from 'linkedom';
-import { createTask } from '../extension/lib/core.mjs';
+import { createTask as createDefaultTask } from '../extension/lib/core.mjs';
 import {Runner} from '../extension/lib/runner.mjs';
 import * as XLSX from 'xlsx';
 
 const html = await readFile(new URL('../extension/manager.html', import.meta.url), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
+// Legacy manager fixtures exercise queue/export behavior without image networking.
+// Image-dedup interaction cases opt in explicitly below.
+const createTask = keywords => { const task=createDefaultTask(keywords); for(const job of task.jobs)job.imageDedup=false; return task; };
 
 test('new collection controls expose default image dedup and refuse too-short Taobao intervals',async()=>{
   const f=await managerFixture();
@@ -37,6 +40,52 @@ test('current product controls list only valid product tabs and never open a sea
   const options=[...f.document.getElementById('current-product-tab').querySelectorAll('option')];
   assert.deepEqual(options.map(option=>option.value),['71','73']);
   assert.equal(f.tabCreates,0);
+});
+
+test('manual current capture leaves paused search alone and keeps borrowed tab for missing-price result',async()=>{
+  const f=await managerFixture();
+  const url='https://detail.tmall.com/item.htm?id=456';
+  globalThis.chrome.tabs.query=async()=>[{id:71,title:'商品标题',url}];
+  globalThis.chrome.tabs.get=async()=>({id:71,status:'complete',url});
+  globalThis.chrome.scripting={executeScript:async()=>[]};
+  globalThis.chrome.tabs.sendMessage=async()=>({goodsId:'456',ready:true,skuPending:false,detailPending:false,detail:{title:'玻璃水杯',galleryImages:['https://img.alicdn.com/cup.jpg'],attributes:[{name:'材质',value:'玻璃'}],detailStatus:'partial'}});
+  f.click('current-product-refresh');await tick();await tick();
+  f.click('collect-current-product');
+  for(let i=0;i<12;i++)await tick();
+  assert.equal(f.saved.task.jobs.length,2);
+  assert.equal(f.saved.task.jobs[0].status,'paused');
+  const current=f.saved.task.jobs[1];
+  assert.equal(current.sourceMode,'current');
+  assert.equal(current.groups[0]?.best.title,'玻璃水杯');
+  assert.equal(current.groups[0]?.best.id,'456');
+  assert.equal(f.tabCreates,0);assert.deepEqual(f.removedTabs,[]);
+  assert.doesNotMatch(f.document.getElementById('link-rows').textContent,/NaN/);
+});
+
+test('incomplete detail has an explicit supplement action but completed detail does not',async()=>{
+  const f=await managerFixture(task=>{
+    task.status='paused';task.jobs[0].groups=[
+      {best:{id:'1',title:'相机一',cents:100,detailStatus:'partial',url:'https://mobile.pinduoduo.com/goods.html?goods_id=1'}},
+      {best:{id:'2',title:'相机二',cents:100,detailStatus:'done',url:'https://mobile.pinduoduo.com/goods.html?goods_id=2'}}];
+  });
+  f.document.getElementById('links-panel').open=true;
+  f.document.getElementById('links-panel').dispatchEvent(new window.Event('toggle'));
+  assert.ok(f.document.querySelector('[data-retry-detail="1"]'));
+  assert.equal(f.document.querySelector('[data-retry-detail="2"]'),null);
+});
+
+test('duplicate preview restores a member beyond target without swapping representative',async()=>{
+  const f=await managerFixture(task=>{
+    const first={id:'1',title:'相机一',cents:1300,image:'https://img.pddpic.com/a.jpg',url:'https://mobile.pinduoduo.com/goods.html?goods_id=1',detailStatus:'done'};
+    const second={...first,id:'2',title:'相机二',cents:900,url:'https://mobile.pinduoduo.com/goods.html?goods_id=2'};
+    task.jobs[0].limit=1;task.jobs[0].imageDedup=true;task.jobs[0].groups=[{best:first,members:[first,second],ids:['1','2']}];
+  });
+  const panel=f.document.getElementById('duplicates-panel');assert.ok(panel);panel.open=true;panel.dispatchEvent(new window.Event('toggle'));
+  const restore=f.document.querySelector('[data-restore-duplicate="2"]');assert.ok(restore);
+  restore.dispatchEvent(new window.Event('click'));await tick();await tick();
+  assert.deepEqual(f.saved.task.jobs[0].groups.map(group=>group.best.id),['1','2']);
+  assert.match(f.document.getElementById('result-rows').textContent,/2\/1/);
+  assert.match(f.document.getElementById('notice').textContent,/超过|超出/);
 });
 
 test('manager saves published mapping through task writer and preserves it after converter reconnect',async()=>{

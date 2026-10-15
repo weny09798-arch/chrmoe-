@@ -8,6 +8,7 @@
 .conversion-options legend{padding:0 6px;font-weight:600}
 .conversion-options label,.conversion-paid-option{display:flex;align-items:center;gap:6px}
 .conversion-options input,.conversion-paid-option input{flex:0 0 auto;width:auto;padding:0;margin:0;accent-color:#28795e}
+.current-product-controls{margin:16px 0;padding:12px;border:1px solid #dfe5e1;border-radius:8px;background:#f7faf8}.current-product-controls summary{cursor:pointer;font-weight:600}.current-product-controls select{width:100%;min-width:0;padding:8px;background:#fff;border:1px solid #dfe5e1;border-radius:6px}.duplicate-preview{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 0;border-bottom:1px solid #e5ebe7}.duplicate-preview img{width:100px;height:100px;object-fit:contain}.duplicate-preview p{overflow-wrap:anywhere}.duplicate-preview .muted{font-size:12px}
 .conversion-paid-option{margin-top:12px;font-weight:600}
 #conversion-cost{line-height:1.65}
 .settings-fields{display:grid;gap:10px;margin:12px 0;padding:14px;border:1px solid #dfe5e1;border-radius:8px}.settings-fields label{display:grid;gap:5px;font-size:13px}.settings-fields select{font:inherit;padding:10px;border:1px solid #dfe5e1;border-radius:7px;background:#fff}.settings-fields p{margin:4px 0}#backend-extension-id{overflow-wrap:anywhere;user-select:all}
