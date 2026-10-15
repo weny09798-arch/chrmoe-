@@ -1,19 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createTask,selected,recoverTask} from '../extension/lib/core.mjs';
+import {createTask as createBaseTask,selected,recoverTask} from '../extension/lib/core.mjs';
 import {Runner} from '../extension/lib/runner.mjs';
 
+const createTask = keywords => { const task=createBaseTask(keywords); task.jobs.forEach(job=>job.imageDedup=false); return task; };
 const card=(id,price)=>({id,title:'相机',url:`https://mobile.pinduoduo.com/goods.html?goods_id=${id}`,image:`https://img.pddpic.com/${id}.jpg`,priceText:`¥${price}`,key:id});
 function ports(pages, overrides={}) {let i=0,clock=1000;return {open:async()=>{},read:async()=>pages[Math.min(i++,pages.length-1)],scroll:async()=>{},hash:async()=>({bits:'0000000000000000',color:[100,100,100],spread:50}),resolve:async c=>c,enrich:async()=>({}),save:async()=>{},update:()=>{},...overrides,now:overrides.now||(()=>clock),wait:async ms=>{await overrides.wait?.(ms);clock+=ms;}};}
 
-test('PDD skips a missing link without clicking and continues scrolling to an identifiable card',async()=>{
+test('PDD resolves a missing link through cancellable fallback before accepting the card',async()=>{
   const task=createTask(['相机']);task.jobs[0].limit=1;let resolves=0,scrolls=0;
   const missing={...card('1',10),id:'',url:'',key:'missing'};
   await new Runner(task,ports([{cards:[missing],end:false},{cards:[card('2',20)],end:false}],{
     resolve:async c=>{resolves++;return {...c,id:'1',url:card('1',10).url};},scroll:async()=>scrolls++
   })).run();
-  assert.equal(resolves,0);assert.equal(scrolls,1);assert.deepEqual(selected(task.jobs[0]).map(x=>x.id),['2']);
-  assert.equal(task.jobs[0].skipReasons['链接未识别'],1);assert.equal(task.jobs[0].scanned,2);
+  assert.equal(resolves,1);assert.equal(scrolls,0);assert.deepEqual(selected(task.jobs[0]).map(x=>x.id),['1']);
+  assert.equal(task.jobs[0].scanned,1);
 });
 
 test('PDD waits three seconds after successful and ordinary failed details before the next product and keyword',async()=>{
@@ -51,7 +52,7 @@ test('cooldown does not delay other platforms and a verification stops all furth
       now:()=>clock,wait:async ms=>clock+=ms,open:async job=>events.push(job.keyword),
       enrich:async item=>{events.push(item.id);if(item.id==='2')throw Object.assign(new Error('访问过于频繁'),{blocked:true});return {attributes:[{name:'材质',value:'塑料'}]};}
     })).run();
-    assert.deepEqual(events,['相机','1','2']);assert.equal(task.status,'blocked');assert.equal(clock,site==='pdd'?4000:1000);
+    assert.deepEqual(events,['相机','1','2']);assert.equal(task.status,'blocked');assert.equal(clock,site==='pdd'?4000:site==='taobao'?11000:1000);
   }
 });
 
@@ -153,7 +154,7 @@ test('pause during reading does not mark candidate processed and resume loses no
   assert.deepEqual(selected(restored.jobs[0]).map(x=>x.id),['1']);
 });
 test('scan cap is enforced before processing next card',async()=>{
-  const task=createTask(['相机']);const cards=Array.from({length:230},(_,i)=>({...card(String(i+1),i+1),title:'本店已拼1万+'}));
+  const task=createTask(['相机']);const cards=Array.from({length:230},(_,i)=>({...card(String(i+1),i+1),priceText:'无法识别价格'}));
   await new Runner(task,ports([{cards,end:true}])).run();assert.equal(task.jobs[0].scanned,200);
 });
 test('twenty distinct links immediately advance to the next product name',async()=>{

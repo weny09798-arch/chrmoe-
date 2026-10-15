@@ -1,6 +1,7 @@
 import { addCandidate, countDetails, hasDetailData, outputLimit, parsePrice, priceAllowed, selected, validProductTitle, SCAN_LIMIT } from './core.mjs';
 import { siteForJob } from './sites.mjs';
 import { productImage } from './products.mjs';
+import { deduplicate } from './product-dedup.mjs';
 
 const finished = status => ['done', 'short', 'error', 'stopped'].includes(status);
 export class Runner {
@@ -24,20 +25,24 @@ export class Runner {
     for (const job of this.task.jobs) job.detailDone = countDetails(job);
     await this.ports.save(this.task); this.ports.update(this.task);
   }
-  async run() {
+  async run(onlyJob = null) {
     if (this.running) return;
+    this.task.wasBlocked = this.task.status === 'blocked' || Boolean(this.task.wasBlocked);
     this.running = true; this.intent = ''; this.task.status = 'running';
     try {
       await this.checkpoint();
       for (const job of this.task.jobs) {
+        if (onlyJob && job !== onlyJob) continue;
         if (finished(job.status)) continue;
         if (this.intent) break;
         try {
+          job.wasBlocked = job.status === 'blocked' || Boolean(job.wasBlocked);
           job.status = 'running'; if (job.phase !== 'detail') job.note = ''; await this.checkpoint();
-          if (job.phase === 'detail') await this.enrich(job);
+          if (job.sourceMode === 'current') await this.captureCurrent(job);
+          else if (job.phase === 'detail') await this.enrich(job);
           else {
             if (!await this.waitForPdd(job)) break;
-            await this.ports.open(job, this.task); await this.collect(job);
+            await this.ports.open(job, this.task); this.task.wasBlocked = false; job.wasBlocked = false; await this.collect(job);
           }
         } catch (error) {
           if (this.intent && !this.refillPause) break;
@@ -58,12 +63,33 @@ export class Runner {
         for (const job of this.task.jobs) {
           if (!finished(job.status) && (job.status === 'running' || this.intent === 'stopped')) job.status = this.intent;
         }
-      } else if (this.task.status !== 'blocked') this.task.status = this.task.jobs.some(j => j.status === 'error') ? 'error' : 'done';
+      } else if (this.task.status !== 'blocked') this.task.status = this.task.jobs.some(j => !finished(j.status)) ? 'paused' : this.task.jobs.some(j => j.status === 'error') ? 'error' : 'done';
       await this.checkpoint();
     } finally {
       await this.ports.close?.({ preserveBlocked: this.task.status === 'blocked' });
       this.running = false; this.ports.update(this.task);
     }
+  }
+  async captureCurrent(job) {
+    const cancelled = () => Boolean(this.intent);
+    if (!await this.waitForTaobao(job)) return;
+    if (job.site === 'taobao') { this.task.taobaoNextDetailAt = this.now() + Math.max(10000,Number(job.taobaoDetailIntervalMs) || 10000); await this.checkpoint(); }
+    const detail = await this.ports.current(job.sourceTabId,this.task,cancelled);
+    if (cancelled()) return;
+    if (!detail?.id || !detail.url || !validProductTitle(detail.title,detail.title)) throw new Error('当前页面未识别到真实商品及名称');
+    if (job.sourceProductId && String(detail.id) !== String(job.sourceProductId)) throw Object.assign(new Error('当前商品标签已切换，请重新选择'),{blocked:true});
+    const item = {...detail,originalListImage:detail.image || '',collectedAt:new Date().toISOString()};
+    item.detailStatus = detail.detailStatus === 'done' && hasDetailData(item) ? 'done' : 'partial';
+    job.groups = [{ids:[item.id],best:item,members:[item]}];
+    job.phase = 'done'; job.status = 'done'; job.searchStatus = 'done';
+    this.task.wasBlocked = false; job.wasBlocked = false;
+    job.note = Number.isSafeInteger(item.cents) && item.cents > 0 ? '已采集当前商品' : '已采集当前商品；未读取到真实价格，导出留空';
+    await this.checkpoint();
+  }
+  async waitForTaobao(job) {
+    if (job.site !== 'taobao') return !this.intent;
+    while (!this.intent && this.task.taobaoNextDetailAt > this.now()) await this.ports.wait(Math.min(250,this.task.taobaoNextDetailAt-this.now()));
+    return !this.intent;
   }
   async collect(job) {
     let stalled = 0, noCardProgress = 0, previousSnapshot = '', paginationWaits = 0, extractionFailures = 0;
@@ -87,6 +113,8 @@ export class Runner {
       if (paginationWaits || awaitingPage) { stalled = 0; noCardProgress = 0; previousSnapshot = ''; job.note = ''; }
       paginationWaits = 0;
       awaitingPage = null; delete job.paginationFromKeys;
+      const restored = this.task.resolvedCard;
+      if (restored && restored.keyword === job.keyword && restored.site === (job.site || 'pdd')) page.cards.unshift(restored);
       const fresh = page.cards.filter(c => !job.seen.includes(c.key));
       const snapshot = JSON.stringify([page.url ?? '', page.position ?? null, page.cards.map(c => c.key)]);
       let navigated = false;
@@ -107,8 +135,7 @@ export class Runner {
           skipReason = '价格不在区间';
           if (!priceAllowed(cents, job)) throw new Error('展示价格不在设定区间内');
           skipReason = '链接未识别';
-          if ((job.site || 'pdd') === 'pdd' && (!raw.id || !raw.url)) throw new Error('页面已加载的数据中未识别到真实商品链接，已跳过');
-          const resolved = raw.id ? raw : await this.ports.resolve(raw, page, job);
+          const resolved = raw.id && raw.url ? raw : await this.ports.resolve(raw, page, job, () => Boolean(this.intent));
           if (this.intent) return;
           navigated ||= Boolean(resolved.navigated);
           if (!resolved.id || !resolved.url) throw new Error('未识别到商品详情链接');
@@ -124,14 +151,16 @@ export class Runner {
           const count = job.groups.length;
           if (!addCandidate(job, candidate, this.task)) job.excluded = (job.excluded || 0) + 1;
           else if (job.groups.length === count) job.merged = (job.merged || 0) + 1;
+          await deduplicate(job,this.ports.hash,() => Boolean(this.intent));
         } else {
           job.skipped++; job.lastSkip = problem;
           job.skipReasons ||= {}; job.skipReasons[skipReason] = (job.skipReasons[skipReason] || 0) + 1;
         }
         job.seen.push(raw.key); processedKeys.add(raw.key); job.scanned++;
+        if (this.task.resolvedCard?.key === raw.key) delete this.task.resolvedCard;
         await this.checkpoint();
-        extractionFailures = !candidate && ['名称未识别','价格未识别','页面商品变化'].includes(skipReason) ? extractionFailures + 1 : 0;
-        if (job.site === 'taobao' && extractionFailures >= 5) throw new Error('连续 5 条商品在加载重读后仍无法识别，已停止本名称并保留结果；当前淘宝页面需要进一步适配');
+        extractionFailures = !candidate && ['名称未识别','链接未识别','页面商品变化'].includes(skipReason) ? extractionFailures + 1 : 0;
+        if (extractionFailures >= 5) throw Object.assign(new Error('连续 5 条商品名称或链接无法识别，请检查保留页面后继续'),{blocked:true});
         // A detail-page visit replaces the DOM; reread before using other card descriptors.
         if (navigated) break;
       }
@@ -174,6 +203,7 @@ export class Runner {
       if (!selected(job).includes(item)) continue;
       if (['done', 'partial', 'error'].includes(item.detailStatus)) continue;
       if (!await this.waitForPdd(job)) return;
+      if (!await this.waitForTaobao(job)) return;
       if (!selected(job).includes(item)) continue;
       const cancelled = () => Boolean((this.intent && !this.refillPause) || !selected(job).includes(item));
       item.detailStatus = 'running'; item.detailNote = '';
@@ -184,19 +214,25 @@ export class Runner {
         continue;
       }
       try {
+        if (job.site === 'taobao') { this.task.taobaoNextDetailAt = this.now() + Math.max(10000,Number(job.taobaoDetailIntervalMs) || 10000); await this.checkpoint(); }
         const detail = await this.ports.enrich(item, this.task, cancelled);
+        if (cancelled()) { item.detailStatus = 'pending'; await this.checkpoint(); if (this.intent) return; continue; }
         if (!selected(job).includes(item)) {
           if ((job.site || 'pdd') === 'pdd') this.task.pddNextActionAt = this.now() + 3000;
           await this.checkpoint();
           continue;
         }
+        const originalListImage = item.originalListImage;
         Object.assign(item, detail);
+        this.task.wasBlocked = false; job.wasBlocked = false;
+        item.originalListImage = originalListImage;
         item.detailStatus = detail.detailStatus === 'partial' || !hasDetailData(item) ? 'partial' : 'done';
         item.detailNote = detail.detailNote || (item.detailStatus === 'partial' ? '仅采集到基础商品信息' : '');
         if (!productImage(item)) {
           item.detailStatus = 'partial';
           item.detailNote = [item.detailNote,'详情页未读到商品图片，链接已保留'].filter(Boolean).join('；');
         }
+        await deduplicate(job,this.ports.hash,() => Boolean(this.intent));
       } catch (error) {
         if (error.blocked) {
           item.detailStatus = 'pending'; item.detailNote = String(error.message || '详情页等待处理').slice(0, 500);
@@ -218,6 +254,10 @@ export class Runner {
       await this.checkpoint();
     }
     if (this.intent) return;
+    if (job.imageDedup === true && selected(job).length < outputLimit(job) && job.searchStatus === 'done' && job.scanned < SCAN_LIMIT) {
+      job.phase = 'search'; job.searchStatus = ''; await this.checkpoint();
+      await this.ports.open(job,this.task); await this.collect(job); return;
+    }
     const items = selected(job);
     const complete = items.filter(item => item.detailStatus === 'done').length;
     const partial = items.filter(item => item.detailStatus === 'partial').length;

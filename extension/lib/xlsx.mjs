@@ -1,7 +1,7 @@
 // Small OOXML writer for extension exports. ZIP entries are stored without compression.
 const encoder = new TextEncoder();
 import { TEMPLATE_HEADERS, TEMPLATE_INSTRUCTIONS } from './template.mjs';
-import { outputLimit, validProductTitle } from './core.mjs';
+import { exportSelected } from './core.mjs';
 import { fallbackSku } from './detail.mjs';
 import { matchTemplateXls } from './xls-biff.mjs';
 import { buildImageManifest, imagePositionKey, matchingImageReplacements } from './image-conversion.mjs';
@@ -176,7 +176,7 @@ export function productRows(item, fallbackNumber = 0) {
     return [
       number, ...(index === 0 ? common : Array(13).fill('')),
       cellText(sku?.specs?.[0]), cellText(sku?.specs?.[1]), cellText(sku?.id),
-      (cents / 100).toFixed(2), cellText(sku?.image), cellText(sku?.stock),
+      Number.isSafeInteger(cents) && cents > 0 ? (cents / 100).toFixed(2) : '', cellText(sku?.image), cellText(sku?.stock),
       cellText(sku?.weightKg), cellText(sku?.sizeCm)
     ];
   });
@@ -196,7 +196,7 @@ export function taskSheets(task) {
   };
   let productNumber = 0;
   for (const job of task.jobs) {
-    const chosen = (job.groups || []).map(group => group.best).filter(item => item && validProductTitle(item.title, job.keyword)).slice(0, outputLimit(job));
+    const chosen = exportSelected(job);
     for (const item of chosen) {
       productNumber++;
       rows.push(...productRows(overlay(item,job), productNumber));

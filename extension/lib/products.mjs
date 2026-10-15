@@ -20,7 +20,7 @@ export function candidateExcluded(job, candidate, task) {
 }
 export function removeProduct(job, id, task) {
   id = productId(id);
-  const index = job?.groups?.findIndex(group => productId(group.best?.id) === id) ?? -1;
+  const index = job?.groups?.findIndex(group => productId(group.best?.id) === id || group.members?.some(item => productId(item.id) === id)) ?? -1;
   if (index < 0) return false;
   if (task) {
     task.exclusions ||= [];
@@ -30,10 +30,23 @@ export function removeProduct(job, id, task) {
   for (const current of task?.jobs || [job]) {
     if (source(current) !== source(job)) continue;
     const before = current.groups.length;
-    current.groups = current.groups.filter(group => productId(group.best?.id) !== id);
+    let removed = false;
+    current.groups = current.groups.filter(group => {
+      if (Array.isArray(group.members)) {
+        const count = group.members.length;
+        group.members = group.members.filter(item => productId(item.id) !== id);
+        removed ||= count !== group.members.length;
+        group.ids = group.members.map(item => item.id);
+        if (productId(group.best?.id) === id) group.best = group.members[0];
+        return Boolean(group.best);
+      }
+      if (productId(group.best?.id) === id) { removed = true; return false; }
+      return true;
+    });
     current.exclusions ||= [];
     if (!current.exclusions.some(group => group.ids?.some(value => productId(value) === id))) current.exclusions.push({ ids: [id] });
-    if (before === current.groups.length) continue;
+    if (!removed && before === current.groups.length) continue;
+    if (current.imageDedup === true) current.merged = current.groups.reduce((total,group) => total + Math.max(0,(group.members?.length || 1)-1),0);
     current.refillRequested = true;
     current.detailDone = current.groups.filter(g => ['done', 'partial', 'error'].includes(g.best?.detailStatus)).length;
   }
@@ -41,7 +54,7 @@ export function removeProduct(job, id, task) {
 }
 export function prepareRefill(job) {
   if (!job.refillRequested) return false;
-  const preserveSearch = source(job) === 'pdd';
+  const preserveSearch = source(job) === 'pdd' || job.imageDedup === true;
   if (!preserveSearch) {
     job.scanned = 0; job.skipped = 0; job.lastSkip = '';
     job.merged = 0; job.excluded = 0; job.skipReasons = {};

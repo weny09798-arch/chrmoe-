@@ -70,6 +70,11 @@ function createJob(keyword, site = 'pdd', options = {}) {
   const limit = normalizeLimit(options.limit);
   return {
     keyword, site: site === '1688' || site === 'taobao' ? site : 'pdd',
+    imageDedup: options.imageDedup !== false,
+    taobaoDetailIntervalMs: Math.max(10000, Number(options.taobaoDetailIntervalMs) || 10000),
+    sourceMode: options.sourceMode === 'current' ? 'current' : 'search',
+    sourceTabId: options.sourceTabId ?? null,
+    sourceProductId: options.sourceProductId ?? '',
     sourceOrigin: ['https://mobile.pinduoduo.com','https://mobile.yangkeduo.com'].includes(options.sourceOrigin) ? options.sourceOrigin : '',
     limit: limit || OUTPUT_LIMIT,
     priceMin: Number.isSafeInteger(options.priceMin) ? options.priceMin : null,
@@ -100,15 +105,23 @@ export function retryJob(task, index) {
   const previous = task?.jobs?.[index];
   if (!previous) throw new Error('找不到要重新搜索的商品名称');
   task.jobs[index] = createJob(previous.keyword, previous.site || 'pdd', {
-    limit: previous.limit, priceMin: previous.priceMin, priceMax: previous.priceMax, sourceOrigin: previous.sourceOrigin
+    limit: previous.limit, priceMin: previous.priceMin, priceMax: previous.priceMax, sourceOrigin: previous.sourceOrigin,
+    imageDedup: previous.imageDedup === true, taobaoDetailIntervalMs: previous.taobaoDetailIntervalMs, sourceMode: previous.sourceMode, sourceTabId: previous.sourceTabId, sourceProductId:previous.sourceProductId
   });
   task.jobs[index].exclusions = previous.exclusions || [];
-  task.jobs[index].restartSearch = true;
+  task.jobs[index].restartSearch = previous.sourceMode !== 'current';
   if (['done', 'error', 'stopped'].includes(task.status)) task.status = 'pending';
   return task.jobs[index];
 }
 
-export function selected(job) { return job.groups.slice(0, outputLimit(job)).map(group => group.best); }
+export function selected(job) {
+  return job.groups.filter((group,index) => index < outputLimit(job) || group.best?.dedupRestored).map(group => group.best);
+}
+export function exportSelected(job) {
+  const valid = item => item && validProductTitle(item.title, job.sourceMode === 'current' ? item.title : job.keyword);
+  if (job.imageDedup === true || job.sourceMode === 'current') return selected(job).filter(valid);
+  return (job.groups || []).map(group => group.best).filter(valid).slice(0,outputLimit(job));
+}
 
 const hasValues = value => Array.isArray(value) && value.length > 0;
 export function hasDetailData(item) {
@@ -125,11 +138,16 @@ export function countDetails(job) { return selected(job).filter(detailFinished).
 export function addCandidate(job, candidate, task) {
   if (!candidate.id || !Number.isSafeInteger(candidate.cents) || candidate.cents <= 0) return false;
   if (candidateExcluded(job, candidate, task)) return false;
-  const group = job.groups.find(g => String(g.best.id).trim() === String(candidate.id).trim());
+  const group = job.groups.find(g => String(g.best.id).trim() === String(candidate.id).trim() || g.members?.some(item => String(item.id).trim() === String(candidate.id).trim()));
   if (!group) {
-    job.groups.push({ ids: [candidate.id], best: candidate });
+    candidate.originalListImage ??= candidate.image || '';
+    job.groups.push({ ids: [candidate.id], best: candidate, ...(job.imageDedup === true ? {members:[candidate]} : {}) });
   } else {
-    if (!group.retained && candidate.cents < group.best.cents) group.best = candidate;
+    if (String(group.best.id) === String(candidate.id) && !group.retained && candidate.cents < group.best.cents) {
+      candidate.originalListImage = group.best.originalListImage ?? candidate.image ?? '';
+      group.best = candidate;
+      if (group.members) group.members = group.members.map(item => String(item.id) === String(candidate.id) ? candidate : item);
+    }
   }
   return true;
 }
@@ -139,6 +157,9 @@ export function recoverTask(task) {
   task.exclusions ||= [];
   // Upgrade old keyword-only deletion records before checking any job.
   for (const job of task.jobs) {
+    job.imageDedup ??= false;
+    job.sourceMode ||= 'search';
+    job.taobaoDetailIntervalMs = Math.max(10000,Number(job.taobaoDetailIntervalMs) || 10000);
     const site = job.site || 'pdd';
     const ids = (job.exclusions || []).flatMap(group => group.ids || []).map(id => String(id ?? '').trim()).filter(Boolean);
     if (!ids.length) continue;
@@ -147,10 +168,20 @@ export function recoverTask(task) {
     record.ids = [...new Set([...(record.ids || []).map(id => String(id).trim()), ...ids])];
   }
   task.permissionOrigin = '';
+  if (task.status === 'blocked') task.wasBlocked = true;
   if (['running', 'pending', 'blocked'].includes(task.status)) task.status = 'paused';
   for (const job of task.jobs) {
+    if (job.status === 'blocked') job.wasBlocked = true;
     const before = job.groups.length;
-    job.groups = job.groups.filter(group => !candidateExcluded(job, group.best || {}, task));
+    job.groups = job.groups.filter(group => {
+      if (job.imageDedup === true && Array.isArray(group.members)) {
+        group.members = group.members.filter(item => !candidateExcluded(job,item,task)).map(item => String(item.id) === String(group.best?.id) ? group.best : item);
+        if (candidateExcluded(job,group.best || {},task)) group.best = group.members[0];
+        group.ids = group.members.map(item => item.id);
+        return Boolean(group.best);
+      }
+      return !candidateExcluded(job, group.best || {}, task);
+    });
     if (job.groups.length < before) job.refillRequested = true;
     if (prepareRefill(job)) { job.status = 'paused'; task.status = 'paused'; }
     if (['running', 'blocked'].includes(job.status)) job.status = 'paused';

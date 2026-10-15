@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {enqueueKeyword,addCandidate,selected,recoverTask} from '../extension/lib/core.mjs';
+import {enqueueKeyword as enqueueBaseKeyword,addCandidate,selected,recoverTask} from '../extension/lib/core.mjs';
 import {removeProduct,prepareRefill} from '../extension/lib/products.mjs';
 import {normalizeDetail} from '../extension/lib/detail.mjs';
-import {Runner} from '../extension/lib/runner.mjs';
+import {Runner as ActualRunner} from '../extension/lib/runner.mjs';
 import {taskSheets} from '../extension/lib/xlsx.mjs';
 import {searchPage} from './helpers/search-page.mjs';
+
+const enqueueKeyword=(task,keyword,site,options={})=>enqueueBaseKeyword(task,keyword,site,{...options,imageDedup:false});
+class Runner extends ActualRunner { constructor(task,ports) { let clock=1000; super(task,{...ports,now:()=>clock,wait:async ms=>{clock+=ms;await ports.wait?.(ms);}}); } }
 
 const fp={bits:'0000000000000000',color:[100,100,100],spread:50};
 const candidate=id=>({id,title:'相机',cents:1300,image:'https://img.alicdn.com/same.jpg',fingerprint:fp,url:`https://item.taobao.com/item.htm?id=${id}`});

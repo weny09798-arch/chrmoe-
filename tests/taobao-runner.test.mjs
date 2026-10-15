@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Runner} from '../extension/lib/runner.mjs';
-import {enqueueKeyword,selected} from '../extension/lib/core.mjs';
+import {Runner as ActualRunner} from '../extension/lib/runner.mjs';
+import {enqueueKeyword as enqueueBaseKeyword,selected} from '../extension/lib/core.mjs';
 import {removeProduct,prepareRefill} from '../extension/lib/products.mjs';
 import {taskSheets} from '../extension/lib/xlsx.mjs';
 import {taobaoPage,taobaoCard} from './helpers/taobao-page.mjs';
 import {fingerprint} from '../extension/lib/fingerprint.mjs';
+
+const enqueueKeyword=(task,keyword,site,options={})=>enqueueBaseKeyword(task,keyword,site,{...options,imageDedup:false});
+class Runner extends ActualRunner { constructor(task,ports) { let clock=1000; super(task,{...ports,now:()=>clock,wait:async ms=>{clock+=ms;await ports.wait?.(ms);}}); } }
 
 const sampleHash=id=>{
   const pixels=new Uint8ClampedArray(32*32*4);let seed=Number(id)+1;
@@ -37,8 +40,8 @@ test('systematic extraction failure stops after five post-retry failures rather 
   const task=enqueueKeyword(null,'相机','taobao',{limit:13});let attempts=0;
   const raw=id=>({id,key:id,title:'相机',image:'',priceText:'¥13',url:`https://item.taobao.com/item.htm?id=${id}`});
   const good={...raw('1'),image:'https://img.alicdn.com/item-1.jpg'};
-  await new Runner(task,{...pagePorts({}),read:async()=>({cards:[good,...Array.from({length:103},(_,i)=>({...raw(String(i+2)),priceText:''}))],end:false}),prepareCard:async c=>{if(!c.priceText)attempts++;return c;}}).run();
-  assert.equal(task.jobs[0].status,'error');assert.equal(attempts,5);assert.equal(task.jobs[0].scanned,6);
+  await new Runner(task,{...pagePorts({}),read:async()=>({cards:[good,...Array.from({length:103},(_,i)=>({...raw(String(i+2)),title:''}))],end:false}),prepareCard:async c=>{if(!c.title)attempts++;return c;}}).run();
+  assert.equal(task.jobs[0].status,'blocked');assert.equal(attempts,5);assert.equal(task.jobs[0].scanned,6);
   assert.deepEqual(selected(task.jobs[0]).map(x=>x.id),['1']);
   assert.match(task.jobs[0].note,/连续.*5.*识别/);
 });

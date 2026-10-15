@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as products from '../extension/lib/products.mjs';
-import { createTask, enqueueKeyword, addCandidate, retryJob, selected, recoverTask } from '../extension/lib/core.mjs';
+import { createTask as createBaseTask, enqueueKeyword, addCandidate, retryJob, selected, recoverTask } from '../extension/lib/core.mjs';
 import { taskSheets } from '../extension/lib/xlsx.mjs';
 import { Runner } from '../extension/lib/runner.mjs';
 
+const createTask = keywords => { const task=createBaseTask(keywords); task.jobs.forEach(job=>job.imageDedup=false); return task; };
 const fp = color => ({ bits: '0000000000000000', color: [color, 100, 100], spread: 50 });
 const item = (id, color = 100) => ({ id, title: '相机商品', cents: 1000,
   image: `https://img.pddpic.com/${id}.jpg`, url: `https://mobile.pinduoduo.com/goods.html?goods_id=${id}`, fingerprint: fp(color) });

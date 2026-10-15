@@ -1,4 +1,4 @@
-import { outputLimit, validProductTitle } from './core.mjs';
+import { exportSelected } from './core.mjs';
 
 export function normalizeImageLimits(imageKinds, values = {}) {
   const limits = {};
@@ -22,8 +22,7 @@ export function buildImageManifest(task, imageKinds = ['main','detail','sku'], i
   const selected = new Set(imageKinds);
   const entries = [];
   for (const job of task?.jobs || []) {
-    const products = (job.groups || []).map(group => group.best)
-      .filter(item => item && validProductTitle(item.title, job.keyword)).slice(0, outputLimit(job));
+    const products = exportSelected(job);
     for (const item of products) {
       const common = { platform: item.site || job.site || 'pdd', product_id: String(item.id ?? ''), title: String(item.title || ''), product_url: String(item.url || '') };
       const append = (kind, urls, sku = '') => urls.forEach((url, index) => {
