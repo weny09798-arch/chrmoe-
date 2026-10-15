@@ -457,18 +457,32 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
     if(!latest)throw new Error('待采集商品已离开列表，未使用旧快照');
     return latest;
   }
+  async function restoreSearch(job, position, cancelled = () => false) {
+    const check = () => { if (cancelled()) throw Object.assign(new Error('商品链接读取已取消'), {cancelled:true}); };
+    check();
+    await chrome.tabs.update(tabId, {url:siteForJob(job).searchUrl(job.keyword,job.sourceOrigin)});
+    await cardPollWait(300); check(); await ready(); check();
+    let restored = await read(job); check();
+    if (restored.blocked) throw blocked(restored.reason);
+    for (let i=0;i<8&&!restored.cards.length;i++) {
+      await cardPollWait(500); check(); restored=await read(job); check();
+      if(restored.blocked)throw blocked(restored.reason);
+    }
+    await message({type:'PDD_SCROLL',position:Number.isFinite(position)?position:0}); check();
+  }
+  function clearHeldCard() {
+    delete task.resolveBlockedTabId; delete task.resolveBlockedCardKey; delete task.resolveBlockedKeyword;
+    delete task.resolveBlockedPosition; delete task.resolvePendingCard;
+  }
   async function resolve(card, page, job, cancelled = () => false) {
     currentJob = job;
     const site = siteForJob(job);
     const check = () => { if (cancelled()) throw Object.assign(new Error('商品链接读取已取消'), {cancelled:true}); };
     check();
-    if (site.productId(card.url || '')) return {...card,id:site.productId(card.url),navigated:false};
     const attemptKey = `${site.id}:${card.key}`;
-    if(task.resolvedCard?.key === card.key && task.resolvedCard.keyword === job.keyword && task.resolvedCard.site === site.id) {
-      const resolved=task.resolvedCard;delete task.resolvedCard;await save(task);check();return {...card,...resolved};
-    }
     if (Number.isInteger(task.resolveBlockedTabId)) {
       if(task.resolveBlockedCardKey && task.resolveBlockedCardKey !== card.key) throw blocked('请先处理之前受限的商品卡片');
+      if(task.resolveBlockedKeyword && task.resolveBlockedKeyword !== job.keyword) throw blocked('请先处理之前受限的搜索任务');
       const heldId = task.resolveBlockedTabId;
       const held = await chrome.tabs.get(heldId).catch(() => null);
       check();
@@ -479,15 +493,21 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
         check();
         const found = site.productId(held.url || '');
         if (found) {
-          if(heldId!==tabId){delete task.resolveBlockedTabId;delete task.resolveBlockedCardKey;delete task.resolveBlockedKeyword;await save(task);check();}
+          if(heldId===tabId)await restoreSearch(job,task.resolveBlockedPosition ?? page.position,cancelled);
+          clearHeldCard(); await save(task); check();
           return {...card,id:found,url:site.productUrl(found,held.url),detailSourceUrl:held.url,navigated:heldId===tabId};
         }
       }
       throw blocked('保留页面尚未返回有效商品');
     }
+    if(task.resolvedCard?.key === card.key && task.resolvedCard.keyword === job.keyword && task.resolvedCard.site === site.id) {
+      const resolved=task.resolvedCard;delete task.resolvedCard;await save(task);check();return {...card,...resolved};
+    }
+    if (site.productId(card.url || '')) return {...card,id:site.productId(card.url),navigated:false};
     task.resolveAttempts ||= {};
     if (task.resolveAttempts[attemptKey]) throw blocked('该商品卡片已经尝试打开，请手动处理后继续');
     task.resolveAttempts[attemptKey] = true;
+    task.resolvePendingCard = {...card}; task.resolveBlockedPosition = page.position;
     await save(task);
     check();
     // Some result cards have only a click handler. Read the resulting detail URL.
@@ -566,7 +586,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
         tab = await chrome.tabs.create({ url: target, active: false });
         tabId = tab.id; task.tabId = tabId;
       } else if (job.restartSearch || !site.isSearch(tab.url || '', job.keyword)) {
-        if ((task.status === 'blocked' || job.status === 'blocked' || Number.isInteger(task.resolveBlockedTabId)) && !job.restartSearch) {
+        if ((task.wasBlocked || job.wasBlocked || task.status === 'blocked' || job.status === 'blocked' || Number.isInteger(task.resolveBlockedTabId)) && !job.restartSearch) {
           const held = task.resolveBlockedTabId || tabId;
           const heldTab = await chrome.tabs.get(held).catch(() => null);
           if (heldTab) {
@@ -575,9 +595,9 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
             if (snapshot?.blocked) throw blocked(snapshot.reason || '请先处理保留页面');
             const resolvedId=site.productId(heldTab.url || '');
             if(resolvedId && task.resolveBlockedCardKey && task.resolveBlockedKeyword===job.keyword) {
-              task.resolvedCard={key:task.resolveBlockedCardKey,keyword:job.keyword,site:site.id,id:resolvedId,url:site.productUrl(resolvedId,heldTab.url),detailSourceUrl:heldTab.url,navigated:held===tabId};
-              delete task.resolveBlockedTabId;delete task.resolveBlockedCardKey;delete task.resolveBlockedKeyword;
-              if(held===tabId)await chrome.tabs.update(tabId,{url:target});
+              task.resolvedCard={...task.resolvePendingCard,key:task.resolveBlockedCardKey,keyword:job.keyword,site:site.id,id:resolvedId,url:site.productUrl(resolvedId,heldTab.url),detailSourceUrl:heldTab.url,navigated:held===tabId};
+              if(held===tabId)await restoreSearch(job,task.resolveBlockedPosition);
+              clearHeldCard();
               await save(task);return;
             }
           }

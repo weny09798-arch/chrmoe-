@@ -151,7 +151,8 @@ test('current borrows the item tab without navigating or closing and checks iden
 });
 
 test('resolve resumes retained verified product without clicking again',async()=>{
- const old=globalThis.chrome;const task={tabId:9,status:'blocked',resolveBlockedTabId:9,resolveAttempts:{'taobao:c':true}};
- globalThis.chrome={tabs:{get:async()=>({id:9,status:'complete',url:'https://detail.tmall.com/item.htm?id=123'}),sendMessage:async()=>({blocked:false}),remove:async()=>{throw Error('must retain');}},scripting:{executeScript:async()=>[]}};
- try{const ports=browserPorts({save:async()=>{},update(){}});await ports.open({site:'taobao',keyword:'相机'},task).catch(()=>{});const result=await ports.resolve({key:'c'},{position:0},{site:'taobao',keyword:'相机'});assert.equal(result.id,'123');}finally{globalThis.chrome=old;}
+ const old=globalThis.chrome;const task={tabId:9,status:'blocked',resolveBlockedTabId:9,resolveBlockedCardKey:'c',resolveBlockedKeyword:'相机',resolvePendingCard:{key:'c',title:'相机',priceText:'¥13'},resolveAttempts:{'taobao:c':true}};
+ let url='https://detail.tmall.com/item.htm?id=123';let position;
+ globalThis.chrome={tabs:{get:async()=>({id:9,status:'complete',url}),update:async(_id,change)=>{url=change.url;},sendMessage:async(_id,message)=>{if(message.type==='PDD_SCROLL')position=message.position;return {url,cards:[{key:'c'}],blocked:false};},remove:async()=>{throw Error('must retain');}},scripting:{executeScript:async()=>[]}};
+ try{const ports=browserPorts({save:async()=>{},update(){},cardPollWait:async()=>{}});await ports.open({site:'taobao',keyword:'相机'},task);const result=await ports.resolve({key:'c'},{position:0},{site:'taobao',keyword:'相机'});assert.equal(result.id,'123');assert.equal(new URL(url).hostname,'s.taobao.com');assert.equal(position,0);assert.equal(task.resolveBlockedTabId,undefined);}finally{globalThis.chrome=old;}
 });
