@@ -28,6 +28,24 @@ test('resumed same-tab card restores list and position then clears held state',a
   } finally {globalThis.chrome=previous;}
 });
 
+test('verification during search restoration resumes confirmed original without a second click',async()=>{
+  const previous=globalThis.chrome,task=createTask(['相机']);task.tabId=42;
+  let url=searchUrl('相机'),verify=false;const positions=[];
+  globalThis.chrome={tabs:{get:async()=>({id:42,status:'complete',url}),update:async(_id,value)=>{url=value.url;verify=true;},sendMessage:async(_id,message)=>{if(message.type==='PDD_SCROLL')positions.push(message.position);return {url,cards:[{key:'original'}],blocked:verify,reason:verify?'安全验证':''};}},scripting:{executeScript:async()=>[]}};
+  try {
+    const ports=browserPorts({save:async()=>{},update(){},cardPollWait:async()=>{}});await ports.open(task.jobs[0],task);
+    url='https://mobile.pinduoduo.com/goods.html?goods_id=123';
+    task.resolveBlockedTabId=42;task.resolveBlockedCardKey='original';task.resolveBlockedKeyword='相机';
+    await assert.rejects(()=>ports.resolve({key:'original',title:'相机',priceText:'¥13'},{position:720},task.jobs[0]),error=>error.blocked);
+    verify=false;
+    await ports.open(task.jobs[0],task);
+    const found=await ports.resolve({key:'original'},{position:720},task.jobs[0]);
+    assert.equal(found.id,'123');assert.equal(found.title,'相机');assert.equal(found.priceText,'¥13');
+    assert.deepEqual(positions,[720]);assert.equal(task.resolveBlockedTabId,undefined);
+    assert.equal((await ports.read(task.jobs[0])).blocked,false);
+  } finally {globalThis.chrome=previous;}
+});
+
 test('an explicit manual restart reloads the same search page', async () => {
   const previous = globalThis.chrome; const task = createTask(['相机']); const job = task.jobs[0];
   task.tabId = 42; job.restartSearch = true; const navigations = [];

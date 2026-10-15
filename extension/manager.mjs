@@ -213,6 +213,14 @@ function renderLinks() {
     remove.addEventListener('click', () => {
       if (lockedOut || clearing || !task?.jobs.includes(job) || !removeProduct(job, item.id, task)) return;
       void conversion.removeProduct(task.id, item.site || job.site || 'pdd', item.id);
+      if (job.sourceMode === 'current') {
+        job.refillRequested = false;
+        if (busy) runner?.pause();
+        renderTask(); renderLinks();
+        notice('已删除手动采集商品，不会自动重新采集。');
+        void saveTask(task).catch(error => notice(`删除保存失败：${error.message}`,'error'));
+        return;
+      }
       const mayRestart = busy ? Boolean(runner && (!runner.intent || refillAuto)) : !['paused', 'blocked', 'stopped'].includes(task.status);
       refillAuto ||= mayRestart;
       refillWaiting = true;
@@ -223,7 +231,7 @@ function renderLinks() {
       refillScheduler.schedule();
     });
     action.append(remove);
-    if (['partial','error'].includes(item.detailStatus)) {
+    if (!item.detailStatus || ['pending','partial','error'].includes(item.detailStatus)) {
       const retry = element('button', '补采未完成详情', 'text-button');
       retry.type = 'button'; retry.dataset.retryDetail = item.id; retry.disabled = busy || lockedOut || clearing;
       retry.addEventListener('click', async () => {

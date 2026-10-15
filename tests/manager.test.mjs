@@ -88,6 +88,34 @@ test('duplicate preview restores a member beyond target without swapping represe
   assert.match(f.document.getElementById('notice').textContent,/超过|超出/);
 });
 
+test('a restored duplicate that never had details exposes manual detail collection',async()=>{
+  const f=await managerFixture(task=>{
+    const first={id:'1',title:'相机一',cents:1300,image:'https://img.pddpic.com/a.jpg',url:'https://mobile.pinduoduo.com/goods.html?goods_id=1',detailStatus:'done'};
+    const second={...first,id:'2',title:'相机二',detailStatus:undefined};
+    task.status='done';task.jobs[0].status='done';task.jobs[0].imageDedup=true;task.jobs[0].groups=[{best:first,members:[first,second]}];
+  });
+  f.document.getElementById('duplicates-panel').open=true;f.document.getElementById('duplicates-panel').dispatchEvent(new window.Event('toggle'));
+  f.document.querySelector('[data-restore-duplicate="2"]').dispatchEvent(new window.Event('click'));await tick();await tick();
+  f.document.getElementById('links-panel').open=true;f.document.getElementById('links-panel').dispatchEvent(new window.Event('toggle'));
+  assert.ok(f.document.querySelector('[data-retry-detail="2"]'));
+});
+
+test('deleting a manually captured product does not schedule automatic recapture',async()=>{
+  const originalTimer=globalThis.setTimeout;const scheduled=[];
+  try {
+    globalThis.setTimeout=(callback,delay)=>{scheduled.push({callback,delay});return scheduled.length;};
+    const f=await managerFixture(task=>{
+      task.status='done';const job=task.jobs[0];job.status='done';job.sourceMode='current';job.sourceTabId=71;job.phase='done';
+      job.groups=[{best:{id:'456',title:'相机',cents:100,detailStatus:'done',url:'https://item.taobao.com/item.htm?id=456'}}];
+    });
+    f.document.getElementById('links-panel').open=true;f.document.getElementById('links-panel').dispatchEvent(new window.Event('toggle'));
+    f.document.querySelector('[data-remove-product="456"]').dispatchEvent(new window.Event('click'));await tick();
+    assert.equal(f.saved.task.jobs[0].groups.length,0);
+    assert.equal(f.saved.task.jobs[0].refillRequested,false);
+    assert.equal(scheduled.length,0);
+  } finally {globalThis.setTimeout=originalTimer;}
+});
+
 test('manager saves published mapping through task writer and preserves it after converter reconnect',async()=>{
   const oldFetch=globalThis.fetch,oldSession=globalThis.sessionStorage,oldTimer=globalThis.setTimeout;
   const session=new Map(),original='https://img.pddpic.com/a.jpg',published='https://bucket.oss-cn-shanghai.aliyuncs.com/a.png';

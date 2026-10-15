@@ -473,6 +473,15 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
   function clearHeldCard() {
     delete task.resolveBlockedTabId; delete task.resolveBlockedCardKey; delete task.resolveBlockedKeyword;
     delete task.resolveBlockedPosition; delete task.resolvePendingCard;
+    delete task.resolveRestorePending;
+  }
+  async function rememberSearchRestore(result,card,position,job,cancelled) {
+    task.resolvedCard = {...card,...result,key:card.key,keyword:job.keyword,site:siteForJob(job).id};
+    task.resolveBlockedTabId = tabId; task.resolveBlockedCardKey = card.key; task.resolveBlockedKeyword = job.keyword;
+    task.resolveBlockedPosition = position; task.resolvePendingCard = {...card}; task.resolveRestorePending = true;
+    await save(task);
+    await restoreSearch(job,position,cancelled);
+    clearHeldCard(); delete task.resolvedCard; await save(task);
   }
   async function resolve(card, page, job, cancelled = () => false) {
     currentJob = job;
@@ -493,7 +502,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
         check();
         const found = site.productId(held.url || '');
         if (found) {
-          if(heldId===tabId)await restoreSearch(job,task.resolveBlockedPosition ?? page.position,cancelled);
+          if(heldId===tabId)await rememberSearchRestore({id:found,url:site.productUrl(found,held.url),detailSourceUrl:held.url,navigated:true},card,task.resolveBlockedPosition ?? page.position,job,cancelled);
           clearHeldCard(); await save(task); check();
           return {...card,id:found,url:site.productUrl(found,held.url),detailSourceUrl:held.url,navigated:heldId===tabId};
         }
@@ -551,14 +560,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
       }
       check();
       if (sameTab) {
-        // Browser history can return to the Pinduoduo home page after a SPA card click.
-        await chrome.tabs.update(tabId, { url: site.searchUrl(job.keyword, job.sourceOrigin) });
-        await wait(300); await ready();
-        let restored = await read(job);
-        for (let i = 0; i < 8 && !restored.cards.length; i++) { await wait(500); restored = await read(job); }
-        check();
-        await message({ type: 'PDD_SCROLL', position: page.position });
-        await wait(500);
+        await rememberSearchRestore({id,url:site.productUrl(id,sourceUrl),detailSourceUrl:sourceUrl,navigated:true},card,page.position,job,cancelled);
       }
       return { ...card, id, url: site.productUrl(id, sourceUrl || card.url || job.sourceOrigin),
         ...(site.detailUrl ? { detailSourceUrl: site.detailUrl(id, sourceUrl) } : {}), navigated: sameTab };
@@ -582,6 +584,15 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
       const site = siteForJob(job);
       const target = site.searchUrl(job.keyword, job.sourceOrigin);
       let tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
+      if (tab && task.resolveRestorePending && task.resolvedCard?.keyword===job.keyword && task.resolvedCard.site===site.id) {
+        await chrome.scripting.executeScript({target:{tabId},files:[site.contentScript]});
+        const state=await chrome.tabs.sendMessage(tabId,{type:'PDD_SNAPSHOT'});
+        if(state?.blocked)throw blocked(state.reason || '请处理保留页面');
+        if(site.isSearch(tab.url || '',job.keyword)) await message({type:'PDD_SCROLL',position:task.resolveBlockedPosition || 0});
+        else if(site.productId(tab.url || '')===task.resolvedCard.id) await restoreSearch(job,task.resolveBlockedPosition);
+        else throw blocked('请恢复原搜索结果后继续，已确认的商品链接仍保留');
+        clearHeldCard(); await save(task); return;
+      }
       if (!tab) {
         tab = await chrome.tabs.create({ url: target, active: false });
         tabId = tab.id; task.tabId = tabId;
@@ -596,7 +607,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
             const resolvedId=site.productId(heldTab.url || '');
             if(resolvedId && task.resolveBlockedCardKey && task.resolveBlockedKeyword===job.keyword) {
               task.resolvedCard={...task.resolvePendingCard,key:task.resolveBlockedCardKey,keyword:job.keyword,site:site.id,id:resolvedId,url:site.productUrl(resolvedId,heldTab.url),detailSourceUrl:heldTab.url,navigated:held===tabId};
-              if(held===tabId)await restoreSearch(job,task.resolveBlockedPosition);
+              if(held===tabId){task.resolveRestorePending=true;await save(task);await restoreSearch(job,task.resolveBlockedPosition);}
               clearHeldCard();
               await save(task);return;
             }
