@@ -216,3 +216,12 @@ test('nested recommendation attributes inside the current parameter container ar
   const result=await snapshot(`<h1>相机包</h1><section class="Attributes"><span>材质：棉</span><section class="Recommendations"><span>产地：错误推荐产地</span></section><section data-item-id="999"><span>重量：推荐商品重量</span></section></section>`);
   assert.deepEqual(Array.from(result.detail.attributes,a=>[a.name,a.value]),[['材质','棉']]);
 });
+
+test('access exception region blocks detail without mistaking ordinary product description',async()=>{
+ assert.equal((await snapshot('<div role="alert">访问异常提示：恢复正常访问方式</div>')).blocked,true);
+ assert.equal((await snapshot('<h1>访问异常提示印字贴纸</h1><div class="description">说明恢复正常访问方式的教程</div>')).blocked,false);
+});
+
+test('stable loaded description stops scrolling on repeated snapshots',async()=>{
+ let scrolls=0;await snapshot('<h1>商品</h1><section id="description"><h2>图文详情</h2><img src="//img.alicdn.com/long.jpg"></section>',null,undefined,(window,document)=>{window.scrollY=0;window.scrollTo=(_x,y)=>{scrolls++;window.scrollY=y;};document.querySelector('h2').getBoundingClientRect=()=>({top:1000-window.scrollY,height:50,width:300});return {passes:30};});assert.ok(scrolls<15);
+});

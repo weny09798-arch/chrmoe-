@@ -12,7 +12,7 @@ async function fixture(extra = '') {
   window.Element.prototype.getBoundingClientRect = () => ({width:250,height:350,top:10,bottom:360});
   document.documentElement.scrollTop = 720;
   let handler, clicks = 0;
-  window.Element.prototype.click = () => clicks++;
+  for(const element of document.querySelectorAll('div,a'))element.click = () => clicks++;
   const context = vm.createContext({window,document,URL,location:{href:url,pathname:'/search_result.html'},getComputedStyle:()=>({display:'block',visibility:'visible',overflowY:'visible'}),chrome:{runtime:{onMessage:{addListener:fn=>handler=fn}}}});
   vm.runInContext(await readFile(new URL('../extension/content.js',import.meta.url),'utf8'),context);
   const pageContext = vm.createContext({URL,location:{href:url},rawData:{store:{goodsList:[{goodsID:'123',goodsName:'数码相机',thumbUrl:'https://img.pddpic.com/a.jpg'}]}}});
@@ -39,8 +39,9 @@ test('browser reads already-loaded search data and content resolves a unique car
     assert.deepEqual(page.calls,['PDD_SNAPSHOT','MAIN','PDD_SNAPSHOT']);
     await ports.open(task.jobs[0],task);
     assert.equal(page.document.documentElement.scrollTop,720);
-    const refused=await page.chrome.tabs.sendMessage(42,{type:'PDD_OPEN_CARD',key:'123'});
-    assert.match(refused.error,/不再/);assert.equal(page.clicks(),0);
+    const opened=await page.chrome.tabs.sendMessage(42,{type:'PDD_OPEN_CARD',key:result.cards[0].key});
+    assert.equal(opened.ok,true);assert.equal(page.clicks(),1);
+    await page.chrome.tabs.sendMessage(42,{type:'PDD_OPEN_CARD',key:result.cards[0].key});assert.equal(page.clicks(),1);
   } finally {globalThis.chrome=prior;}
 });
 

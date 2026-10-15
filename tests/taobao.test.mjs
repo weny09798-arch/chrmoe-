@@ -192,3 +192,12 @@ test('buyer count never conceals an additional non-original price in the same re
     assert.equal((await f.send({type:'PDD_SNAPSHOT'})).cards[0].priceText,'');
   }
 });
+
+test('visible access exception blocks search while hidden exception does not',async()=>{
+ const f=await page('<div>当前访问存在异常</div>'+card('123'));
+ assert.equal((await f.send({type:'PDD_SNAPSHOT'})).blocked,true);
+ const h=await page('<div hidden>当前访问存在异常</div>'+card('123'));
+ assert.equal((await h.send({type:'PDD_SNAPSHOT'})).blocked,false);
+});
+
+test('system access warning in a visible paragraph blocks search',async()=>{const f=await page('<p>系统检测到当前访问存在异常，请恢复正常访问方式</p>'+card('123'));assert.equal((await f.send({type:'PDD_SNAPSHOT'})).blocked,true);});

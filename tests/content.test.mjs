@@ -101,3 +101,7 @@ test('does not accept a title with no meaningful character shared with the searc
   const data=await snapshot('<a href="goods.html?goods_id=123"><img src="https://img.pddpic.com/a.jpg"><h3>蓝牙音箱</h3><span>¥29.88</span></a>','苹果手机壳');
   assert.equal(data.cards[0].title,'');
 });
+
+test('PDD card uses real title attribute when child text is missing',async()=>{
+ const data=await snapshot('<div title="数码相机保护包"><img src="https://img.pddpic.com/a.jpg"><span>¥32</span></div>');assert.equal(data.cards[0].title,'数码相机保护包');
+});

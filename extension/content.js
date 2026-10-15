@@ -86,6 +86,8 @@
   function titleFor(card, img) {
     const explicit = card.querySelector('h1,h2,h3,h4,[data-goods-name]');
     const candidates = [
+      card.getAttribute('data-goods-name'),card.getAttribute('title'),card.getAttribute('aria-label'),
+      ...(explicit ? [explicit.getAttribute('data-goods-name'),explicit.getAttribute('title')] : []),
       ...(explicit ? [ownText(explicit), ...[...explicit.querySelectorAll('span,div,p')].filter(el => !el.children.length).map(text)] : []),
       ...[...card.querySelectorAll('span,div,p')].filter(el => !el.children.length).map(text),
       ...[...card.querySelectorAll('span,div,p')].filter(el => visible(el) && !el.querySelector('div,p,h1,h2,h3,h4')).map(text),
@@ -148,7 +150,9 @@
     const ids = [...new Set(matches.map(item => item.id))];
     return ids.length === 1 ? ids[0] : '';
   }
+  let lastSearchData; const openedCards=new WeakSet();
   function snapshot(searchData) {
+    if(searchData)lastSearchData=searchData;
     const seen = new Set();
     const cards = cardsWithElements().map(({ card }) => {
       const id = loadedId(card, searchData);
@@ -173,7 +177,14 @@
         else root.scrollTop += Math.max(350, root.clientHeight * .8);
         respond({ ok: true });
       } else if (message.type === 'PDD_OPEN_CARD') {
-        respond({ error: '拼多多搜索页不再通过点击商品获取链接' });
+        const state=snapshot(lastSearchData);
+        if(state.blocked){respond(state);return;}
+        const item=cardsWithElements().find(({card})=>card.key===message.key||loadedId(card,lastSearchData)===message.key);
+        if(!item){respond({error:'商品卡片已离开列表'});return;}
+        if(openedCards.has(item.el)){respond({error:'该商品卡片已尝试打开'});return;}
+        openedCards.add(item.el);
+        const target=item.el.querySelector('a[href]')||item.el;
+        target.click();respond({ok:true});
       }
     } catch (error) { respond({ error: error.message }); }
   });

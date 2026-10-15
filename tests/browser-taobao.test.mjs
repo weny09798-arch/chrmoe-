@@ -138,3 +138,20 @@ test('the real reader and polling retain later pictures in a heading-only descri
     assert.equal(result.detailStatus,'done');assert.ok(polls>=15&&polls<=40);assert.equal(result.descriptionText,'');
   }finally{globalThis.chrome=prior;}
 });
+
+test('current tab listing filters real Taobao item URLs',async()=>{
+ const old=globalThis.chrome;globalThis.chrome={tabs:{query:async()=>[{id:4,url:'https://detail.tmall.com/item.htm?id=123',title:'商品'},{id:5,url:'https://s.taobao.com/search?q=a'},{id:6,url:'https://evil.example/item.htm?id=12'}]}};
+ try{assert.deepEqual(await browserPorts({save:async()=>{},update(){}}).listCurrentTabs(),[{id:4,url:'https://detail.tmall.com/item.htm?id=123',title:'商品'}]);}finally{globalThis.chrome=old;}
+});
+
+test('current borrows the item tab without navigating or closing and checks identity',async()=>{
+ const old=globalThis.chrome;let reads=0;const task={};
+ globalThis.chrome={tabs:{get:async()=>({id:8,status:'complete',url:'https://detail.tmall.com/item.htm?id=123'}),sendMessage:async()=>{reads++;return {goodsId:'123',ready:true,detail:{title:'当前真实商品',attributes:[{name:'材质',value:'棉'}]}};},remove:async()=>{throw Error('borrowed tab closed');},update:async()=>{throw Error('borrowed tab navigated');}},scripting:{executeScript:async()=>[]}};
+ try{const result=await browserPorts({save:async()=>{},update(){}}).current(8,task);assert.equal(result.id,'123');assert.equal(result.site,'taobao');assert.equal(result.url,'https://detail.tmall.com/item.htm?id=123');assert.equal(reads,1);assert.equal(result.title,'当前真实商品');}finally{globalThis.chrome=old;}
+});
+
+test('resolve resumes retained verified product without clicking again',async()=>{
+ const old=globalThis.chrome;const task={tabId:9,status:'blocked',resolveBlockedTabId:9,resolveAttempts:{'taobao:c':true}};
+ globalThis.chrome={tabs:{get:async()=>({id:9,status:'complete',url:'https://detail.tmall.com/item.htm?id=123'}),sendMessage:async()=>({blocked:false}),remove:async()=>{throw Error('must retain');}},scripting:{executeScript:async()=>[]}};
+ try{const ports=browserPorts({save:async()=>{},update(){}});await ports.open({site:'taobao',keyword:'相机'},task).catch(()=>{});const result=await ports.resolve({key:'c'},{position:0},{site:'taobao',keyword:'相机'});assert.equal(result.id,'123');}finally{globalThis.chrome=old;}
+});

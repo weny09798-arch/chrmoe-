@@ -25,7 +25,7 @@ export async function closeTaskDetailTab(currentTask) {
   delete currentTask.detailTabId;
   delete currentTask.detailGoodsId;
   delete currentTask.detailSite;
-  if (id !== undefined) await chrome.tabs.remove(id).catch(() => {});
+  if (id !== undefined && !currentTask.detailBorrowed) await chrome.tabs.remove(id).catch(() => {});
 }
 
 function readLiveGoods() {
@@ -235,7 +235,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
       delete task.detailGoodsId;
       delete task.detailSite;
     }
-    if (id !== undefined) await chrome.tabs.remove(id).catch(() => {});
+    if (id !== undefined && !task?.detailBorrowed) await chrome.tabs.remove(id).catch(() => {});
     if (task) await save(task).catch(() => {});
   }
   function usableDetail(detail) {
@@ -291,6 +291,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
       if (!tab) {
         if (Number.isInteger(task?.detailTabId)) await closeDetail();
         checkCancelled();
+        if (task) delete task.detailBorrowed;
         tab = await chrome.tabs.create({ url: detailUrl, active: false });
         detailTabId = tab.id;
         if (task) {
@@ -456,22 +457,69 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
     if(!latest)throw new Error('待采集商品已离开列表，未使用旧快照');
     return latest;
   }
-  async function resolve(card, page, job) {
+  async function resolve(card, page, job, cancelled = () => false) {
     currentJob = job;
     const site = siteForJob(job);
-    // PDD never leaves the search list to discover a missing product ID.
-    if (site.id === 'pdd') return { ...card, id: card.id || '', url: card.url || '', navigated: false };
+    const check = () => { if (cancelled()) throw Object.assign(new Error('商品链接读取已取消'), {cancelled:true}); };
+    check();
+    if (site.productId(card.url || '')) return {...card,id:site.productId(card.url),navigated:false};
+    const attemptKey = `${site.id}:${card.key}`;
+    if(task.resolvedCard?.key === card.key && task.resolvedCard.keyword === job.keyword && task.resolvedCard.site === site.id) {
+      const resolved=task.resolvedCard;delete task.resolvedCard;await save(task);check();return {...card,...resolved};
+    }
+    if (Number.isInteger(task.resolveBlockedTabId)) {
+      if(task.resolveBlockedCardKey && task.resolveBlockedCardKey !== card.key) throw blocked('请先处理之前受限的商品卡片');
+      const heldId = task.resolveBlockedTabId;
+      const held = await chrome.tabs.get(heldId).catch(() => null);
+      check();
+      if (held) {
+        await chrome.scripting.executeScript({target:{tabId:heldId},files:[site.contentScript]});
+        const state = await chrome.tabs.sendMessage(heldId,{type:'PDD_SNAPSHOT'});
+        if (state?.blocked) throw blocked(state.reason || '请处理保留页面');
+        check();
+        const found = site.productId(held.url || '');
+        if (found) {
+          if(heldId!==tabId){delete task.resolveBlockedTabId;delete task.resolveBlockedCardKey;delete task.resolveBlockedKeyword;await save(task);check();}
+          return {...card,id:found,url:site.productUrl(found,held.url),detailSourceUrl:held.url,navigated:heldId===tabId};
+        }
+      }
+      throw blocked('保留页面尚未返回有效商品');
+    }
+    task.resolveAttempts ||= {};
+    if (task.resolveAttempts[attemptKey]) throw blocked('该商品卡片已经尝试打开，请手动处理后继续');
+    task.resolveAttempts[attemptKey] = true;
+    await save(task);
+    check();
     // Some result cards have only a click handler. Read the resulting detail URL.
     const children = new Set();
     const onCreated = tab => { if (tab.openerTabId === tabId) children.add(tab.id); };
     chrome.tabs.onCreated.addListener(onCreated);
     let id = '', sameTab = false, sourceUrl = '';
+    const preserved = new Set();
     try {
-      await message({ type: 'PDD_OPEN_CARD', key: card.key });
+      check();
+      const opened = await message({ type: 'PDD_OPEN_CARD', key: card.key });
+      if (opened.blocked) throw blocked(opened.reason || '商品卡片打开被阻断');
       for (let i = 0; i < 32 && !id; i++) {
-        await wait(250);
+        await cardPollWait(250);
+        check();
         for (const candidateTabId of [tabId, ...children]) {
           const tab = await chrome.tabs.get(candidateTabId).catch(() => null);
+          if (!tab) continue;
+          let state;
+          try {
+            await chrome.scripting.executeScript({target:{tabId:candidateTabId},files:[site.contentScript]});
+            state = await chrome.tabs.sendMessage(candidateTabId,{type:'PDD_SNAPSHOT'});
+          } catch { /* A navigating page is checked again on the next bounded poll. */ }
+          if (state?.blocked || /(?:captcha|verify|login|punish)/i.test(tab.url || '')) {
+            preserved.add(candidateTabId);
+            task.resolveBlockedTabId = candidateTabId;
+            task.resolveBlockedCardKey = card.key;
+            task.resolveBlockedKeyword = job.keyword;
+            await save(task);
+            throw blocked(state?.reason || '商品页面需要验证或登录');
+          }
+          check();
           const found = site.productId(tab?.url || '');
           if (found) { id = found; sourceUrl = tab.url; sameTab = candidateTabId === tabId; break; }
         }
@@ -481,20 +529,31 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
         if (current.blocked) throw blocked(current.reason);
         throw Object.assign(new Error('无法从商品卡片获取详情链接；已暂停以免误操作，请联系适配页面'), { blocked: true });
       }
+      check();
       if (sameTab) {
         // Browser history can return to the Pinduoduo home page after a SPA card click.
         await chrome.tabs.update(tabId, { url: site.searchUrl(job.keyword, job.sourceOrigin) });
         await wait(300); await ready();
         let restored = await read(job);
         for (let i = 0; i < 8 && !restored.cards.length; i++) { await wait(500); restored = await read(job); }
+        check();
         await message({ type: 'PDD_SCROLL', position: page.position });
         await wait(500);
       }
       return { ...card, id, url: site.productUrl(id, sourceUrl || card.url || job.sourceOrigin),
         ...(site.detailUrl ? { detailSourceUrl: site.detailUrl(id, sourceUrl) } : {}), navigated: sameTab };
+    } catch (error) {
+      if (!error.cancelled) {
+        const actual = task.resolveBlockedTabId ?? [...children].at(-1) ?? tabId;
+        preserved.add(actual);
+        task.resolveBlockedTabId = actual; task.resolveBlockedCardKey = card.key; task.resolveBlockedKeyword = job.keyword;
+        await save(task);
+        if (!error.blocked) throw blocked(error.message || '商品链接适配失败');
+      }
+      throw error;
     } finally {
       chrome.tabs.onCreated.removeListener(onCreated);
-      for (const child of children) await chrome.tabs.remove(child).catch(() => {});
+      for (const child of children) if (!preserved.has(child)) await chrome.tabs.remove(child).catch(() => {});
     }
   }
   return {
@@ -506,9 +565,51 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
       if (!tab) {
         tab = await chrome.tabs.create({ url: target, active: false });
         tabId = tab.id; task.tabId = tabId;
-      } else if (job.restartSearch || !site.isSearch(tab.url || '', job.keyword)) await chrome.tabs.update(tabId, { url: target });
+      } else if (job.restartSearch || !site.isSearch(tab.url || '', job.keyword)) {
+        if ((task.status === 'blocked' || job.status === 'blocked' || Number.isInteger(task.resolveBlockedTabId)) && !job.restartSearch) {
+          const held = task.resolveBlockedTabId || tabId;
+          const heldTab = await chrome.tabs.get(held).catch(() => null);
+          if (heldTab) {
+            await chrome.scripting.executeScript({target:{tabId:held},files:[site.contentScript]});
+            const snapshot = await chrome.tabs.sendMessage(held,{type:'PDD_SNAPSHOT'});
+            if (snapshot?.blocked) throw blocked(snapshot.reason || '请先处理保留页面');
+            const resolvedId=site.productId(heldTab.url || '');
+            if(resolvedId && task.resolveBlockedCardKey && task.resolveBlockedKeyword===job.keyword) {
+              task.resolvedCard={key:task.resolveBlockedCardKey,keyword:job.keyword,site:site.id,id:resolvedId,url:site.productUrl(resolvedId,heldTab.url),detailSourceUrl:heldTab.url,navigated:held===tabId};
+              delete task.resolveBlockedTabId;delete task.resolveBlockedCardKey;delete task.resolveBlockedKeyword;
+              if(held===tabId)await chrome.tabs.update(tabId,{url:target});
+              await save(task);return;
+            }
+          }
+          throw blocked('请返回搜索结果后继续，保留页未重新导航');
+        }
+        await chrome.tabs.update(tabId, { url: target });
+      }
       job.restartSearch = false;
       await save(task); await wait(900); await ready();
+    },
+    async listCurrentTabs() {
+      const tabs = await chrome.tabs.query({});
+      return tabs.filter(tab => Number.isInteger(tab.id) && siteById('taobao').productId(tab.url || ''))
+        .map(tab => ({id:tab.id,url:tab.url,title:tab.title || ''}));
+    },
+    async current(id, currentTask, cancelled = () => false) {
+      const check = () => { if(cancelled()) throw Object.assign(new Error('当前商品采集已取消'),{cancelled:true}); };
+      check();
+      const tab = await chrome.tabs.get(id);
+      check();
+      const site = siteById('taobao'), goodsId = site.productId(tab.url || '');
+      if (!goodsId) throw blocked('当前标签不是有效淘宝或天猫商品');
+      task = currentTask;
+      task.detailTabId = id; task.detailGoodsId = goodsId; task.detailSite = 'taobao'; task.detailBorrowed = true;
+      await save(task); check();
+      const item = {id:goodsId,site:'taobao',platform:site.label,url:site.productUrl(goodsId,tab.url)};
+      const detail = await enrich(item,task,cancelled);
+      check();
+      const latest = await chrome.tabs.get(id);
+      check();
+      if (site.productId(latest.url || '') !== goodsId) throw blocked('当前商品标签已切换，未保存旧商品');
+      return {...detail,...item};
     },
     read, prepareCard, resolve, enrich, close: closeDetail, wait, save, update,
     async scroll() { return message({ type: 'PDD_SCROLL' }); }

@@ -93,7 +93,7 @@
   function phrases() { return [...document.querySelectorAll('div,p,span,h1,h2,button')].filter(n=>!n.children.length&&shown(n)).map(text).filter(v=>v.length<150); }
   function reason(items) {
     const words=phrases();
-    return words.find(v=>/请完成.*验证|拖动滑块|安全验证|访问过于频繁|操作频繁|请验证身份|验证码|访问被拒绝/.test(v))
+    return words.find(v=>/请完成.*验证|拖动滑块|安全验证|访问过于频繁|操作频繁|请验证身份|验证码|访问被拒绝|^系统检测到当前访问存在异常|^(?:访问异常提示|当前访问存在异常|恢复正常访问方式)(?:[：:，,。！!\s]|$)/.test(v))
       || (/^login\.(taobao|tmall)\.com$/.test(location.hostname) || !items.length&&words.some(v=>/请登录|登录后查看|扫码登录|密码登录|手机号登录/.test(v))?'请在采集页登录淘宝':'');
   }
   const pagerSelector='[class*="pagination"],[class*="Pagination"],[class*="pager"],[class*="Pager"],[role="navigation"][aria-label*="分页"]';

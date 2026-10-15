@@ -150,7 +150,7 @@
     const choices=set.split(',').map(part=>{const bits=part.trim().split(/\s+/);return {url:image(bits[0]),size:parseFloat(bits[1])||0};}).filter(v=>v.url).sort((a,b)=>b.size-a.size);
     return image(lazy)||choices[0]?.url||image(n.currentSrc)||image(n.getAttribute('src'));
   }
-  let detailPasses=0,detailSignature='',detailStable=0,openedDetail=false;
+  let detailPasses=0,detailSignature='',detailStable=0,openedDetail=false,previousScrollPending=false;
   function descriptionArea(){
     const labels=[...document.querySelectorAll('h1,h2,h3,h4,button,a,span,div,[role="tab"]')].filter(n=>present(n)&&productNode(n)&&detailLabel(n));
     if(!openedDetail){
@@ -174,7 +174,7 @@
     for(const frame of frames)try{for(const n of frame.contentDocument?.querySelectorAll('img,p,span,div')||[])if(present(n)&&productNode(n))nodes.add(n);}catch{/* Cross-origin frames are read through declared description URLs. */}
     const active=Boolean(heading||sections.length||frames.length||labels.length);
     let scrollPending=false;
-    if(active){
+    if(active && !(detailPasses>=8 && !previousScrollPending && detailStable>=3 && detailSignature!=='[]')){
       detailPasses++;
       const anchor=heading||sections[0]||frames[0];
       try{if(anchor){
@@ -191,7 +191,8 @@
         const last=Number.isFinite(end)?Math.max(top,end-(window.innerHeight||700)):NaN;
         const target=Number.isFinite(last)?Math.min(top+(detailPasses-1)*700,last):top+(detailPasses-1)*700;
         scrollPending=Number.isFinite(last)&&target<last;
-        window.scrollTo(0,target);
+        previousScrollPending=scrollPending;
+        if(Math.abs((window.scrollY||0)-target)>1)window.scrollTo(0,target);
       }}catch{/* No layout in background samples. */}
     }
     return {active,scrollPending,nodes:[...nodes],frames};
@@ -199,7 +200,7 @@
   function snapshot(pageGoods){
     const goodsId=new URL(location.href).searchParams.get('id')||'';
     const phrases=[...document.querySelectorAll('div,p,span,h1,h2,button')].filter(n=>!n.children.length&&present(n)).map(words).filter(v=>v.length<150);
-    const reason=phrases.find(v=>/请完成.*验证|拖动滑块|安全验证|访问过于频繁|操作频繁|请验证身份|验证码|访问被拒绝/.test(v))
+    const reason=phrases.find(v=>/请完成.*验证|拖动滑块|安全验证|访问过于频繁|操作频繁|请验证身份|验证码|访问被拒绝|^系统检测到当前访问存在异常|^(?:访问异常提示|当前访问存在异常|恢复正常访问方式)(?:[：:，,。！!\s]|$)/.test(v))
       || (/^login\.(taobao|tmall)\.com$/.test(location.hostname)||phrases.some(v=>/^(?:扫码登录|密码登录|请登录后|登录后查看)/.test(v))?'请在采集页登录淘宝':'');
     if(reason)return {url:location.href,goodsId,blocked:true,reason,ready:false,detail:null};
     const area=descriptionArea();

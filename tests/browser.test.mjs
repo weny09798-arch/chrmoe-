@@ -54,7 +54,7 @@ test('manual navigation to a different search pauses rather than saving unrelate
     await assert.rejects(()=>ports.read(task.jobs[0]),error=>error.blocked&&/离开/.test(error.message));
   } finally {globalThis.chrome=prior;}
 });
-test('PDD missing-link resolution cannot click, navigate, refresh or change search position',async()=>{
+test('PDD missing-link fallback opens once and restores search position',async()=>{
   const prior=globalThis.chrome; const task=createTask(['苹果手机壳']);task.tabId=42;
   let pageUrl=searchUrl('苹果手机壳'), updates=0, clicks=0, scrolls=0;
   globalThis.chrome={
@@ -74,8 +74,8 @@ test('PDD missing-link resolution cannot click, navigate, refresh or change sear
   try {
     const ports=browserPorts({save:async()=>{},update:()=>{}});await ports.open(task.jobs[0],task);
     const result=await ports.resolve({key:'card-1'}, {position:0}, task.jobs[0]);
-    assert.equal(result.id,'');assert.equal(result.navigated,false);
-    assert.equal(pageUrl,searchUrl('苹果手机壳'));assert.equal(updates,0);assert.equal(clicks,0);assert.equal(scrolls,0);
+    assert.equal(result.id,'123');assert.equal(result.navigated,true);
+    assert.equal(pageUrl,searchUrl('苹果手机壳'));assert.equal(updates,1);assert.equal(clicks,1);assert.equal(scrolls,1);
   } finally {globalThis.chrome=prior;}
 });
 
