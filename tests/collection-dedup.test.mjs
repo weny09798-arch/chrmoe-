@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as core from '../extension/lib/core.mjs';
 const dedup = await import('../extension/lib/product-dedup.mjs').catch(() => ({}));
-import { removeProduct } from '../extension/lib/products.mjs';
+import { removeProduct, prepareRefill } from '../extension/lib/products.mjs';
 import { Runner } from '../extension/lib/runner.mjs';
 import { taskSheets } from '../extension/lib/xlsx.mjs';
 import { buildImageManifest } from '../extension/lib/image-conversion.mjs';
@@ -107,5 +107,21 @@ test('missing images keep independent result with visible pending dedup note unt
   assert.match(job.groups[0].best.imageDedupNote,/未读到主图/);assert.equal(job.imageDedupFailures,1);
   job.groups[0].best.galleryImages=['https://img.pddpic.com/detail.jpg'];
   await dedup.deduplicate(job,async()=>({sha256:'detail'}));assert.equal(job.groups[0].best.imageDedupNote,'');assert.equal(job.imageDedupFailures,0);
+});
+test('stopping only current capture preserves unrelated paused search and task resumability',async()=>{
+  const task=core.enqueueKeyword(null,'测试');task.jobs[0].status='paused';
+  core.enqueueKeyword(task,'当前','taobao',{sourceMode:'current',sourceTabId:7});const current=task.jobs[1];let runner;
+  runner=new Runner(task,ports([],{current:async()=>{runner.stop();return item('7');}}));
+  await runner.run(current);
+  assert.equal(task.jobs[0].status,'paused');assert.equal(current.status,'stopped');assert.equal(task.status,'paused');assert.equal(current.groups.length,0);
+});
+test('deleted current product never schedules refill and excluded capture cannot restore it',async()=>{
+  const task=core.enqueueKeyword(null,'当前','taobao',{sourceMode:'current',sourceTabId:7});const job=task.jobs[0];
+  const io=ports([],{current:async()=>({...item('7'),site:'taobao'})});
+  await new Runner(task,io).run(job);removeProduct(job,'7',task);
+  assert.equal(job.refillRequested,false);assert.equal(prepareRefill(job),false);assert.equal(job.status,'done');
+  job.refillRequested=true;assert.equal(prepareRefill(job),false);assert.equal(job.refillRequested,false);
+  job.status='pending';await new Runner(task,io).run(job);
+  assert.equal(job.groups.length,0);assert.equal(job.status,'done');assert.match(job.note,/排除|删除/);
 });
 

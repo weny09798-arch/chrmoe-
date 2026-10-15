@@ -47,12 +47,14 @@ export function removeProduct(job, id, task) {
     if (!current.exclusions.some(group => group.ids?.some(value => productId(value) === id))) current.exclusions.push({ ids: [id] });
     if (!removed && before === current.groups.length) continue;
     if (current.imageDedup === true) current.merged = current.groups.reduce((total,group) => total + Math.max(0,(group.members?.length || 1)-1),0);
-    current.refillRequested = true;
+    current.refillRequested = current.sourceMode !== 'current';
+    if (current.sourceMode === 'current') { current.phase = 'done'; current.status = 'done'; current.note = '当前商品已删除'; }
     current.detailDone = current.groups.filter(g => ['done', 'partial', 'error'].includes(g.best?.detailStatus)).length;
   }
   return true;
 }
 export function prepareRefill(job) {
+  if (job.sourceMode === 'current') { job.refillRequested = false; return false; }
   if (!job.refillRequested) return false;
   const preserveSearch = source(job) === 'pdd' || job.imageDedup === true;
   if (!preserveSearch) {

@@ -1,6 +1,6 @@
 import { addCandidate, countDetails, hasDetailData, outputLimit, parsePrice, priceAllowed, selected, validProductTitle, SCAN_LIMIT } from './core.mjs';
 import { siteForJob } from './sites.mjs';
-import { productImage } from './products.mjs';
+import { candidateExcluded, productImage } from './products.mjs';
 import { deduplicate } from './product-dedup.mjs';
 
 const finished = status => ['done', 'short', 'error', 'stopped'].includes(status);
@@ -61,8 +61,10 @@ export class Runner {
       if (this.intent) {
         this.task.status = this.intent;
         for (const job of this.task.jobs) {
+          if (onlyJob && job !== onlyJob) continue;
           if (!finished(job.status) && (job.status === 'running' || this.intent === 'stopped')) job.status = this.intent;
         }
+        if (onlyJob && this.task.jobs.some(job => job !== onlyJob && !finished(job.status))) this.task.status = 'paused';
       } else if (this.task.status !== 'blocked') this.task.status = this.task.jobs.some(j => !finished(j.status)) ? 'paused' : this.task.jobs.some(j => j.status === 'error') ? 'error' : 'done';
       await this.checkpoint();
     } finally {
@@ -78,6 +80,11 @@ export class Runner {
     if (cancelled()) return;
     if (!detail?.id || !detail.url || !validProductTitle(detail.title,detail.title)) throw new Error('当前页面未识别到真实商品及名称');
     if (job.sourceProductId && String(detail.id) !== String(job.sourceProductId)) throw Object.assign(new Error('当前商品标签已切换，请重新选择'),{blocked:true});
+    if (candidateExcluded(job,detail,this.task)) {
+      job.phase = 'done'; job.status = 'done'; job.searchStatus = 'done'; job.refillRequested = false;
+      job.note = '当前商品已删除并排除，未重新采集';
+      await this.checkpoint(); return;
+    }
     const item = {...detail,originalListImage:detail.image || '',collectedAt:new Date().toISOString()};
     item.detailStatus = detail.detailStatus === 'done' && hasDetailData(item) ? 'done' : 'partial';
     job.groups = [{ids:[item.id],best:item,members:[item]}];
