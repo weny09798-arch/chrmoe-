@@ -9,6 +9,36 @@ import * as XLSX from 'xlsx';
 const html = await readFile(new URL('../extension/manager.html', import.meta.url), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('new collection controls expose default image dedup and refuse too-short Taobao intervals',async()=>{
+  const f=await managerFixture();
+  const dedup=f.document.getElementById('image-dedup');
+  assert.ok(dedup,'image dedup switch must be available');
+  assert.equal(dedup.checked,true);
+  const interval=f.document.getElementById('taobao-detail-interval');
+  assert.equal(interval.value,'10');
+  f.document.getElementById('source-url').value='https://www.taobao.com/';
+  interval.value='2';
+  f.document.getElementById('keyword-input').value='新相机';
+  f.document.getElementById('add-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
+  await tick();
+  assert.equal(f.saved.task.jobs.length,1);
+  assert.match(f.document.getElementById('notice').textContent,/10.*秒/);
+});
+
+test('current product controls list only valid product tabs and never open a search when refreshing',async()=>{
+  const f=await managerFixture();
+  globalThis.chrome.tabs.query=async()=>[
+    {id:71,title:'淘宝相机包',url:'https://item.taobao.com/item.htm?id=123'},
+    {id:72,title:'搜索结果',url:'https://s.taobao.com/search?q=相机'},
+    {id:73,title:'天猫相机',url:'https://detail.tmall.com/item.htm?id=456'}
+  ];
+  assert.ok(f.document.getElementById('current-product-refresh'));
+  f.click('current-product-refresh');await tick();await tick();
+  const options=[...f.document.getElementById('current-product-tab').querySelectorAll('option')];
+  assert.deepEqual(options.map(option=>option.value),['71','73']);
+  assert.equal(f.tabCreates,0);
+});
+
 test('manager saves published mapping through task writer and preserves it after converter reconnect',async()=>{
   const oldFetch=globalThis.fetch,oldSession=globalThis.sessionStorage,oldTimer=globalThis.setTimeout;
   const session=new Map(),original='https://img.pddpic.com/a.jpg',published='https://bucket.oss-cn-shanghai.aliyuncs.com/a.png';

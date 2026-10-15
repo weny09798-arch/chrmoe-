@@ -17,8 +17,11 @@
           <label>最低价<input id="price-min" inputmode="decimal" placeholder="不限" autocomplete="off"></label>
           <label>最高价<input id="price-max" inputmode="decimal" placeholder="不限" autocomplete="off"></label>
         </div>
+        <p><label><input id="image-dedup" type="checkbox" checked> 主图去重（相同或高度相似，保留先采集商品）</label></p>
+        <label class="muted">淘宝商品访问间隔（秒，最少 10 秒）<input id="taobao-detail-interval" type="number" min="10" max="3600" step="1" value="10"></label>
         <p class="muted">数量默认 20，改成 10 就只收 10 个。价格留空按原来的规则；填写后只保留搜索页展示价落在这个区间里的商品。</p>
         <form id="add-form"><label class="sr-only" for="keyword-input">商品名称</label><div class="input-group"><input id="keyword-input" maxlength="100" placeholder="例如：CCD 数码相机" autocomplete="off" required><button class="button primary" id="add-button" type="submit">添加</button></div></form>
+        <details class="current-product-controls"><summary>采集当前淘宝／天猫商品</summary><p class="muted">手动打开商品后刷新列表，选择要采集的标签页。不会重新搜索，也不会关闭你打开的页面。</p><label for="current-product-tab">已打开商品</label><select id="current-product-tab"><option value="">请先刷新商品标签列表</option></select><p><button id="current-product-refresh" class="button subtle" type="button">刷新标签列表</button> <button id="collect-current-product" class="button" type="button" disabled>采集当前商品</button></p><p id="current-product-note" class="muted" role="status"></p></details>
         <p><button id="clear-all" class="button subtle" type="button" disabled>清空全部</button> <small class="muted">清除名称、搜索进度和结果</small></p>
         <ul id="keyword-list" aria-label="已保存的商品名称"></ul>
         <div id="keyword-empty" class="list-empty"><span class="list-mark">＋</span><p>先添加你的第一个商品</p><small>按 Enter 也可以添加</small></div>

@@ -17,6 +17,7 @@ const storage = installed ? chrome.storage.local : {
 let keywords = [], task = null, runner = null, busy = false, lockedOut = false, clearing = false, pendingResume = null, activeRun = null, exporting = false;
 let keywordWrites = Promise.resolve(), taskWrites = Promise.resolve();
 let refillAuto = false, refillWaiting = false;
+let currentProductTabs = [], refreshingTabs = false;
 const conversion = createConversionPanel({
   document, extensionId: globalThis.chrome?.runtime?.id,
   getCollection: () => ({ task, collecting: busy || refillWaiting || Boolean(activeRun), unavailable: lockedOut || clearing }),
@@ -104,6 +105,8 @@ function scanSummary(job) {
 }
 function renderTask() {
   const jobs = task?.jobs || [];
+  $('current-product-refresh').disabled = !installed || lockedOut || clearing || busy || refreshingTabs;
+  $('collect-current-product').disabled = !installed || lockedOut || clearing || busy || refreshingTabs || !currentProductTabs.length;
   const done = jobs.filter(j => ['done', 'short', 'error', 'stopped'].includes(j.status)).length;
   const totalLinks = jobs.reduce((sum, job) => sum + selected(job).length, 0);
   const percent = jobs.length ? Math.floor(done / jobs.length * 100) : 0;
@@ -207,12 +210,12 @@ function saveTask(current) {
 function canAutoRun() {
   return installed && !lockedOut && !clearing && !busy && !refillWaiting && task?.jobs.some(job => job.status === 'pending') && !['paused', 'blocked'].includes(task.status);
 }
-async function execute() {
+async function execute(onlyJob = null) {
   cancelRefill(); prepareRequestedRefills();
   busy = true;
   runner = new Runner(task, browserPorts({ save: saveTask, update: renderTask }));
   renderTask(); notice('');
-  const running = runner.run(); activeRun = running;
+  const running = runner.run(onlyJob); activeRun = running;
   try {
     await running;
     if (task.status === 'blocked') notice(task.jobs.find(j => j.status === 'blocked')?.note || '请处理页面后继续');
@@ -244,13 +247,19 @@ function collectSettings() {
     notice('最低价不能高于最高价。', 'error');
     return null;
   }
-  return { limit, priceMin, priceMax };
+  const interval = Number($('taobao-detail-interval').value);
+  if (!Number.isInteger(interval) || interval < 10 || interval > 3600) {
+    notice('淘宝访问间隔请填写 10～3600 秒之间的整数。', 'error');
+    return null;
+  }
+  return { limit, priceMin, priceMax, imageDedup: $('image-dedup').checked, taobaoDetailIntervalMs: interval * 1000 };
 }
 function persistCollectSettings() {
   void storage.set({
     targetCount: $('target-count').value.trim(),
     priceMin: $('price-min').value.trim(),
     priceMax: $('price-max').value.trim()
+    , imageDedup: $('image-dedup').checked, taobaoDetailInterval: $('taobao-detail-interval').value
   });
 }
 function currentSite() {
@@ -267,7 +276,36 @@ $('source-url').addEventListener('change', () => {
   notice(`接下来的商品名称会在${site.label}搜索。`, 'success');
   void storage.set({ sourceUrl: $('source-url').value.trim() });
 });
-for (const id of ['target-count', 'price-min', 'price-max']) $(id).addEventListener('change', persistCollectSettings);
+for (const id of ['target-count', 'price-min', 'price-max', 'image-dedup', 'taobao-detail-interval']) $(id).addEventListener('change', persistCollectSettings);
+$('current-product-refresh').addEventListener('click', async () => {
+  if (!installed || busy || clearing || lockedOut || refreshingTabs) return;
+  refreshingTabs = true; renderTask();
+  try {
+    currentProductTabs = await browserPorts({ save:saveTask, update:renderTask }).listCurrentTabs();
+    const options = currentProductTabs.map(tab => { const option = element('option', tab.title || tab.url); option.value = String(tab.id); return option; });
+    $('current-product-tab').replaceChildren(...options);
+    if (options.length) $('current-product-tab').value = options[0].value;
+    $('current-product-note').textContent = options.length ? `找到 ${options.length} 个商品标签页。` : '没有找到淘宝／天猫商品页，请先手动打开商品。';
+  } catch (error) { currentProductTabs = []; $('current-product-note').textContent = error.message; }
+  finally { refreshingTabs = false; renderTask(); }
+});
+$('collect-current-product').addEventListener('click', async () => {
+  if (!installed || busy || clearing || lockedOut || refreshingTabs) return;
+  const tab = currentProductTabs.find(tab => String(tab.id) === $('current-product-tab').value);
+  if (!tab) return;
+  const settings = collectSettings(); if (!settings) return;
+  const keyword = `当前商品 · ${tab.title || tab.id}`;
+  task = enqueueKeyword(task, keyword, 'taobao', { ...settings, limit:1, sourceMode:'current', sourceTabId:tab.id });
+  const job = task.jobs.at(-1); job.sourceMode = 'current'; job.sourceTabId = tab.id;
+  // Explicit manual capture runs only this job; the paused search queue stays paused.
+  job.manualOnly = true;
+  if (!keywords.includes(keyword)) keywords.push(keyword);
+  renderKeywords(); renderTask();
+  try {
+    await persistKeywords(); await saveTask(task);
+    if (!clearing) await execute(job);
+  } catch (error) { notice(`当前商品采集失败：${error.message}`, 'error'); }
+});
 $('add-form').addEventListener('submit', async event => {
   event.preventDefault(); if (lockedOut || clearing) return;
   const site = currentSite();
@@ -385,7 +423,9 @@ window.addEventListener('beforeunload', event => { if (busy) { event.preventDefa
 window.addEventListener('pagehide', () => conversion.dispose());
 
 async function initialize() {
-  const saved = await storage.get(['keywords', 'task', 'sourceUrl', 'targetCount', 'priceMin', 'priceMax']);
+  const saved = await storage.get(['keywords', 'task', 'sourceUrl', 'targetCount', 'priceMin', 'priceMax', 'imageDedup', 'taobaoDetailInterval']);
+  $('image-dedup').checked = saved.imageDedup !== false;
+  if (Number.isInteger(Number(saved.taobaoDetailInterval)) && Number(saved.taobaoDetailInterval) >= 10 && Number(saved.taobaoDetailInterval) <= 3600) $('taobao-detail-interval').value = String(saved.taobaoDetailInterval);
   keywords = Array.isArray(saved.keywords) ? saved.keywords.filter(k => typeof k === 'string' && k.trim()) : [];
   if (typeof saved.sourceUrl === 'string' && saved.sourceUrl.trim()) $('source-url').value = saved.sourceUrl;
   if (normalizeLimit(saved.targetCount)) $('target-count').value = String(normalizeLimit(saved.targetCount));
