@@ -8,6 +8,17 @@ import { createConversionPanel } from '../extension/conversion-ui.mjs';
 const html = await readFile(new URL('../extension/manager.html', import.meta.url), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('backend reconnect failure is visible on the separate settings page',async()=>{
+  const {document}=parseHTML(html);
+  const panel=createConversionPanel({document,extensionId:'test-extension',storage:null,getCollection:()=>({task:null}),ensureBackend:async()=>{throw Error('后台未安装，请运行安装后台组件。');},setTimer:()=>1,clearTimer:()=>{}});
+  await panel.recover(null);
+  const feedback=document.getElementById('backend-message');
+  assert.ok(feedback,'settings must have its own connection feedback');
+  assert.equal(feedback.closest('[data-workspace-view]').dataset.workspaceView,'settings');
+  assert.equal(feedback.hidden,false);assert.match(feedback.textContent,/后台未安装/);
+  panel.dispose();
+});
+
 test('cloud conversion starts without choosing a local folder and sends no local destination',async()=>{
   const f=fixture();await f.panel.controller.connect('http://localhost:53121/#token=secret');
   assert.equal(Boolean(f.document.getElementById('conversion-folder')),false);

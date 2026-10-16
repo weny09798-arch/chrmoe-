@@ -66,7 +66,7 @@ test('deleted configuration stays deleted despite a render with cached capabilit
 });
 test('invalid workspace is explained locally and cannot save a configuration',async()=>{
  const f=await fixture();await f.enable();f.el('key').value='fixture-not-real-key';f.el('workspace').value='https://outside.example';await f.click('save');
- assert.equal(f.requests.filter(r=>r.route==='settings/bailian'&&r.method==='POST').length,0);assert.match(f.el('message').textContent,/业务空间/);f.panel.dispose();
+ assert.equal(f.requests.filter(r=>r.route==='settings/bailian'&&r.method==='POST').length,0);assert.match(f.el('settings-message').textContent,/业务空间/);f.panel.dispose();
 });
 test('upload failure keeps PNG download and retry performs no extra model or render request',async()=>{
  const f=await fixture();await f.enable();await f.click('render');const generated=f.requests.filter(r=>r.route.endsWith('/generate')).length;

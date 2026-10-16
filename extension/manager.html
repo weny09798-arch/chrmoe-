@@ -1,120 +1,315 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>主图选品助手</title><link rel="icon" href="icons/icon48.png"><link rel="stylesheet" href="manager.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>商品采集 · 商品采集助手</title><link rel="icon" href="icons/icon48.png"><link rel="stylesheet" href="manager.css"></head>
 <body>
   <div class="app">
-    <header class="masthead"><div class="brand"><img src="icons/icon48.png" width="42" height="42" alt=""><div><h1>主图选品助手</h1><p>按商品 ID 收集，自动补全详情。</p></div></div><span class="local-tag"><span></span> 清单保存在本机</span></header>
-    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
-    <main class="layout">
-      <aside class="panel keywords-panel">
-        <div class="section-heading"><h2>商品清单</h2><span id="keyword-count" class="count">0 个</span></div>
+<aside class="app-sidebar" id="app-sidebar">
+<div class="sidebar-brand"><span class="brand-symbol" aria-hidden="true">◈</span>
+<div><strong>商品采集助手</strong><small>采集 · 转换 · 导出</small>
+</div>
+</div>
+<nav class="sidebar-navigation" aria-label="功能导航"><button id="navigation-group-toggle" type="button" class="navigation-group-toggle" aria-expanded="true" aria-controls="navigation-group"><span class="menu-grid" aria-hidden="true">▦</span><span>通用功能</span><span class="chevron" aria-hidden="true"></span></button>
+<div id="navigation-group"><button id="nav-collection" type="button" class="nav-item" data-view-target="collection" aria-controls="view-collection" aria-current="page"><span class="nav-icon" aria-hidden="true">⌕</span>商品采集</button><button id="nav-conversion" type="button" class="nav-item" data-view-target="conversion" aria-controls="view-conversion"><span class="nav-icon" aria-hidden="true">⇄</span>图片转换</button><button id="nav-selling" type="button" class="nav-item" data-view-target="selling" aria-controls="view-selling"><span class="nav-icon" aria-hidden="true">▧</span>商品卖点图</button><button id="nav-settings" type="button" class="nav-item" data-view-target="settings" aria-controls="view-settings"><span class="nav-icon" aria-hidden="true">⚙</span>服务设置</button>
+</div>
+</nav>
+<div class="sidebar-note"><span class="sidebar-note-dot"></span>
+<div>任务自动保存<small>切换功能页，任务继续运行</small>
+</div>
+</div>
+</aside><button tabindex="-1" aria-label="关闭导航菜单" class="navigation-backdrop" id="navigation-backdrop" type="button"></button>
+<div class="app-content">
+<header class="masthead">
+<div class="page-heading"><button id="sidebar-toggle" type="button" class="icon-button" aria-label="展开导航菜单" aria-expanded="false" aria-controls="app-sidebar">☰</button>
+<div>
+<h1 id="workspace-title" tabindex="-1">商品采集</h1>
+<p id="workspace-description">添加商品名称，采集商品与规格，导出 Excel</p>
+</div>
+</div>
+<div class="header-actions"><span id="manager-backend-status" class="connection-indicator" role="status" data-connected="false">正在连接后台</span>
+<div class="export-controls">
+<label class="sr-only" for="export-format">导出文件类型</label><select id="export-format" aria-label="导出文件类型"><option value="xlsx" selected>新版 .xlsx</option><option value="xls">模板同款 .xls</option></select><button id="export" class="button export" disabled>↓ 导出 Excel</button>
+</div>
+</div>
+</header>
+<div id="notice" class="notice" role="status" aria-live="polite" hidden>
+</div>
+<main class="page-content" id="main-workspace">
+<section aria-label="商品采集" data-workspace-view="collection" id="view-collection">
+<div class="collection-layout">
+<aside class="panel keywords-panel">
+        <div class="section-heading"><span class="section-icon" aria-hidden="true">＋</span>
+<h2>采集设置</h2><span id="keyword-count" class="count">0 个</span>
+</div>
         <p class="muted">一次添加一个名称，添加后立即搜索；后续名称自动排队。</p>
-        <label class="sr-only" for="source-url">采集网址</label>
-        <div class="input-group"><input id="source-url" value="https://mobile.pinduoduo.com/" placeholder="拼多多、1688 或 https://www.taobao.com/" autocomplete="off"></div>
+
+        <div class="input-group">
+<label class="field-label" for="source-url">采集平台网址</label><input id="source-url" value="https://mobile.pinduoduo.com/" placeholder="拼多多、1688 或 https://www.taobao.com/" autocomplete="off">
+</div>
         <p class="muted">填写拼多多、1688 或淘宝网址，会在对应平台搜索；淘宝结果中的天猫商品保留原链接。</p>
         <div class="collect-options">
-          <label>采集数量<input id="target-count" type="number" min="1" max="200" step="1" value="20" inputmode="numeric"></label>
-          <label>最低价<input id="price-min" inputmode="decimal" placeholder="不限" autocomplete="off"></label>
-          <label>最高价<input id="price-max" inputmode="decimal" placeholder="不限" autocomplete="off"></label>
+          <label>采集数量<input id="target-count" type="number" min="1" max="200" step="1" value="20" inputmode="numeric">
+</label>
+          <label>最低价<input id="price-min" inputmode="decimal" placeholder="不限" autocomplete="off">
+</label>
+          <label>最高价<input id="price-max" inputmode="decimal" placeholder="不限" autocomplete="off">
+</label>
         </div>
-        <p><label><input id="image-dedup" type="checkbox" checked> 主图去重（相同或高度相似，保留先采集商品）</label></p>
-        <label class="muted">淘宝商品访问间隔（秒，最少 10 秒）<input id="taobao-detail-interval" type="number" min="10" max="3600" step="1" value="10"></label>
-        <p class="muted">数量默认 20，改成 10 就只收 10 个。价格留空按原来的规则；填写后只保留搜索页展示价落在这个区间里的商品。</p>
-        <form id="add-form"><label class="sr-only" for="keyword-input">商品名称</label><div class="input-group"><input id="keyword-input" maxlength="100" placeholder="例如：CCD 数码相机" autocomplete="off" required><button class="button primary" id="add-button" type="submit">添加</button></div></form>
-        <details class="current-product-controls"><summary>采集当前淘宝／天猫商品</summary><p class="muted">手动打开商品后刷新列表，选择要采集的标签页。不会重新搜索，也不会关闭你打开的页面。</p><label for="current-product-tab">已打开商品</label><select id="current-product-tab"><option value="">请先刷新商品标签列表</option></select><p><button id="current-product-refresh" class="button subtle" type="button">刷新标签列表</button> <button id="collect-current-product" class="button" type="button" disabled>采集当前商品</button></p><p id="current-product-note" class="muted" role="status"></p></details>
-        <p><button id="clear-all" class="button subtle" type="button" disabled>清空全部</button> <small class="muted">清除名称、搜索进度和结果</small></p>
+        <p>
+<label><input id="image-dedup" type="checkbox" checked> 主图去重（相同或高度相似，保留先采集商品）</label>
+</p>
+        <details class="collection-advanced"><summary>高级采集选项</summary>
+<label class="muted">淘宝商品访问间隔（秒，最少 10 秒）<input id="taobao-detail-interval" type="number" min="10" max="3600" step="1" value="10">
+</label>
+<details class="current-product-controls"><summary>采集当前淘宝／天猫商品</summary>
+<p class="muted">手动打开商品后刷新列表，选择要采集的标签页。不会重新搜索，也不会关闭你打开的页面。</p>
+<label for="current-product-tab">已打开商品</label><select id="current-product-tab"><option value="">请先刷新商品标签列表</option></select>
+<p><button id="current-product-refresh" class="button subtle" type="button">刷新标签列表</button> <button id="collect-current-product" class="button" type="button" disabled>采集当前商品</button>
+</p>
+<p id="current-product-note" class="muted" role="status">
+</p>
+</details>
+</details>
+        <p class="muted">数量和价格设置用于之后添加的商品名称，价格留空表示不限。</p>
+        <form id="add-form">
+<label class="sr-only" for="keyword-input">商品名称</label>
+<div class="input-group"><input id="keyword-input" maxlength="100" placeholder="例如：CCD 数码相机" autocomplete="off" required><button class="button primary" id="add-button" type="submit">添加</button>
+</div>
+</form>
+
+        <p><button id="clear-all" class="button subtle" type="button" disabled>清空全部</button> <small class="muted">清除名称、搜索进度和结果</small>
+</p>
         <ul id="keyword-list" aria-label="已保存的商品名称"></ul>
-        <div id="keyword-empty" class="list-empty"><span class="list-mark">＋</span><p>先添加你的第一个商品</p><small>按 Enter 也可以添加</small></div>
-        <div class="aside-note"><span class="dot"></span><p>清单会自动保存，下次打开继续使用。</p></div>
+        <div id="keyword-empty" class="list-empty"><span class="list-mark">＋</span>
+<p>先添加你的第一个商品</p><small>按 Enter 也可以添加</small>
+</div>
+        <div class="aside-note"><span class="dot"></span>
+<p>清单会自动保存，下次打开继续使用。</p>
+</div>
       </aside>
-      <section class="workspace">
-        <details class="panel" id="duplicates-panel" hidden><summary>查看重复商品 <span id="duplicates-count"></span></summary><p class="muted">仅在同平台同搜索任务内比较原始主图，默认保留先采集商品。图片相似不代表规格一致，误合并时可保留为独立商品；恢复后可能超过设定数量。</p><div id="duplicate-items"></div></details>
-        <div class="section-heading workspace-heading"><div><h2>采集工作台</h2><p class="muted">搜索商品 → 收集链接 → 采集详情 → 导出 Excel</p></div><div class="export-controls"><label class="sr-only" for="export-format">导出文件类型</label><select id="export-format" aria-label="导出文件类型"><option value="xlsx" selected>新版 .xlsx</option><option value="xls">模板同款 .xls</option></select><button id="export" class="button export" disabled>↓ 导出 Excel</button></div></div>
-        <div class="stats"><div class="stat"><span>本次商品名称</span><strong id="stat-keywords">0<small>个</small></strong></div><div class="stat"><span>已处理名称</span><strong id="stat-done">0<small>个</small></strong></div><div class="stat"><span>已收集链接</span><strong id="stat-links">0<small>条</small></strong></div></div>
-        <section class="panel progress-panel" aria-label="任务进度">
-          <div class="section-heading"><h3 id="task-title">准备开始</h3><span id="task-badge" class="badge">未开始</span></div>
-          <div class="progress-caption"><span id="progress-label">添加商品名称后自动搜索</span><strong id="progress-percent">0%</strong></div>
-          <progress id="progress" max="100" value="0" aria-label="已处理商品名称进度"></progress>
+<section aria-label="采集进度和结果" class="workspace">
+<div class="section-heading workspace-heading">
+<div>
+<h2>采集工作台</h2>
+<p class="muted">搜索商品 → 收集链接 → 采集详情 → 导出 Excel</p>
+</div>
+</div>
+<div class="stats">
+<div class="stat"><span>本次商品名称</span><strong id="stat-keywords">0<small>个</small></strong>
+</div>
+<div class="stat"><span>已处理名称</span><strong id="stat-done">0<small>个</small></strong>
+</div>
+<div class="stat"><span>已收集链接</span><strong id="stat-links">0<small>条</small></strong>
+</div>
+</div>
+<section class="panel progress-panel" aria-label="任务进度">
+          <div class="section-heading">
+<h3 id="task-title">准备开始</h3><span id="task-badge" class="badge">未开始</span>
+</div>
+          <div class="progress-caption"><span id="progress-label">添加商品名称后自动搜索</span><strong id="progress-percent">0%</strong>
+</div>
+          <progress id="progress" max="100" value="0" aria-label="已处理商品名称进度">
+</progress>
           <p id="current-detail" class="muted current-detail">每个名称收集到设定数量即切换；最多扫描 200 条。</p>
-          <div class="actions"><button id="pause" class="button" disabled>暂停</button><button id="resume" class="button" hidden>继续</button><button id="stop" class="button subtle" disabled>停止</button><button id="show-tab" class="text-button" hidden>查看采集页 ↗</button></div>
+          <div class="actions"><button id="pause" class="button" disabled>暂停</button><button id="resume" class="button" hidden>继续</button><button id="stop" class="button subtle" disabled>停止</button><button id="show-tab" class="text-button" hidden>查看采集页 ↗</button>
+</div>
           <p class="keep-open">运行时请保持本管理页和采集页打开。关闭后可从已保存的进度继续。</p>
         </section>
-        <section class="panel results-panel"><div class="section-heading"><h3>采集结果</h3><span class="muted" id="result-subtitle">每个名称按设定数量收集</span></div>
-          <div id="results-empty" class="results-empty"><div class="empty-art" aria-hidden="true"><i></i><i></i><i></i></div><h3>你的选品结果将在这里</h3><p>同一商品 ID 只保留一次，图片会在详情采集后补全。</p></div>
-          <div id="result-table-wrap" class="table-wrap" hidden><table><thead><tr><th>商品名称</th><th>状态</th><th>已扫描</th><th>链接</th><th>说明</th><th>操作</th></tr></thead><tbody id="result-rows"></tbody></table></div>
+<section class="panel results-panel">
+<div class="section-heading">
+<h3>采集结果</h3><span class="muted" id="result-subtitle">每个名称按设定数量收集</span>
+</div>
+          <div id="results-empty" class="results-empty">
+<div class="empty-art" aria-hidden="true"><i></i><i></i><i></i>
+</div>
+<h3>你的选品结果将在这里</h3>
+<p>同一商品 ID 只保留一次，图片会在详情采集后补全。</p>
+</div>
+          <div id="result-table-wrap" class="table-wrap" hidden><table><thead><tr><th>商品名称</th><th>状态</th><th>已扫描</th><th>链接</th><th>说明</th><th>操作</th></tr></thead><tbody id="result-rows"></tbody></table>
+</div>
         </section>
-        <details class="panel links-panel" id="links-panel" hidden><summary>查看已收集的商品链接 <span id="links-count"></span></summary><p class="muted">点击 × 删除不需要的商品，稍后自动补齐数量；本次任务的所有搜索名称都会排除同平台的这个商品 ID。</p><div class="table-wrap"><table><thead><tr><th>搜索名称</th><th>商品图片</th><th>商品标题</th><th>展示价格</th><th>详情状态</th><th>详情说明</th><th>链接</th><th>操作</th></tr></thead><tbody id="link-rows"></tbody></table></div></details>
-        <section class="panel conversion-panel" aria-labelledby="conversion-heading">
-          <div class="section-heading"><h3 id="conversion-heading">图片转换</h3><span id="conversion-connected" class="badge">未连接</span></div>
-          <p class="muted">后台自动连接。采集停止或结束后，选择本次可导出的图片开始转换。广告文字转为繁体，尽量保留包装文字、数字、品牌和图案；结果仍需人工对照原图检查。开始后新增商品留到下一批。</p>
-          <div class="actions"><button id="conversion-connect" class="button" type="button">重新连接后台</button></div>
-          <details id="backend-install-help"><summary>首次安装／连接失败说明</summary><p class="muted">首次使用请点击“复制插件编号”，运行交付包中的“安装后台组件”，粘贴编号完成安装，然后点击“重新连接后台”。升级时覆盖原插件目录并重新加载；如果移动插件目录导致编号变化，请重新运行安装程序登记。</p><div class="actions"><code id="backend-extension-id"></code><button id="backend-copy-id" class="button" type="button">复制插件编号</button></div><p id="backend-copy-status" class="muted" role="status"></p></details>
-          <fieldset class="conversion-options"><legend>转换图片类型</legend><label><input id="conversion-kind-main" type="checkbox" checked> 主图</label><label>数量 <input id="conversion-limit-main" type="number" min="1" step="1" placeholder="不限" aria-label="主图数量" style="width:6em"></label><label><input id="conversion-kind-detail" type="checkbox" checked> 详情图</label><label>数量 <input id="conversion-limit-detail" type="number" min="1" step="1" placeholder="不限" aria-label="详情图数量" style="width:6em"></label><label><input id="conversion-kind-sku" type="checkbox" checked> SKU 图</label><label>数量 <input id="conversion-limit-sku" type="number" min="1" step="1" placeholder="不限" aria-label="SKU 图数量" style="width:6em"></label></fieldset>
+<details class="panel links-panel" id="links-panel" hidden><summary>查看已收集的商品链接 <span id="links-count"></span></summary>
+<p class="muted">点击 × 删除不需要的商品，稍后自动补齐数量；本次任务的所有搜索名称都会排除同平台的这个商品 ID。</p>
+<div class="table-wrap"><table><thead><tr><th>搜索名称</th><th>商品图片</th><th>商品标题</th><th>展示价格</th><th>详情状态</th><th>详情说明</th><th>链接</th><th>操作</th></tr></thead><tbody id="link-rows"></tbody></table>
+</div>
+</details>
+<details class="panel" id="duplicates-panel" hidden><summary>查看重复商品 <span id="duplicates-count"></span></summary>
+<p class="muted">仅在同平台同搜索任务内比较原始主图，默认保留先采集商品。图片相似不代表规格一致，误合并时可保留为独立商品；恢复后可能超过设定数量。</p>
+<div id="duplicate-items">
+</div>
+</details><footer>价格以本次扫描到的页面展示价为准，可能因规格或优惠条件不同而变化。图片采集失败会保留链接并显示原因。</footer>
+</section>
+</div>
+</section>
+<section hidden aria-label="图片转换" data-workspace-view="conversion" id="view-conversion">
+<section class="panel conversion-panel" aria-labelledby="conversion-heading">
+          <div class="section-heading">
+<h3 id="conversion-heading">图片转换</h3><span id="conversion-connected" class="badge">未连接</span>
+</div>
+          <p class="muted">选择图片类型和数量，将简体文字转换为繁体。采集停止或完成后即可开始，成功上传 OSS 的结果会用于 Excel 导出。</p>
+<div class="conversion-shortcuts"><button type="button" class="button" data-settings-target="settings-oss-form">配置图片服务 <span aria-hidden="true">↗</span></button><button type="button" class="text-button" data-view-target="collection">查看采集商品 <span aria-hidden="true">→</span></button>
+</div>
+
+
+          <fieldset class="conversion-options"><legend>转换图片类型</legend>
+<div class="kind-option">
+<label><input id="conversion-kind-main" type="checkbox" checked> 主图</label>
+<label>数量 <input id="conversion-limit-main" type="number" min="1" step="1" placeholder="不限" aria-label="主图数量" style="width:6em">
+</label>
+</div>
+<div class="kind-option">
+<label><input id="conversion-kind-detail" type="checkbox" checked> 详情图</label>
+<label>数量 <input id="conversion-limit-detail" type="number" min="1" step="1" placeholder="不限" aria-label="详情图数量" style="width:6em">
+</label>
+</div>
+<div class="kind-option">
+<label><input id="conversion-kind-sku" type="checkbox" checked> SKU 图</label>
+<label>数量 <input id="conversion-limit-sku" type="number" min="1" step="1" placeholder="不限" aria-label="SKU 图数量" style="width:6em">
+</label>
+</div>
+</fieldset>
           <p class="muted">数量留空表示不限；各类型按整批商品顺序选取前 N 个图片位置，相同 URL 也占数量，生成时再去重。未选位置保留原图或此前已替换链接。</p>
-          <p id="conversion-selection" class="muted" aria-live="polite"></p>
+          <p id="conversion-selection" class="muted" aria-live="polite">
+</p>
           <label class="conversion-paid-option"><input id="conversion-paid" type="checkbox"> 使用阿里云付费图片翻译（未勾选使用豆包免费模式）</label>
           <label class="conversion-paid-option"><input id="conversion-product-text" type="checkbox"> 同时转换商品及包装文字</label>
           <p class="muted">未勾选：只转换商品外广告文字；勾选：商品及包装上的简体文字也转繁体，数字、单位和商品外观保持原样。豆包和阿里云均适用，本批开始后固定。阿里云仍按电商版 ¥0.06/张计费，结果需人工核对。</p>
-          <p id="conversion-provider-status" class="muted" role="status" aria-live="polite"></p>
-          <div class="actions"><button id="conversion-refresh-config" class="button" type="button" disabled>刷新配置状态</button></div>
-          <details id="conversion-settings"><summary>图片服务设置（阿里云与 OSS）</summary>
-            <p class="muted">密钥保存在当前 Windows 用户的加密配置中，保存后清空输入框。保存配置不会发起图片翻译。</p>
-            <div id="settings-message" class="notice" role="status" aria-live="polite" hidden></div>
-            <form id="settings-aliyun-form"><fieldset class="settings-fields"><legend>阿里云图片翻译</legend>
-              <label>AccessKey ID<input id="settings-aliyun-id" type="password" autocomplete="new-password" spellcheck="false"></label>
-              <label>AccessKey Secret<input id="settings-aliyun-secret" type="password" autocomplete="new-password" spellcheck="false"></label>
-              <p id="settings-aliyun-status" class="muted" role="status">连接后台后查询配置</p>
-              <div class="actions"><button id="settings-aliyun-save" class="button" type="submit">保存阿里云密钥</button><button id="settings-aliyun-delete" class="button subtle" type="button">删除阿里云密钥</button></div>
-            </fieldset></form>
-            <form id="settings-oss-form"><fieldset class="settings-fields"><legend>OSS 图片存储</legend>
-              <label>Bucket<input id="settings-oss-bucket" autocomplete="off" placeholder="例如 collector-images"></label>
-              <label>地域<input id="settings-oss-region" autocomplete="off" placeholder="例如 cn-hangzhou"></label>
-              <label>凭证来源<select id="settings-oss-mode"><option value="translation" selected>复用阿里云翻译密钥</option><option value="independent">独立 OSS 密钥</option></select></label>
-              <label>独立 AccessKey ID<input id="settings-oss-id" type="password" autocomplete="new-password" spellcheck="false"></label>
-              <label>独立 AccessKey Secret<input id="settings-oss-secret" type="password" autocomplete="new-password" spellcheck="false"></label>
-              <p id="settings-oss-status" class="muted" role="status">连接后台后查询配置</p>
-              <div class="actions"><button id="settings-oss-save" class="button" type="submit">保存 OSS 配置</button><button id="settings-oss-delete" class="button subtle" type="button">删除 OSS 配置</button><button id="settings-oss-check" class="button" type="button">检查上传和公开读取</button></div>
-              <p id="settings-oss-check-cost" class="muted">检查会上传并读取一张测试图，可能产生少量 OSS 请求和存储费用；不会发起翻译。</p>
-            </fieldset></form>
-          </details>
-          <p id="conversion-cost" class="muted" hidden></p>
-          <div class="actions"><button id="conversion-login" class="text-button" type="button" disabled>打开豆包／处理验证 ↗</button></div>
+          <p id="conversion-provider-status" class="muted" role="status" aria-live="polite">
+</p>
+          <div class="actions"><button id="conversion-refresh-config" class="button" type="button" disabled>刷新配置状态</button>
+</div>
+
+          <p id="conversion-cost" class="muted" hidden>
+</p>
+          <div class="actions"><button id="conversion-login" class="text-button" type="button" disabled>打开豆包／处理验证 ↗</button>
+</div>
           <p class="muted">转换图片保存到你配置的 OSS，上传验证成功后自动替换商品 Excel 图片链接。临时缓存由工具自动管理。</p>
-          <div id="conversion-message" class="notice" role="status" aria-live="polite" hidden></div>
+          <div id="conversion-message" class="notice" role="status" aria-live="polite" hidden>
+</div>
           <p id="conversion-status" class="conversion-status">等待连接本地工具</p>
           <p id="conversion-counts" class="muted">图片位置 0 · 独立图片 0 · 已下载 0 · 已转换 0 · 失败 0</p>
-          <p id="conversion-current" class="muted"></p>
-          <div class="actions"><button id="conversion-start" class="button primary" type="button" disabled>开始图片转换</button><button id="conversion-stop" class="button subtle" type="button" disabled>停止转换</button><button id="conversion-continue" class="button" type="button" disabled>继续转换</button><button id="conversion-reset" class="button subtle" type="button" disabled>清空转换任务</button></div>
+          <p id="conversion-current" class="muted">
+</p>
+          <div class="actions"><button id="conversion-start" class="button primary" type="button" disabled>开始图片转换</button><button id="conversion-stop" class="button subtle" type="button" disabled>停止转换</button><button id="conversion-continue" class="button" type="button" disabled>继续转换</button><button id="conversion-reset" class="button subtle" type="button" disabled>清空转换任务</button>
+</div>
           <p class="muted">登录、验证或生成结果不确定时会暂停。豆包模式可检查浏览器页面后继续；阿里云模式不会自动切换到豆包。“继续获取此图”读取已有结果，“重新生成此图”会重新提交，阿里云模式可能再次计费。</p>
-          <details id="conversion-details"><summary>查看原图、结果与每张图片进度</summary><div id="conversion-items" class="conversion-items"></div></details>
+          <details id="conversion-details"><summary>查看原图、结果与每张图片进度</summary>
+<div id="conversion-items" class="conversion-items">
+</div>
+</details>
         </section>
+</section>
+<section hidden aria-label="商品卖点图" data-workspace-view="selling" id="view-selling">
 <section id="selling-panel" class="panel selling-panel" aria-labelledby="selling-heading">
 <h2 id="selling-heading">单张商品卖点图</h2>
+<p class="muted">用真实商品信息生成繁体卖点，先确认文案，再制作图片。</p><button type="button" class="text-button" data-settings-target="bailian-settings">配置百炼服务 <span aria-hidden="true">↗</span></button>
 <label><input id="selling-enable" type="checkbox">生成商品卖点图</label>
 <p id="selling-status" role="status">等待连接本地工具</p>
 <div id="selling-fields" hidden>
 <p class="muted">上传一张静态商品照（≤10 MiB、≤2000 万像素）。保留原图尺寸、商品与背景，在白色页脚添加黑色标题和绿色卖点，默认繁体中文。</p>
-<label>本地图片<input id="selling-image" type="file" accept="image/jpeg,image/png,image/webp"></label>
-<label>商品名称（必填）<input id="selling-name" maxlength="100"></label>
-<label>可确认的商品事实（可选）<textarea id="selling-facts" maxlength="2000" rows="3"></textarea></label>
-<details><summary>百炼设置</summary>
-<label>APIKey<input id="selling-key" type="password" autocomplete="new-password" spellcheck="false"></label>
-<label>北京业务空间 ID<input id="selling-workspace" autocomplete="off" placeholder="百炼业务空间的 WorkspaceId"></label>
-<p id="selling-config-status" class="muted"></p><div class="actions"><button id="selling-save" type="button" class="button">保存百炼配置</button><button id="selling-delete" type="button" class="button">删除百炼配置</button></div>
-<a href="selling-point-help.html" target="_blank" rel="noopener">配置与使用教程</a>
-</details>
-<p class="muted">输入 ¥1/百万 Token，输出 ¥10/百万 Token。例如 10000 输入/500 输出约 ¥0.015，仅为示例，非固定价或费用上限；OSS 另计。手动改字、制作图片、重试上传和下载不会调用 AI。</p>
-<div class="actions"><button id="selling-generate" type="button" class="button primary">付费生成卖点</button><button id="selling-clear" type="button" class="button">清空单张任务</button></div>
-<div id="selling-message" role="status" class="notice" hidden></div>
-<p id="selling-job-message" class="muted" role="status"></p><p id="selling-calls" class="muted"></p>
-<div id="selling-draft" hidden><label>标题（≤40 字）<input id="selling-headline"></label><label>卖点（1–5 行，每行≤60 字）<textarea id="selling-points" rows="5"></textarea></label><button id="selling-render" type="button" class="button primary">制作卖点图</button></div>
-<div class="selling-previews"><figure><figcaption>原图</figcaption><img id="selling-original" alt="上传原图"></figure><figure><figcaption>卖点图结果</figcaption><img id="selling-result" alt="卖点图结果"></figure></div>
-<div class="actions"><button id="selling-preview" type="button" class="button">预览结果</button><button id="selling-download" type="button" class="button">下载 PNG</button><button id="selling-retry" type="button" class="button">重试上传（不重新生成）</button><a id="selling-cloud" target="_blank" rel="noopener" hidden>打开 OSS 图片</a><button id="selling-copy" type="button" class="button" hidden>复制图片链接</button></div>
-</div></section>
+<label>本地图片<input id="selling-image" type="file" accept="image/jpeg,image/png,image/webp">
+</label>
+<label>商品名称（必填）<input id="selling-name" maxlength="100">
+</label>
+<label>可确认的商品事实（可选）<textarea id="selling-facts" maxlength="2000" rows="3"></textarea>
+</label>
 
-        <footer>价格以本次扫描到的页面展示价为准，可能因规格或优惠条件不同而变化。图片采集失败会保留链接并显示原因。</footer>
-      </section>
-    </main>
-  </div>
+<p class="muted">输入 ¥1/百万 Token，输出 ¥10/百万 Token。例如 10000 输入/500 输出约 ¥0.015，仅为示例，非固定价或费用上限；OSS 另计。手动改字、制作图片、重试上传和下载不会调用 AI。</p>
+<div class="actions"><button id="selling-generate" type="button" class="button primary">付费生成卖点</button><button id="selling-clear" type="button" class="button">清空单张任务</button>
+</div>
+<div id="selling-message" role="status" class="notice" hidden>
+</div>
+<p id="selling-job-message" class="muted" role="status">
+</p>
+<p id="selling-calls" class="muted">
+</p>
+<div id="selling-draft" hidden>
+<label>标题（≤40 字）<input id="selling-headline">
+</label>
+<label>卖点（1–5 行，每行≤60 字）<textarea id="selling-points" rows="5"></textarea>
+</label><button id="selling-render" type="button" class="button primary">制作卖点图</button>
+</div>
+<div class="selling-previews"><figure><figcaption>原图</figcaption><img id="selling-original" alt="上传原图"></figure><figure><figcaption>卖点图结果</figcaption><img id="selling-result" alt="卖点图结果"></figure>
+</div>
+<div class="actions"><button id="selling-preview" type="button" class="button">预览结果</button><button id="selling-download" type="button" class="button">下载 PNG</button><button id="selling-retry" type="button" class="button">重试上传（不重新生成）</button><a id="selling-cloud" target="_blank" rel="noopener" hidden>打开 OSS 图片</a><button id="selling-copy" type="button" class="button" hidden>复制图片链接</button>
+</div>
+</div>
+</section>
+</section>
+<section hidden aria-label="服务设置" data-workspace-view="settings" id="view-settings">
+<section class="panel backend-card">
+<div class="section-heading">
+<h2>后台连接</h2><span class="settings-label">首次安装后自动运行</span>
+</div>
+<p class="muted">后台负责图片下载、转换和上传。安装一次后，打开插件即可自动连接。</p>
+<div id="backend-message" class="notice" role="status" aria-live="polite" hidden></div>
+<div class="actions"><button id="conversion-connect" class="button" type="button">重新连接后台</button>
+</div>
+<details id="backend-install-help"><summary>首次安装／连接失败说明</summary>
+<p class="muted">首次使用请点击“复制插件编号”，运行交付包中的“安装后台组件”，粘贴编号完成安装，然后点击“重新连接后台”。升级时覆盖原插件目录并重新加载；如果移动插件目录导致编号变化，请重新运行安装程序登记。</p>
+<div class="actions"><code id="backend-extension-id"></code><button id="backend-copy-id" class="button" type="button">复制插件编号</button>
+</div>
+<p id="backend-copy-status" class="muted" role="status">
+</p>
+</details>
+</section>
+<details open class="panel settings-card" id="conversion-settings"><summary>阿里云翻译与 OSS 存储</summary>
+            <p class="muted">密钥保存在当前 Windows 用户的加密配置中，保存后清空输入框。保存配置不会发起图片翻译。</p>
+            <div id="settings-message" class="notice" role="status" aria-live="polite" hidden>
+</div>
+
+
+          <div class="settings-grid">
+<form id="settings-aliyun-form">
+<fieldset class="settings-fields"><legend>阿里云图片翻译</legend>
+              <label>AccessKey ID<input id="settings-aliyun-id" type="password" autocomplete="new-password" spellcheck="false">
+</label>
+              <label>AccessKey Secret<input id="settings-aliyun-secret" type="password" autocomplete="new-password" spellcheck="false">
+</label>
+              <p id="settings-aliyun-status" class="muted" role="status">连接后台后查询配置</p>
+              <div class="actions"><button id="settings-aliyun-save" class="button" type="submit">保存阿里云密钥</button><button id="settings-aliyun-delete" class="button subtle" type="button">删除阿里云密钥</button>
+</div>
+            </fieldset>
+</form>
+<form id="settings-oss-form">
+<fieldset class="settings-fields"><legend>OSS 图片存储</legend>
+              <label>Bucket<input id="settings-oss-bucket" autocomplete="off" placeholder="例如 collector-images">
+</label>
+              <label>地域<input id="settings-oss-region" autocomplete="off" placeholder="例如 cn-hangzhou">
+</label>
+              <label>凭证来源<select id="settings-oss-mode"><option value="translation" selected>复用阿里云翻译密钥</option><option value="independent">独立 OSS 密钥</option></select>
+</label>
+              <label>独立 AccessKey ID<input id="settings-oss-id" type="password" autocomplete="new-password" spellcheck="false">
+</label>
+              <label>独立 AccessKey Secret<input id="settings-oss-secret" type="password" autocomplete="new-password" spellcheck="false">
+</label>
+              <p id="settings-oss-status" class="muted" role="status">连接后台后查询配置</p>
+              <div class="actions"><button id="settings-oss-save" class="button" type="submit">保存 OSS 配置</button><button id="settings-oss-delete" class="button subtle" type="button">删除 OSS 配置</button><button id="settings-oss-check" class="button" type="button">检查上传和公开读取</button>
+</div>
+              <p id="settings-oss-check-cost" class="muted">检查会上传并读取一张测试图，可能产生少量 OSS 请求和存储费用；不会发起翻译。</p>
+            </fieldset>
+</form>
+</div>
+</details>
+<details open class="panel settings-card" id="bailian-settings"><summary>百炼卖点生成</summary>
+<div class="bailian-fields">
+<label>APIKey<input id="selling-key" type="password" autocomplete="new-password" spellcheck="false">
+</label>
+<label>北京业务空间 ID<input id="selling-workspace" autocomplete="off" placeholder="百炼业务空间的 WorkspaceId">
+</label>
+</div>
+
+
+<p id="selling-config-status" class="muted">
+</p>
+<div class="actions"><button id="selling-save" type="button" class="button">保存百炼配置</button><button id="selling-delete" type="button" class="button">删除百炼配置</button>
+</div>
+<a href="selling-point-help.html" target="_blank" rel="noopener">配置与使用教程</a>
+<div id="selling-settings-message" class="notice" role="status" aria-live="polite" hidden>
+</div>
+</details>
+</section>
+</main>
+</div>
+</div>
   <script type="module" src="manager.mjs"></script>
 </body></html>

@@ -8,8 +8,10 @@ import { createRefillScheduler } from './lib/refill.mjs';
 import { createConversionPanel } from './conversion-ui.mjs';
 import { mergeImageReplacements } from './lib/image-conversion.mjs';
 import { duplicateItems, restoreDuplicate } from './lib/product-dedup.mjs';
+import { createManagerNavigation } from './manager-navigation.mjs';
 
 const $ = id => document.getElementById(id);
+createManagerNavigation({document});
 const installed = Boolean(globalThis.chrome?.runtime?.id);
 const storage = installed ? chrome.storage.local : {
   async get(keys) { return Object.fromEntries(keys.map(key => [key, JSON.parse(localStorage.getItem(`pdd-preview-${key}`) || 'null')])); },

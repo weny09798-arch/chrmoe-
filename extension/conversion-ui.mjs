@@ -36,19 +36,19 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     if (disposed || connecting || getCollection().unavailable) return;
     if (!ensureBackend) { await controller.restoreForTask(task); return; }
     let epoch = controller.epoch;
-    connecting = true; backendStatus = '正在启动后台'; render();
+    connecting = true; backendStatus = '正在启动后台'; backendMessage(''); render();
     try {
       const code = await ensureBackend();
       if (disposed || !controller.current(epoch)) return;
       const connection = controller.connectAutomatic(code,task); epoch = controller.epoch;
       await connection;
       if (disposed || !controller.current(epoch)) return;
-      backendStatus = '后台已连接'; message('');
+      backendStatus = '后台已连接'; backendMessage('');
       connecting = false;
       await settings.refresh();
     } catch (error) {
       if (disposed || !controller.current(epoch)) return;
-      backendStatus = '未安装或启动失败'; message(error.message,true); $('backend-install-help').open = true;
+      backendStatus = '未安装或启动失败'; backendMessage(error.message,true); $('backend-install-help').open = true;
     } finally { connecting = false; render(); }
   }
   function selection(task) {
@@ -73,6 +73,11 @@ export function createConversionPanel({ document, extensionId, getCollection, on
   function stopPoll() { if (timer !== null) clearTimer(timer); timer = null; scheduledEpoch = null; }
   function revokeImages() { for (const url of objectUrls) URL.revokeObjectURL(url); objectUrls = []; }
   function message(text, error = false) { $('conversion-message').textContent = text; $('conversion-message').className = `notice ${error ? 'error' : ''}`; $('conversion-message').hidden = !text; }
+  function backendMessage(text, error = false) {
+    message(text,error);
+    const feedback = $('backend-message');
+    if (feedback) { feedback.textContent = text; feedback.hidden = !text; feedback.className = `notice ${error ? 'error' : ''}`; }
+  }
   async function run(operation) {
     const epoch = controller.epoch;
     try { await operation(); }
@@ -134,6 +139,8 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     if (renderedEpoch !== controller.epoch) { stopPoll(); renderedEpoch = controller.epoch; }
     const state = controller.view(), { task, collecting = false, unavailable = false } = getCollection();
     const job = state.job, connected = state.connected && (!ensureBackend || backendStatus === '后台已连接'), working = state.working || unavailable || connecting, conflict = state.conflict;
+    const globalStatus = $('manager-backend-status');
+    if (globalStatus) { globalStatus.textContent = connected ? '后台已连接' : connecting ? '正在连接后台' : '后台未连接'; globalStatus.dataset.connected = String(connected); }
     selling.update({connected,capabilities:controller.capabilities});
     const frozen = Boolean(controller.pendingSource || (job && !['completed','done'].includes(job.status)));
     const batchSignature = job ? JSON.stringify([job.id,job.provider,job.image_kinds,job.image_limits,job.translate_product_text]) : '';
@@ -150,8 +157,8 @@ export function createConversionPanel({ document, extensionId, getCollection, on
     const limitsReady = !chosen.limits || !Object.values(chosen.limits).some(value => value !== null) || capabilities?.image_type_limits === true;
     const productTextReady = !translateProductText || capabilities?.product_text_translation === true;
     const ossReady = capabilities?.image_link_replacement === true && capabilities.cloud_image_storage === true && capabilities.oss_configured === true;
-    const ossStatus = !connected ? '连接后台后可查询 OSS 和阿里云配置状态。' : !capabilities ? '请刷新配置状态。' : capabilities.image_link_replacement !== true || capabilities.cloud_image_storage !== true ? '请升级后台组件，以支持图片直接保存到 OSS。' : capabilities.oss_configured !== true ? '请展开“图片服务设置”配置 OSS。' : 'OSS 已配置，上传成功的图片将自动替换商品 Excel 链接。';
-    $('conversion-provider-status').textContent = ossStatus + (ossReady ? !capabilities.providers?.includes('aliyun') ? ' 阿里云付费模式需要升级后台组件。' : capabilities.aliyun_configured === true ? ' 阿里云密钥已在本机配置（尚未验证云端服务）。' : ' 请展开“图片服务设置”配置阿里云密钥。' : '');
+    const ossStatus = !connected ? '连接后台后可查询 OSS 和阿里云配置状态。' : !capabilities ? '请刷新配置状态。' : capabilities.image_link_replacement !== true || capabilities.cloud_image_storage !== true ? '请升级后台组件，以支持图片直接保存到 OSS。' : capabilities.oss_configured !== true ? '请前往“服务设置”配置 OSS。' : 'OSS 已配置，上传成功的图片将自动替换商品 Excel 链接。';
+    $('conversion-provider-status').textContent = ossStatus + (ossReady ? !capabilities.providers?.includes('aliyun') ? ' 阿里云付费模式需要升级后台组件。' : capabilities.aliyun_configured === true ? ' 阿里云密钥已在本机配置（尚未验证云端服务）。' : ' 请前往“服务设置”配置阿里云密钥。' : '');
     if (!limitsReady) $('conversion-provider-status').textContent += ' 请升级本地工具到 1.6.4 或更新版本，以支持图片数量限制。';
     if (!productTextReady) $('conversion-provider-status').textContent += ' 请升级本地工具到 1.6.5 或更新版本，以支持商品及包装文字转换。';
     settings?.render();
