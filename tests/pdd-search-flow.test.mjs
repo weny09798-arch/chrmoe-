@@ -12,7 +12,7 @@ async function fixture(extra = '') {
   window.Element.prototype.getBoundingClientRect = () => ({width:250,height:350,top:10,bottom:360});
   document.documentElement.scrollTop = 720;
   let handler, clicks = 0;
-  for(const element of document.querySelectorAll('div,a'))element.click = () => clicks++;
+  for(const element of document.querySelectorAll('div,a,img'))element.click = () => clicks++;
   const context = vm.createContext({window,document,URL,location:{href:url,pathname:'/search_result.html'},getComputedStyle:()=>({display:'block',visibility:'visible',overflowY:'visible'}),chrome:{runtime:{onMessage:{addListener:fn=>handler=fn}}}});
   vm.runInContext(await readFile(new URL('../extension/content.js',import.meta.url),'utf8'),context);
   const pageContext = vm.createContext({URL,location:{href:url},rawData:{store:{goodsList:[{goodsID:'123',goodsName:'数码相机',thumbUrl:'https://img.pddpic.com/a.jpg'}]}}});

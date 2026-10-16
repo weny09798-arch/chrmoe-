@@ -183,7 +183,8 @@
         if(!item){respond({error:'商品卡片已离开列表'});return;}
         if(openedCards.has(item.el)){respond({error:'该商品卡片已尝试打开'});return;}
         openedCards.add(item.el);
-        const target=item.el.querySelector('a[href]')||item.el;
+        const link=[item.el,...item.el.querySelectorAll('a[href]')].find(el=>el.getAttribute('href')&&detailSourceUrl(el,goodsId(el)));
+        const target=link||[...item.el.querySelectorAll('img')].find(img=>largeImage(img)&&imageUrl(img)===item.card.image)||item.el;
         target.click();respond({ok:true});
       }
     } catch (error) { respond({ error: error.message }); }

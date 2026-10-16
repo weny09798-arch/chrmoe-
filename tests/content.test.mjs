@@ -3,6 +3,19 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { parseHTML } from 'linkedom';
+import {searchPage} from './helpers/search-page.mjs';
+
+test('missing-link fallback clicks the product image rather than a container or marketing anchor once',async()=>{
+  const page=await searchPage('pdd','<div role="button"><a href="https://example.com/promotion">活动</a><img src="https://img.pddpic.com/a.jpg"><div>相机</div><div>¥32</div></div>');
+  let imageClicks=0,otherClicks=0;
+  page.document.querySelector('img').click=()=>imageClicks++;
+  for(const el of page.document.querySelectorAll('a,div'))el.click=()=>otherClicks++;
+  const state=await page.read();
+  assert.equal((await page.send({type:'PDD_OPEN_CARD',key:state.cards[0].key})).ok,true);
+  assert.equal(imageClicks,1);assert.equal(otherClicks,0);
+  await page.send({type:'PDD_OPEN_CARD',key:state.cards[0].key});
+  assert.equal(imageClicks,1);
+});
 
 async function snapshot(html, keyword='相机', searchData) {
   const {window,document}=parseHTML(`<html><body>${html}</body></html>`);

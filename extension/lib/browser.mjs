@@ -513,9 +513,10 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
       const resolved=task.resolvedCard;delete task.resolvedCard;await save(task);check();return {...card,...resolved};
     }
     if (site.productId(card.url || '')) return {...card,id:site.productId(card.url),navigated:false};
-    task.resolveAttempts ||= {};
-    if (task.resolveAttempts[attemptKey]) throw blocked('该商品卡片已经尝试打开，请手动处理后继续');
-    task.resolveAttempts[attemptKey] = true;
+    job.resolveAttempts ||= task.resolveAttempts || {};
+    delete task.resolveAttempts;
+    if (job.resolveAttempts[attemptKey]) throw blocked('该商品卡片已经尝试打开，请手动处理后继续');
+    job.resolveAttempts[attemptKey] = true;
     task.resolvePendingCard = {...card}; task.resolveBlockedPosition = page.position;
     await save(task);
     check();
@@ -593,27 +594,27 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
         else throw blocked('请恢复原搜索结果后继续，已确认的商品链接仍保留');
         clearHeldCard(); await save(task); return;
       }
+      if ((Number.isInteger(task.resolveBlockedTabId) || tab && !site.isSearch(tab.url || '',job.keyword) && (task.wasBlocked || job.wasBlocked || task.status === 'blocked' || job.status === 'blocked')) && !job.restartSearch) {
+        const held = task.resolveBlockedTabId || tabId;
+        const heldTab = await chrome.tabs.get(held).catch(() => null);
+        if (heldTab) {
+          await chrome.scripting.executeScript({target:{tabId:held},files:[site.contentScript]});
+          const snapshot = await chrome.tabs.sendMessage(held,{type:'PDD_SNAPSHOT'});
+          if (snapshot?.blocked) throw blocked(snapshot.reason || '请先处理保留页面');
+          const resolvedId=site.productId(heldTab.url || '');
+          if(resolvedId && task.resolveBlockedCardKey && task.resolveBlockedKeyword===job.keyword) {
+            task.resolvedCard={...task.resolvePendingCard,key:task.resolveBlockedCardKey,keyword:job.keyword,site:site.id,id:resolvedId,url:site.productUrl(resolvedId,heldTab.url),detailSourceUrl:heldTab.url,navigated:held===tabId};
+            if(held===tabId){task.resolveRestorePending=true;await save(task);await restoreSearch(job,task.resolveBlockedPosition);}
+            clearHeldCard();
+            await save(task);return;
+          }
+        }
+        throw blocked('请返回搜索结果后继续，保留页未重新导航');
+      }
       if (!tab) {
         tab = await chrome.tabs.create({ url: target, active: false });
         tabId = tab.id; task.tabId = tabId;
       } else if (job.restartSearch || !site.isSearch(tab.url || '', job.keyword)) {
-        if ((task.wasBlocked || job.wasBlocked || task.status === 'blocked' || job.status === 'blocked' || Number.isInteger(task.resolveBlockedTabId)) && !job.restartSearch) {
-          const held = task.resolveBlockedTabId || tabId;
-          const heldTab = await chrome.tabs.get(held).catch(() => null);
-          if (heldTab) {
-            await chrome.scripting.executeScript({target:{tabId:held},files:[site.contentScript]});
-            const snapshot = await chrome.tabs.sendMessage(held,{type:'PDD_SNAPSHOT'});
-            if (snapshot?.blocked) throw blocked(snapshot.reason || '请先处理保留页面');
-            const resolvedId=site.productId(heldTab.url || '');
-            if(resolvedId && task.resolveBlockedCardKey && task.resolveBlockedKeyword===job.keyword) {
-              task.resolvedCard={...task.resolvePendingCard,key:task.resolveBlockedCardKey,keyword:job.keyword,site:site.id,id:resolvedId,url:site.productUrl(resolvedId,heldTab.url),detailSourceUrl:heldTab.url,navigated:held===tabId};
-              if(held===tabId){task.resolveRestorePending=true;await save(task);await restoreSearch(job,task.resolveBlockedPosition);}
-              clearHeldCard();
-              await save(task);return;
-            }
-          }
-          throw blocked('请返回搜索结果后继续，保留页未重新导航');
-        }
         await chrome.tabs.update(tabId, { url: target });
       }
       job.restartSearch = false;
@@ -634,7 +635,7 @@ export function browserPorts({ save, update, detailPollLimit, detailPollWait = w
       task = currentTask;
       task.detailTabId = id; task.detailGoodsId = goodsId; task.detailSite = 'taobao'; task.detailBorrowed = true;
       await save(task); check();
-      const item = {id:goodsId,site:'taobao',platform:site.label,url:site.productUrl(goodsId,tab.url)};
+      const item = {id:goodsId,site:'taobao',platform:site.platformForUrl?.(tab.url) || site.label,url:site.productUrl(goodsId,tab.url)};
       const detail = await enrich(item,task,cancelled);
       check();
       const latest = await chrome.tabs.get(id);

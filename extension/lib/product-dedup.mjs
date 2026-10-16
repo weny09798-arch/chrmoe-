@@ -19,8 +19,12 @@ export function restoreDuplicate(job, id) {
 export async function deduplicate(job, hash = hashImage, cancelled = () => false) {
   if (job.imageDedup !== true) return;
   const groups = [];
-  for (const group of job.groups) {
+  const originals = new Map();
+  for (const source of job.groups) {
     if (cancelled()) return;
+    const itemCopy = {...source.best};
+    originals.set(itemCopy, source.best);
+    const group = {...source, ids:[...(source.ids || [])], best:itemCopy, members:[...(source.members || [source.best])]};
     const item = group.best;
     group.members ||= [item];
     group.members = group.members.map(member => String(member.id) === String(item.id) ? item : member);
@@ -47,6 +51,12 @@ export async function deduplicate(job, hash = hashImage, cancelled = () => false
     } else groups.push(group);
   }
   if (cancelled()) return;
+  // Keep product identities used by the runner while committing all staged state together.
+  for (const [copy, original] of originals) Object.assign(original, copy);
+  for (const group of groups) {
+    group.best = originals.get(group.best);
+    group.members = group.members.map(member => originals.get(member) || member);
+  }
   job.groups = groups;
   job.merged = duplicateItems(job).length;
   job.imageDedupFailures = groups.filter(group => group.best.imageDedupNote).length;

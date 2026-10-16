@@ -147,7 +147,7 @@ test('current tab listing filters real Taobao item URLs',async()=>{
 test('current borrows the item tab without navigating or closing and checks identity',async()=>{
  const old=globalThis.chrome;let reads=0;const task={};
  globalThis.chrome={tabs:{get:async()=>({id:8,status:'complete',url:'https://detail.tmall.com/item.htm?id=123'}),sendMessage:async()=>{reads++;return {goodsId:'123',ready:true,detail:{title:'当前真实商品',attributes:[{name:'材质',value:'棉'}]}};},remove:async()=>{throw Error('borrowed tab closed');},update:async()=>{throw Error('borrowed tab navigated');}},scripting:{executeScript:async()=>[]}};
- try{const result=await browserPorts({save:async()=>{},update(){}}).current(8,task);assert.equal(result.id,'123');assert.equal(result.site,'taobao');assert.equal(result.url,'https://detail.tmall.com/item.htm?id=123');assert.equal(reads,1);assert.equal(result.title,'当前真实商品');}finally{globalThis.chrome=old;}
+ try{const result=await browserPorts({save:async()=>{},update(){}}).current(8,task);assert.equal(result.id,'123');assert.equal(result.site,'taobao');assert.equal(result.platform,'天猫');assert.equal(result.url,'https://detail.tmall.com/item.htm?id=123');assert.equal(reads,1);assert.equal(result.title,'当前真实商品');}finally{globalThis.chrome=old;}
 });
 
 test('resolve resumes retained verified product without clicking again',async()=>{
